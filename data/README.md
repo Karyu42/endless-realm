@@ -6,7 +6,7 @@ and converted to radians (Godot 2D convention) at load. Distances are **tiles**.
 
 This pack has the practice-yard enemies `burrmite` (`burr_spit`) and
 `driftcap_spore` (`spore_ring`), class bases and the three v0.1 class
-abilities, vision scaling coefficients, v0.1 loot tables, and a first tiny
+abilities, vision scaling coefficients, client feel (`data/feel.json`), v0.1 loot tables, and a first tiny
 slice of **the Hollowmere Vault** (`data/dungeons/hollowmere_vault.json`,
 validated by `dungeons.schema.json`).
 The `fixture_gap_ring` pattern used only by golden tests (to cover PCG32
