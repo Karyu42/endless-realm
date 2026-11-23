@@ -853,6 +853,7 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		# Still in the sim (built-in player 1, or a leave not yet stepped):
 		# place_player keeps them and cancels the pending removal.
 		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if rec.has("hp") else -1)
+		_sync_position(p, sim, p.id)
 		sim.set_player_class_for(p.id, p.class_id)
 		_restore_ability(p)
 	else:
@@ -1562,9 +1563,19 @@ func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: 
 	p.sim_id = dest_id
 	p.x = x
 	p.y = y
+	_sync_position(p, dest.sim, dest_id)
 	p.interacts = []
 	p.interact_forward = 0
 	return true
+
+
+## The sim may adjust a placement (for example out of a sealed area), so
+## the host's copy of the position is read back from the sim right away.
+func _sync_position(p: HostPlayer, psim: LocalSim, id: int) -> void:
+	var sp := psim.get_player(id)
+	if sp != null:
+		p.x = sp.x
+		p.y = sp.y
 
 
 ## Instance lifetime follows vision §6.1: keep progress while empty,

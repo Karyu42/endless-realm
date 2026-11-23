@@ -1722,3 +1722,31 @@ func test_rule_7_activity_tracks_received_input_frames_through_the_host() -> voi
 	assert_true(sim.boss_defeated())
 	assert_eq(sim.get_player(sid).pending_glint, 0)
 	assert_eq(sim.get_player(sid).pending_riftstone, 0)
+
+
+
+func test_host_position_matches_sim_after_sealed_arena_placement() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var pa := _host._find_player(a)
+	inst.sim.place_player(pa.sim_id, 40.0, 6.0)
+	_ticks(2)
+	var w: EnemyState = null
+	for e in inst.sim._enemies:
+		if e.is_boss():
+			w = e
+	inst.sim.hurt_enemy(w.id, 1, pa.sim_id)
+	assert_true(inst.sim.arena_sealed())
+	var b := _join_near_portal(portal)
+	var pb := _host._find_player(b)
+	var bid := inst.sim.alloc_player_id()
+	var t := _host.tick
+	assert_true(_host._move_player(pb, inst, bid, 40.0, 6.0, true))
+	assert_eq(_host.tick, t, "no step in between")
+	var sp := inst.sim.get_player(bid)
+	assert_lt(sp.x, 34.0, "the sim moved the placement out of the sealed arena")
+	assert_almost_eq(pb.x, sp.x, 1e-9, "host x follows the sim placement")
+	assert_almost_eq(pb.y, sp.y, 1e-9, "host y follows the sim placement")
