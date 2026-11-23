@@ -439,7 +439,7 @@ Why: full currency trading means real-money traders will come. Server-side atomi
 
 ## 10. Decisions (2026-11-23)
 
-D1–D7, D17–D21, D23 and D24 are Karyu's decisions (relayed by Chief of Staff; Karyu's own words, where quoted, are from Chief of Staff's chat as cited in the [PR #14 review](https://github.com/Karyu42/endless-realm/pull/14#pullrequestreview-6027324646)). D22 and D28–D30 are Chief of Staff rulings. D8–D16 and D25–D27 are design defaults accepted by Chief of Staff and can be tuned after playtests (D14 remains gated by privacy review). **P1** is a design proposal pending Karyu's answer (§12), not a decision.
+D1–D7, D17–D21, D23, D24 and D31 are Karyu's decisions (relayed by Chief of Staff; Karyu's own words, where quoted, are from Chief of Staff's chat as cited in the [PR #14 review](https://github.com/Karyu42/endless-realm/pull/14#pullrequestreview-6027324646)). D22 and D28–D30 are Chief of Staff rulings. D8–D16 and D25–D27 are design defaults accepted by Chief of Staff and can be tuned after playtests (D14 remains gated by privacy review). D31's technical detail (per-lobby derived keys, export and backup) was set by Chief of Staff.
 
 | # | Decision |
 |---|---|
@@ -467,19 +467,19 @@ D1–D7, D17–D21, D23 and D24 are Karyu's decisions (relayed by Chief of Staff
 | D22 | *Chief of Staff ruling.* Discovery: LAN, invite code and direct address first, then a Cloudflare Workers listing-only service planned for the free tier; any paid tier needs Karyu's approval (§11.4). |
 | D23 | Characters live on the lobby that created them. Other lobbies may import them if the receiving host allows it, offline and lobby characters alike (§11.5). Karyu: "the character initially lives on the server they were created on and can be imported if allowed on the other server". |
 | D24 | The host is the Godot game (listen server or `--headless`); Go is a reference/test harness only. Karyu: "since we use godot anyway why not that one?" |
-| P1 | *Proposed, pending Karyu (§12 Q1). Not a decision.* Identity: per-lobby keys derived from a device-held secret, host-local profiles, no email or password, no central account (§11.2). |
 | D25 | *Default, tunable after playtests.* Offline-flagged characters earn normally but never appear on leaderboards and can't trade with non-Offline characters (§11.7). |
 | D26 | *Default, tunable after playtests.* Hosts are responsible for their own lobby's data: a mandatory pre-join privacy notice, per-category retention and `erase-player` (§8.3), and no IP or device hashes. Public release is gated on privacy counsel review, [issue #20](https://github.com/Karyu42/endless-realm/issues/20). |
 | D27 | *Default, tunable after playtests.* Leaderboards and bans are per lobby. Anti-cheat relies on host authority, not secret thresholds (§11.6). |
 | D28 | *Confirmed decision via CoS.* Seasons and cosmetic unlocks are per lobby (per device offline); no paid cosmetics in v0.1 (§11.6). |
 | D29 | *Confirmed via CoS, later than PR #14.* Desktop and headless hosting first. Android is join-only in v0.1; no Android-host default. |
 | D30 | *Confirmed via CoS.* Host admin replaces Economy Ops/on-call within each lobby. D1 (both death modes, separate economies) and D3 (full trading, currencies included) are reaffirmed; trading and the anti-RMT gate default **ON**. |
+| D31 | Identity: a device key, an account (host-local profile) per lobby, no email or password and no central account service. Karyu, on a card relayed by Chief of Staff: "Identity: device key, an account per lobby, no email or password and no central account service for now". *Detail set by Chief of Staff:* per-lobby keys derived from a device-held secret, plus user-initiated export and backup of that secret (§11.2). |
 
 **Tuning ownership:** Design decides tuning numbers (rates, caps, costs, timers, curves) and records them here. They are escalated to Karyu only when a change would alter the game's direction or touch money (monetization, pay-to-win boundaries, real-money flows).
 
 ## 11. Hosting model: offline solo and player-hosted lobbies [v0.1]
 
-Decisions (2026-11-23, D17–D24 and D29; credits in §10): **there are no official servers for now.** The game runs in two ways:
+Decisions (2026-11-23, D17–D24, D29 and D31; credits in §10): **there are no official servers for now.** The game runs in two ways:
 - **Offline solo:** the client's in-process sim (`LocalSim`, `stack.md`), with no network and no tracking. `n_peak` is always 1. The device acts as its own host for saves (§11.5).
 - **Player-hosted lobbies:** a player hosts with the **Godot game itself**, either as a listen server inside their client or as the same export run `--headless` (D24, `stack.md` amendment in PR #14). Solo and hosted play run the same GDScript sim, rules and `data/` pack. A lobby is one Hearth, one Wilds and its portal instances.
 
@@ -490,14 +490,20 @@ Everything in this doc that said "the server" now means **the lobby's host**. It
 - **A lobby is exactly as trustworthy as its host.** The host can edit its own save. The game never calls a character "verified". It only says where the character was recorded (§11.5 provenance), and the lobby browser says so plainly (§11.4).
 - **Version lock:** a client can join only a lobby with the same protocol version and `data/` pack hash. Hosts can't change formulas or tuning in v0.1. **[Later]** Modded or custom-rule lobbies, shown with their own badge.
 
-### 11.2 Identity: device keys and host-local profiles (P1, proposed — pending Karyu, §12 Q1)
-**Status: design proposal, not a decision.** Karyu hasn't chosen the identity model yet. Everything below is the recommended design; the alternatives are in §12 Q1. Other sections that say "profile" or "key" assume this proposal and change with his answer.
+### 11.2 Identity: device keys and host-local profiles (D31)
+Karyu's decision: "Identity: device key, an account per lobby, no email or password and no central account service for now". The per-lobby derived keys and the export/backup below are Chief of Staff's technical detail.
 
 - **No email, no password, no central account.** Each device creates and keeps a secret identity root. For every host it joins, the client derives a **separate per-lobby Ed25519 key pair** from that root and the host's full `host_id` (a domain-separated KDF; the exact construction and test vectors are owned by the Server Engineer). Different hosts therefore see unrelated player keys. Only that **per-lobby public key** leaves the device; the root/master public key is never sent. Authentication uses a fresh, single-use host nonce bound to the host identity/session, signed with that lobby key. No global player identifier is used.
 - **Joining a lobby:** after the mandatory pre-join notice (§8.3), the host checks the signature and creates a **host-local profile** on first successful join. It owns that lobby's account-level state (wallets per mode, stash, cosmetic unlocks, trade gate counters) and characters. The display name is unique within the lobby. The UI uses a short fingerprint for display, but authorization compares the full key/fingerprint, never the shortened label.
 - **Hosts have keys too.** Each host installation has a stable key pair; `host_id` is the **full SHA-256 fingerprint of its public key**. Short forms are display-only. Clients pin it on first connection and warn on a change; address or lobby-name changes don't create a new profile. A new host key is a different identity unless the client explicitly trusts an authenticated migration.
 - **Linkability:** unrelated hosts see different player authentication keys. Display names, network addresses, a shared host impersonating several lobbies, and voluntarily exported character provenance can still link activity. The pre-join/import notice explains that; the game does not promise anonymity. Exports carry source-lobby provenance, never the device root or player authentication keys.
-- **Key backup:** the client can export the secret identity root as a passphrase-encrypted file and import it on another device. Without that file, a lost device means lost access to every host-local profile. A host admin can re-bind a profile to a new public key in their own lobby, and each re-bind writes an audit row (old key, new key, admin, reason). **A ban carries over:** if the old key is banned, the new key gets the same ban and expiry in the same transaction. The old key stays banned too, so a re-bind can't be used to dodge a ban.
+- **Key export and backup (D31, CoS detail):**
+  - **What is exported:** only the device's secret identity root, plus a format version and the creation date. That is enough to re-derive every per-lobby key, because they are derived from the root and each `host_id`. The file contains no profiles, characters, host list or per-lobby keys. Lobby data stays on each host.
+  - **Encryption:** the file is encrypted with a passphrase the player chooses. Brute-forcing it is made expensive with a memory-hard KDF; the exact construction and test vectors are owned by the Server Engineer. The game never stores or uploads the passphrase or the file, and there's no cloud copy.
+  - **User-initiated only:** export runs only when the player picks "Export identity" in settings and confirms. Nothing is backed up automatically. Importing the file on another device replaces or adds that device's root only after an explicit confirmation, and that device then reaches the same profiles in every lobby.
+  - **No backup, no recovery:** losing the device (or the root) without an export loses the identity. There is no central account to recover it from. The client warns about this on first launch and before an uninstall/reset where the platform allows it.
+  - **Admin re-bind:** the only fallback is per lobby. A host admin can re-bind a profile to a new public key in their own lobby, and each re-bind writes an audit row (old key, new key, admin, reason).
+  - **Bans carry over:** if the old key is banned, the new key gets the same ban and expiry in the same transaction. The old key stays banned too, so a re-bind can't be used to dodge a ban.
 - **"Account" in §7–§9** means the host-local profile in that lobby. That includes account age and hours played (§8.4).
 
 ### 11.3 Host lobby settings
@@ -594,7 +600,7 @@ The host also has a **host admin** role for kicks, bans, freezes, incident windo
 | §7.3 Incident windows and reverts | On-call ops | Automatic windows still open when the host's sim crashes, restarts or stalls (same triggers). Manual windows, extensions and reverts are done by the host admin, with the same audit rows | — |
 | §6.1 Party cap 8, n snapshots | 8-player instances; n fixed at room activation and arena seal | Instance cap = the lobby's max players. Scaling uses `n_peak` (§3.5) | D18, D20 |
 | §9 Seasons and cosmetics | Central season service; account-wide unlocks | Season dates ship in the data pack (UTC), so every lobby and offline play share Season 0's dates. Sparks, the track and unlocks are **per lobby** (per device offline). Cosmetic tokens trade only inside their lobby; one carried in an import is a new token there. No paid cosmetics | D28 |
-| `stack.md` | Official Go server + Postgres; email + password | Godot host (Go = reference/test harness, D24). Identity is still a proposal in both this doc (P1) and PR #14, and neither records it as decided. Android hosting differs from #14's current text, where D29 is the later ruling (join-only in v0.1). `stack.md` is owned by the Server Engineer; this PR doesn't edit it | D24 |
+| `stack.md` | Official Go server + Postgres; email + password | Godot host (Go = reference/test harness, D24). Identity is Karyu's decision D31 (device key, an account per lobby, no email/password, no central account service for now), with per-lobby derived keys and export/backup per Chief of Staff (§11.2). PR #14 should record the same decision, and its single device key pair should match the per-lobby derivation. Android hosting differs from #14's current text, where D29 is the later ruling (join-only in v0.1). `stack.md` is owned by the Server Engineer; this PR doesn't edit it | D24 |
 
 **Hosting platforms (latest ruling, D29):** desktop listen servers and desktop `--headless` hosts ship first. Android is **join-only in v0.1**, not a listen host. The Android default of 8 proposed in PR #14 is superseded by this later ruling. A web-export client cannot host either. The Godot shared sim remains authoritative; existing Go code is a reference/test harness, not the live gameplay host.
 
@@ -608,9 +614,9 @@ The host also has a **host admin** role for kicks, bans, freezes, incident windo
 - **What it can do:** everything else: play, join portals, earn loot, XP and Sparks normally, and count toward `n_peak` like anyone.
 - Offline hardcore is on the honor system, since offline play can't be audited. Permadeath still applies to a flagged hardcore copy inside a lobby.
 
-## 12. Hosting decisions, defaults and the open question (2026-11-23)
+## 12. Hosting decisions and defaults (2026-11-23)
 
-These come from Karyu's answers and Chief of Staff's rulings on the §12 questions in the first version of this PR. They are recorded as D22–D30 and P1 in §10.
+These come from Karyu's answers and Chief of Staff's rulings on the §12 questions in the first version of this PR. They are recorded as D22–D31 in §10.
 
 - **D22, Discovery (Chief of Staff ruling):** LAN, invite code and direct address first, then an internet listing-only service on Cloudflare Workers, planned for the free tier. The internet browser is in scope. Any paid tier needs Karyu's approval first (§11.4).
 - **D23, Characters (Karyu):** a character lives on the lobby that created it. Other lobbies may import it if the receiving host allows it, and that applies to offline and lobby characters alike. Import permission is set per host. Import is a copy with immutable provenance and no global ownership (§11.5).
@@ -623,16 +629,9 @@ These come from Karyu's answers and Chief of Staff's rulings on the §12 questio
 - **D30, Modes/trading/admin (CoS ruling):** D1 and D3 stand; the host admin replaces Economy Ops. Trading and the anti-RMT gate are **ON** by default (§11.3).
 - **Public-release gate:** privacy counsel review in [pre-release issue #20](https://github.com/Karyu42/endless-realm/issues/20) must be completed before any public release. This doc does not resolve it.
 
-**Open question for Karyu (direction):**
+- **D31, Identity (Karyu; detail by Chief of Staff):** "Identity: device key, an account per lobby, no email or password and no central account service for now". Chief of Staff set the detail: per-lobby keys derived from a device secret, plus user-initiated, passphrase-encrypted export and backup of that secret (§11.2).
 
-1. **Identity (P1).** How do players identify themselves to lobbies? Karyu asked what an account service would cost and how email/password browser games handle it, but hasn't chosen.
-   - (a) **Device-held secret with per-lobby derived keys and host-local profiles** (§11.2): no email or password, nothing central, no cost. Unrelated lobbies can't link a player by key. A lost device without the key backup loses access.
-   - (b) **Email + password per lobby:** familiar, but every host then stores emails and password hashes. That's more personal data per host, a weaker privacy story, and no recovery without email sending.
-   - (c) **Central account service:** cross-lobby identity and recovery, but it's always-on official infrastructure with an ongoing cost, which conflicts with "no official servers for now".
-
-   **Recommendation: (a)** for v0.1. It fits D17 and D26, costs nothing, and can later gain an optional central account (c) without breaking per-lobby profiles.
-
-Everything else in §11 is a decision or a tunable design default. The import rules in §11.5 (what a copy carries, new item ids, the import registry) don't change direction or money.
+**No open questions.** Everything in §11 is a decision or a tunable design default. The import rules in §11.5 (what a copy carries, new item ids, the import registry) don't change direction or money.
 
 ## Appendix A. Group scaling curve, n = 1…50
 
