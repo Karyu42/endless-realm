@@ -272,9 +272,18 @@ A small tutorial space, separate from the Wilds. Its layout belongs to the clien
 
 ### 2.5 Practice Hollowmere Vault
 The practice slice of the Hollowmere Vault (from #49) is entered through the practice-yard door.
+- **Practice values (spec):** the door (`practice_yard_portal` in `data/dungeons/hollowmere_vault.json`) uses `practice_base_level` 1 and `m100` 100 (M = 1.00), takes no deposit, and so gives `E = max(1, (1 × 100 + 50) div 100) = 1`. These are the official practice-slice values, not stand-ins. The data's `placeholder` note only explains why the door differs from the official vault `base_level` 10 (§3). Every other found-portal rule from vision §6.1 applies at `E = 1`: join floor, level sync down and XP crediting.
 - **Persistent door:** the door is persistent. The host keeps **one long-lived practice-vault instance** for its lifetime (#55).
+- **Exceptions to vision §6.1:**
+  - **Rule 5 (player cap):** capacity is still the lobby's max players, stored when the door's record is created, and the lobby-wide live admission cap still applies. But it counts **current occupants**, not distinct admitted players. A player leaving frees a slot, and the door never closes because a set number of players has been admitted.
+  - **Rule 8 (lifetimes):** the door has no 120 s admission window and never closes. The instance doesn't close 60 s after it empties; it resets instead (next bullet). With no deposit, deposit forfeiture doesn't apply.
 - **Reset when empty:** once no living player is inside, the whole slice is rebuilt on the next entry: trash, the Tallow Warden and the exit. No clears are tracked per player.
-- **Nothing persists outside it:** the practice vault grants no XP and no currency or season progress (Glint, Riftstone, Echo Dust, Sparks or any other). It drops no gear or loot bags and no found portals. That's why the resets are free.
+- **Nothing gained inside persists:** on entry the host snapshots the player's carried progression, meaning the `PlayerCarry` fields: `level`, `xp_tenths`, `pending_glint`, `pending_riftstone` (#54) and the inventory with equipment. On any way out (the exit portal or leaving the lobby), those fields are restored to the entry snapshot.
+  - What the player **brought in is kept unchanged**, carry and pending Riftstone included; it is never stripped or reduced.
+  - Only what was **gained or changed inside** is discarded: XP and levels, currency or season progress (Glint, Riftstone, Echo Dust, Sparks or any other), and gear or loot-bag pickups.
+  - HP and Focus/cooldown are not progression; they carry out as they are, like any portal move.
+  - The vault drops no found portals, and no onward portal can be entered from inside it.
+  - That's why the resets are free.
 - **Yard credit is separate:** the §2.4 credit (base `killXP(1)`, 1 Glint, loot at `T* = 0`) applies to the practice yard only, not to the practice vault.
 
 ---
