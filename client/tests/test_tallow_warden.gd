@@ -594,3 +594,35 @@ func test_non_practice_vault_still_grants_per_rule_7() -> void:
 	assert_eq(out.pending_riftstone, 4)
 	assert_gt(out.xp_tenths, 0)
 
+
+func test_rule_7_activity_tracks_received_input_frames() -> void:
+	var sim := _vault()
+	var pid_a: int = _pid(sim)
+	var pid_b: int = _add_at(sim, 36.0, 6.5)
+	sim.step()
+	var w := _warden(sim)
+	assert_not_null(w)
+	# One received frame from A, then silence. B keeps sending frames.
+	_hold_fire(sim, pid_a, 1)
+	_hold_fire(sim, pid_b, 1)
+	sim.step()
+	sim.hurt_enemy(w.id, 200, pid_a)
+	sim.hurt_enemy(w.id, 200, pid_b)
+	var window: int = LocalSim.NON_IDLE_WINDOW_TICKS
+	for i in range(window + 2):
+		_hold_fire(sim, pid_b, i + 2)
+		sim.step()
+		var pa := sim.get_player(pid_a)
+		var pb := sim.get_player(pid_b)
+		if pa != null:
+			pa.hp = maxi(pa.hp, 200)
+		if pb != null:
+			pb.hp = maxi(pb.hp, 200)
+	_hold_fire(sim, pid_b, window + 20)
+	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid_b)
+	sim.step()
+	assert_true(sim.boss_defeated())
+	assert_eq(sim.get_player(pid_a).pending_glint, 0)
+	assert_eq(sim.get_player(pid_a).pending_riftstone, 0)
+	assert_eq(sim.get_player(pid_b).pending_glint, 30)
+	assert_eq(sim.get_player(pid_b).pending_riftstone, 4)

@@ -39,8 +39,9 @@ var _tick: int = 0
 ## Default / solo viewer id (player 1 is spawned in _init).
 var _player_id: int = 1
 var _next_id: int = 2
-## Ids ever used for players (allocated or reserved). Only these, or ids the
-## allocator has not reached yet, may be passed to add_player / place_player.
+## Player ids reserved for add_player / place_player. Kept after leave so a
+## host can rejoin the same id. The allocator itself is a high-water mark
+## (_next_id) and does not store an entry per entity id ever issued.
 var _player_id_set: Dictionary = {1: true}
 ## [lo, hi) ranges the allocator jumped over when a caller reserved a higher
 ## id; never issued to entities. One entry per such reservation.
@@ -220,6 +221,8 @@ func apply_input(id: int, intent: InputIntent) -> void:
 		p.intent.ability_pressed = true
 	if p.intent.interact_target_id == 0 and pending_target != 0:
 		p.intent.interact_target_id = pending_target
+	# rule 7 activity tracks received input frames
+	_note_non_idle(p, _tick)
 
 
 ## Solo / existing WorldSource path: apply to the default player (id 1, or
@@ -409,7 +412,6 @@ func step() -> void:
 		_apply_movement(p)
 		_apply_ability(id, p.intent, sim_tick)
 		_apply_fire(p, sim_tick)
-		_note_non_idle(p, sim_tick)
 	for e in _enemies:
 		if e.flash_ticks > 0:
 			e.flash_ticks -= 1
@@ -1994,6 +1996,11 @@ func _apply_pending_roster() -> void:
 				# Ability state goes with the player; a host that wants it
 				# back on rejoin saves it first (focus / cooldown getters).
 				_ability_by_player.erase(pid)
+				_boss_damage_by.erase(pid)
+				_boss_near_ticks.erase(pid)
+				_boss_ally_heals.erase(pid)
+				for e in _enemies:
+					e.damaged_by.erase(pid)
 				changed = true
 		_pending_removes.clear()
 		# Drop that player's in-flight shots.
