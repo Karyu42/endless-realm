@@ -11,7 +11,8 @@ extends SceneTree
 ##   --loadtest-unsafe-max-players N
 ##                          TEST ONLY: overrides the cap above 50 (up to 1000) for load tests.
 ##                          Not for real lobbies; prints a warning.
-##   --emitters N           stand-in enemy emitters (default 20, ~1000 live bullets)
+##   --emitters N           LOAD TEST: stand-in enemy emitters (default 0 = none;
+##                          the load test uses 20, ~1000 live bullets)
 ##   --arena TILES          square arena edge in tiles (default 48)
 ##   --expect-clients N     record stats only while >= N players are connected
 ##   --run-seconds S        hard stop after S seconds (default 0 = no limit)
@@ -76,7 +77,7 @@ func _initialize() -> void:
 			quit(2)
 			return
 		printerr("WARNING: --loadtest-unsafe-max-players=%d is for load tests only" % n)
-		_host.max_players = n
+		_host.set_loadtest_unsafe_max_players(n)
 	var err := _host.start()
 	if err != OK:
 		printerr("HOST_ERROR listen %s:%d failed: %s" % [_host.bind_address, _host.port, error_string(err)])
@@ -93,7 +94,14 @@ func _set_max_players(value: String, source: String) -> bool:
 		_host = null
 		quit(2)
 		return false
-	_host.max_players = n
+	# Goes through LobbySettings like any other settings change.
+	var s := _host.settings()
+	s.max_players = n
+	if _host.apply_settings(s) != OK:
+		printerr("HOST_ERROR %s: %s" % [source, ", ".join(s.validate())])
+		_host = null
+		quit(2)
+		return false
 	return true
 
 

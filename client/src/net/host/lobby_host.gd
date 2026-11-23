@@ -5,8 +5,14 @@ extends RefCounted
 ## godobuf codec. No MultiplayerAPI / RPCs.
 ##
 ## Each player is driven by the real LocalSim (movement + player shots).
-## Enemy bullets come from HostStandinBulletField, a labeled stand-in until
-## the real pattern/rules classes land on main.
+## Enemy bullets come from HostStandinBulletField, a labeled stand-in used
+## only by the load test (emitter_count > 0, set by --emitters). A normal
+## lobby runs with emitter_count = 0.
+##
+## Lobby API for the UI (see client/README.md): apply_settings()/settings()
+## with LobbySettings, a local player on the same input path as remote ones
+## (add_local_player / submit_local_input), world_view() + ticked, and
+## import_character() checked against the import flags.
 ##
 ## Tick is deadline-based: tick n is due at start + n * period. At most
 ## MAX_CATCH_UP overdue ticks run back to back; the rest are dropped and
@@ -49,6 +55,16 @@ const ERROR_WINDOW_TICKS: int = 20
 ## A connection that has not sent Hello within this long is closed.
 const HANDSHAKE_TIMEOUT_USEC: int = 5_000_000
 
+## Stub character blob header for import_character(): magic, format
+## version, flags. TODO: real character format + signature.
+const IMPORT_MAGIC := "ERC"
+const IMPORT_FORMAT_VERSION: int = 1
+const IMPORT_FLAG_PLAYED_OFFLINE: int = 1
+
+signal settings_changed(s: LobbySettings)
+## Emitted at the end of every host tick, after the sim step and sends.
+signal ticked(tick: int)
+
 
 class HostConn:
 	extends RefCounted
@@ -78,6 +94,12 @@ class HostPlayer:
 	var x: float = 0.0
 	var y: float = 0.0
 	var aim_applied: float = 0.0
+	## Hosted on this machine, no socket (add_local_player).
+	var is_local: bool = false
+	var character: Variant = null
+	var imported_character := PackedByteArray()
+	## That player's sim snapshot after the last tick (for world_view).
+	var last_snap: WorldSnapshot = null
 
 
 # Config
@@ -86,11 +108,17 @@ var bind_address: String = "127.0.0.1"
 var instance_seed: int = 1
 var multiplier_m100: int = 100
 var arena_size: float = 48.0
-var emitter_count: int = 20
+## Stand-in enemy emitters for the load test. 0 in a normal lobby.
+var emitter_count: int = 0
 ## Record stats only while at least this many players are connected (0 = any).
 var expect_clients: int = 0
-## Players allowed at once. Validate with parse_max_players() before setting.
-var max_players: int = DEFAULT_MAX_PLAYERS
+## Players allowed at once. Backed by settings().max_players; prefer
+## apply_settings(). Lowering it never kicks anyone, it only blocks new joins.
+var max_players: int:
+	get:
+		return _unsafe_max_players if _unsafe_max_players > 0 else _settings.max_players
+	set(v):
+		_settings.max_players = v
 ## Microsecond clock for deadlines and timeouts. Tests inject a fake.
 var clock: Callable = Time.get_ticks_usec
 ## Validates interact presses (range, once per seq, known/allowed target).
@@ -117,6 +145,8 @@ var budget_disconnects: int = 0
 var handshake_timeouts: int = 0
 var suppressed_errors: int = 0
 
+var _settings := LobbySettings.new()
+var _unsafe_max_players: int = 0
 var _tcp := TCPServer.new()
 var _conns: Array[HostConn] = []
 var _next_player_id: int = 1
@@ -144,9 +174,13 @@ var _inputs_this_tick: int = 0
 
 func _init(config: SimConfig = null) -> void:
 	_config = config if config != null else SimConfig.new()
+	# Replaced in start(); lets a not-yet-listening host tick local players.
+	bullets = HostStandinBulletField.new(instance_seed, 0, arena_size, arena_size)
 
 
 func start() -> Error:
+	if _settings.join_code == "":
+		_settings.join_code = LobbySettings.generate_join_code()
 	bullets = HostStandinBulletField.new(instance_seed, emitter_count, arena_size, arena_size)
 	var err := _tcp.listen(port, bind_address)
 	if err != OK:
@@ -163,6 +197,159 @@ func stop() -> void:
 	_conns.clear()
 	players.clear()
 	_tcp.stop()
+
+
+## Validates and applies lobby settings. An empty join_code keeps the current
+## code (or generates one). Lowering max_players never kicks anyone; the M
+## range applies to portals opened afterwards; the import flags apply to
+## future imports. Emits settings_changed with a copy.
+func apply_settings(s: LobbySettings) -> Error:
+	if s == null or not s.validate().is_empty():
+		return ERR_INVALID_PARAMETER
+	var next := s.duplicate_settings()
+	if next.join_code == "":
+		next.join_code = _settings.join_code if _settings.join_code != "" else LobbySettings.generate_join_code()
+	_settings = next
+	settings_changed.emit(_settings.duplicate_settings())
+	return OK
+
+
+## A copy of the current settings, including the generated join code.
+func settings() -> LobbySettings:
+	if _settings.join_code == "":
+		_settings.join_code = LobbySettings.generate_join_code()
+	return _settings.duplicate_settings()
+
+
+## Load-test-only cap above MAX_MAX_PLAYERS; bypasses LobbySettings.
+func set_loadtest_unsafe_max_players(n: int) -> void:
+	_unsafe_max_players = n
+
+
+## True if a portal at this multiplier is allowed by the lobby's M range.
+## TODO(protocol PR): the Godot host has no OpenPortal handling yet; when it
+## does, reject out-of-range m100 there with ErrorCode.MULTIPLIER_NOT_ALLOWED.
+func is_m100_allowed(m100: int) -> bool:
+	return _settings.allows_m100(m100)
+
+
+## Adds a player hosted on this machine (listen server). Counts toward
+## max_players. Returns the player id, or -1 if the lobby is full.
+func add_local_player(character: Variant = null) -> int:
+	if players.size() >= max_players:
+		return -1
+	var p := _add_player()
+	p.is_local = true
+	p.character = character
+	return p.id
+
+
+## Queues a local player's input for the next tick. Same rules as a remote
+## InputFrame (applied once per seq, interacts go through the validator), but
+## no socket and no message budget.
+func submit_local_input(player_id: int, intent: InputIntent) -> void:
+	var p := _find_player(player_id)
+	if p == null or not p.is_local or intent == null:
+		return
+	var target = intent.get("interact_target_id")
+	_queue_input(p, intent.seq, intent.move_x, intent.move_y, intent.aim, intent.fire_held,
+			int(target) if target != null else 0)
+
+
+func remove_local_player(player_id: int) -> void:
+	var p := _find_player(player_id)
+	if p == null or not p.is_local:
+		return
+	interact_validator.forget_player(p.id)
+	players.erase(p)
+
+
+## Read-only view for one player after the last tick: that player's sim
+## snapshot plus the other players and any stand-in bullets. Null if the
+## player is unknown or has not been simulated yet.
+func world_view(player_id: int) -> WorldSnapshot:
+	var p := _find_player(player_id)
+	if p == null or p.last_snap == null:
+		return null
+	var src := p.last_snap
+	var v := HostWorldSnapshot.new()
+	v.tick = src.tick
+	v.host_tick = tick
+	v.player_id = p.id
+	v.player_x = src.player_x
+	v.player_y = src.player_y
+	v.player_aim = src.player_aim
+	v.player_hp = src.player_hp
+	v.player_max_hp = src.player_max_hp
+	v.player_flash_ticks = src.player_flash_ticks
+	v.applied_seq = src.applied_seq
+	v.projectiles = src.projectiles.duplicate()
+	v.enemies = src.enemies.duplicate()
+	v.pattern_bullets = src.pattern_bullets.duplicate()
+	if bullets != null and bullets.b_count > 0:
+		# Stand-in hits are host-side; show host hp and the stand-in bullets
+		# in this player's sim time base.
+		v.player_hp = p.hp
+		v.player_max_hp = START_HP
+		var offset: int = tick - src.tick
+		for i in range(bullets.b_count):
+			var b := PatternBullet.new()
+			b.id = -(i + 1)
+			b.spawn_tick = bullets.b_spawn[i] - offset
+			b.origin_x = bullets.b_ox[i]
+			b.origin_y = bullets.b_oy[i]
+			b.angle_rad = atan2(bullets.b_vy[i], bullets.b_vx[i])
+			b.speed = Vector2(bullets.b_vx[i], bullets.b_vy[i]).length() / SimConstants.TICK_DT
+			b.lifetime_ticks = bullets.lifetime_ticks
+			b.radius_tiles = bullets.bullet_radius
+			v.pattern_bullets.append(b)
+	for o in players:
+		if o == p:
+			continue
+		v.others.append({"id": o.id, "x": o.x, "y": o.y, "aim": o.aim_applied, "hp": o.hp, "local": o.is_local})
+	return v
+
+
+## Checks an imported character against the lobby's import flags. Called only
+## when a player imports, never at Hello. Returns an ImportResult constant.
+## Blob format and signature are a stub for now:
+## "ERC" + version byte (1) + flags byte (bit 0 = played offline) + payload.
+## TODO: real character format and signature verification.
+func import_character(blob: PackedByteArray, player_id: int) -> int:
+	var p := _find_player(player_id)
+	if p == null:
+		return ImportResult.REJECTED_UNKNOWN_PLAYER
+	if not _settings.imports_allowed:
+		return ImportResult.REJECTED_IMPORTS_OFF
+	var n: int = IMPORT_MAGIC.length()
+	if blob.size() < n + 2 or blob.slice(0, n).get_string_from_ascii() != IMPORT_MAGIC:
+		return ImportResult.REJECTED_BAD_FORMAT
+	if blob[n] != IMPORT_FORMAT_VERSION:
+		return ImportResult.REJECTED_UNSUPPORTED_VERSION
+	# TODO: verify the signature; return REJECTED_BAD_SIGNATURE on failure.
+	if blob[n + 1] & IMPORT_FLAG_PLAYED_OFFLINE != 0 and not _settings.offline_allowed:
+		return ImportResult.REJECTED_OFFLINE_OFF
+	if not p.imported_character.is_empty():
+		return ImportResult.REJECTED_ALREADY_EXISTS
+	p.imported_character = blob
+	return ImportResult.IMPORT_RESULT_OK
+
+
+## Builds a blob in the stub import format (for tests and the lobby UI).
+static func make_stub_import_blob(played_offline: bool, payload := PackedByteArray(),
+		version: int = IMPORT_FORMAT_VERSION) -> PackedByteArray:
+	var out := IMPORT_MAGIC.to_ascii_buffer()
+	out.append(version)
+	out.append(IMPORT_FLAG_PLAYED_OFFLINE if played_offline else 0)
+	out.append_array(payload)
+	return out
+
+
+func _find_player(player_id: int) -> HostPlayer:
+	for p in players:
+		if p.id == player_id:
+			return p
+	return null
 
 
 func connection_count() -> int:
@@ -221,7 +408,6 @@ func service() -> void:
 ## One full host tick: network in, sim, encode, send. Public for tests.
 func run_tick() -> void:
 	var t0 := Time.get_ticks_usec()
-	_inputs_this_tick = 0
 	_net_in()
 	var t1 := Time.get_ticks_usec()
 	tick += 1
@@ -252,6 +438,8 @@ func run_tick() -> void:
 		st_full_bytes_sum += full_bytes.size()
 		st_packets_sent += sent
 		st_inputs += _inputs_this_tick
+	_inputs_this_tick = 0
+	ticked.emit(tick)
 
 
 func _net_in() -> void:
@@ -380,24 +568,28 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 		if c.player == null:
 			return
 		var f = msg.get_input()
-		var p := c.player
-		var seq: int = f.get_seq()
-		if seq <= p.seq:
-			return  # stale or duplicate
-		p.seq = seq
-		p.move_x = _finite_or_zero(f.get_move_x())
-		p.move_y = _finite_or_zero(f.get_move_y())
-		p.aim = _finite_or_zero(f.get_aim())
-		p.fire_held = f.get_fire_held()
-		var target: int = f.get_interact_target_id()
-		if target != 0:
-			# Each press is evaluated, even if later frames arrive in the same tick.
-			p.interacts.append(PackedInt64Array([seq, target]))
-		_inputs_this_tick += 1
+		_queue_input(c.player, f.get_seq(), f.get_move_x(), f.get_move_y(), f.get_aim(),
+				f.get_fire_held(), f.get_interact_target_id())
 	elif c.player != null and (msg.has_open_portal() or msg.has_join_instance() \
 			or msg.has_list_instances() or msg.has_leave_instance()):
 		# Portals are not part of this load-test host yet.
 		_send_error(c, PB.ErrorCode.ERROR_CODE_UNSPECIFIED, "portals are not supported by the Godot host yet")
+
+
+## Shared by remote InputFrames and submit_local_input: applied once per seq,
+## interact presses queued for the validator on the next tick.
+func _queue_input(p: HostPlayer, seq: int, mx: float, my: float, aim: float, fire: bool, target: int) -> void:
+	if seq <= p.seq:
+		return  # stale or duplicate
+	p.seq = seq
+	p.move_x = _finite_or_zero(mx)
+	p.move_y = _finite_or_zero(my)
+	p.aim = _finite_or_zero(aim)
+	p.fire_held = fire
+	if target != 0:
+		# Each press is evaluated, even if later frames arrive in the same tick.
+		p.interacts.append(PackedInt64Array([seq, target]))
+	_inputs_this_tick += 1
 
 
 static func _finite_or_zero(v: float) -> float:
@@ -442,6 +634,7 @@ func _step_sim() -> Array[PackedFloat64Array]:
 		p.sim.submit_input(InputIntent.from_raw(p.seq, p.move_x, p.move_y, p.aim, p.fire_held))
 		p.sim.step()
 		var snap := p.sim.snapshot()
+		p.last_snap = snap
 		p.x = snap.player_x
 		p.y = snap.player_y
 		p.aim_applied = snap.player_aim
