@@ -50,7 +50,7 @@ const (
 
 // Input is one client frame waiting to be applied on the next tick.
 type Input struct {
-	PlayerID uint32
+	PlayerID uint64
 	Seq      uint32
 	MoveX    float64
 	MoveY    float64
@@ -65,7 +65,7 @@ type Snapshot struct {
 }
 
 type PlayerStub struct {
-	ID         uint32
+	ID         uint64
 	AppliedSeq uint32
 }
 
@@ -75,8 +75,8 @@ type Instance struct {
 	clk       clock.Clock
 	mu        sync.Mutex
 	tick      uint32
-	inputs    map[uint32]Input
-	applied   map[uint32]uint32
+	inputs    map[uint64]Input
+	applied   map[uint64]uint32
 	listeners map[chan Snapshot]struct{}
 	onSubmit  func(Input)
 	skipped   uint64
@@ -96,8 +96,8 @@ func New(seed uint64, m100 int, clk clock.Clock) (*Instance, error) {
 		seed:      seed,
 		m100:      m100,
 		clk:       clk,
-		inputs:    make(map[uint32]Input),
-		applied:   make(map[uint32]uint32),
+		inputs:    make(map[uint64]Input),
+		applied:   make(map[uint64]uint32),
 		listeners: make(map[chan Snapshot]struct{}),
 	}, nil
 }
@@ -264,7 +264,7 @@ func (i *Instance) Step() Snapshot {
 	for id, in := range i.inputs {
 		i.applied[id] = in.Seq
 	}
-	i.inputs = make(map[uint32]Input)
+	i.inputs = make(map[uint64]Input)
 	snap := Snapshot{Tick: i.tick, Players: make([]PlayerStub, 0, len(i.applied))}
 	for id, seq := range i.applied {
 		snap.Players = append(snap.Players, PlayerStub{ID: id, AppliedSeq: seq})

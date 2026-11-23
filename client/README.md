@@ -84,3 +84,19 @@ make fixtures-parity
 
 `make fixtures-parity` runs `go test -race ./internal/sim` and `make client-test`.
 
+
+## Host interact hook
+
+`proto/v1.InputFrame.interact_target_id` is a uint64 entity id, not a boolean.
+Zero means none; a nonzero target is a press on that seq. `LobbyHost` queues
+presses from accepted inputs and evaluates them after movement using the
+host's position. Unknown / disallowed targets and targets beyond 2 tiles are
+silently dropped; the same seq cannot interact twice.
+
+The host has not wired the shared sim's interactables yet. For the loot work,
+set `host.interact_validator.resolver` to
+`func(target_id: int, player_id: int) -> Dictionary`, returning
+`{"x": float, "y": float}` in tiles only for an existing target the player
+may use, or `{}` otherwise. Set `host.on_interact` to
+`func(player_id: int, target_id: int) -> void` to apply accepted presses.
+The resolver defaults to unknown, so no interaction is accepted until wired.

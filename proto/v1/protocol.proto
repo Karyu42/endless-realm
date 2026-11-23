@@ -16,6 +16,13 @@ option go_package = "github.com/Karyu42/endless-realm/server/internal/protocol/v
 // Time in snapshots is tick index, not milliseconds.
 //
 // Portal multiplier is uint32 m100 (whole hundredths), never a float.
+//
+// Entity and player ids are uint64 (one shared id counter on the host; a
+// uint32 could wrap in a long-lived lobby). seq and tick stay uint32.
+// Widening a varint from uint32 to uint64 does not change its encoding.
+//
+// Names avoid clashes in generated GDScript: no field named instance_id
+// (Object.get_instance_id) and no message named Error (Godot's Error enum).
 
 message Hello {
   uint32 protocol_version = 1;
@@ -23,14 +30,14 @@ message Hello {
 
 message Welcome {
   uint32 protocol_version = 1;
-  uint32 player_id = 2;
+  uint64 player_id = 2;
   uint32 tick_hz = 3;
   uint64 instance_seed = 4;
   // Display only; the client must not use this to compute rewards.
   float multiplier = 5;
   // Instance this session starts in (the process default / smoke instance).
-  uint64 instance_id = 6;
-  // Locked M100 of instance_id. Prefer this over the display float.
+  uint64 instance = 6;
+  // Locked M100 of instance. Prefer this over the display float.
   uint32 m100 = 7;
 }
 
@@ -47,6 +54,13 @@ message InputFrame {
   // Radians, Godot 2D convention. No sign flips on the server.
   float aim = 4;
   bool fire_held = 5;
+  // Entity id of the interactable (loot bag, portal, vendor) the client
+  // prompted for. 0 or unset means no interact. Nonzero is an interact press
+  // on this frame's seq. The host applies it at most once per seq and drops
+  // it silently (no ErrorReply) if the id is unknown, the target is not
+  // allowed for this player, or it is more than 2.0 tiles away, center to
+  // center, as measured by the host.
+  uint64 interact_target_id = 6;
 }
 
 // Snapshot is a stub: tick plus the last applied input seq per connected player.
@@ -56,7 +70,7 @@ message Snapshot {
 }
 
 message PlayerStub {
-  uint32 id = 1;
+  uint64 id = 1;
   uint32 applied_seq = 2;
 }
 
@@ -70,7 +84,7 @@ message OpenPortal {
 // Join an existing instance by id (including the default instance, which
 // returns the session to the process default / hub).
 message JoinInstance {
-  uint64 instance_id = 1;
+  uint64 instance = 1;
 }
 
 // Return to the process default instance without closing the portal.
@@ -79,7 +93,7 @@ message LeaveInstance {}
 message ListInstances {}
 
 message InstanceInfo {
-  uint64 instance_id = 1;
+  uint64 instance = 1;
   uint32 m100 = 2;
   // Unset (0) in InstanceList. Seeds are only sent on Welcome,
   // OpenPortalOk, and JoinInstanceOk for the caller's own instance.
@@ -89,13 +103,13 @@ message InstanceInfo {
 }
 
 message OpenPortalOk {
-  uint64 instance_id = 1;
+  uint64 instance = 1;
   uint32 m100 = 2;
   uint64 seed = 3;
 }
 
 message JoinInstanceOk {
-  uint64 instance_id = 1;
+  uint64 instance = 1;
   uint32 m100 = 2;
   uint64 seed = 3;
 }
@@ -115,7 +129,7 @@ enum ErrorCode {
   OPEN_PORTAL_LIMIT = 5;
 }
 
-message Error {
+message ErrorReply {
   ErrorCode code = 1;
   string reason = 2;
 }
@@ -139,6 +153,6 @@ message ServerMessage {
     OpenPortalOk open_portal_ok = 4;
     JoinInstanceOk join_instance_ok = 5;
     InstanceList instance_list = 6;
-    Error error = 7;
+    ErrorReply error = 7;
   }
 }

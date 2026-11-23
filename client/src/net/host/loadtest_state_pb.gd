@@ -686,7 +686,7 @@ class PlayerState:
 	func _init():
 		var service
 		
-		__id = PBField.new("id", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		__id = PBField.new("id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
 		service.field = __id
 		data[__id.tag] = service
@@ -727,7 +727,7 @@ class PlayerState:
 		return __id.value
 	func clear_id() -> void:
 		data[1].state = PB_SERVICE_STATE.UNFILLED
-		__id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+		__id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
 	func set_id(value : int) -> void:
 		__id.value = value
 	
@@ -821,7 +821,7 @@ class PatternSpawn:
 	func _init():
 		var service
 		
-		__emitter_id = PBField.new("emitter_id", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		__emitter_id = PBField.new("emitter_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
 		service.field = __emitter_id
 		data[__emitter_id.tag] = service
@@ -862,7 +862,7 @@ class PatternSpawn:
 		return __emitter_id.value
 	func clear_emitter_id() -> void:
 		data[1].state = PB_SERVICE_STATE.UNFILLED
-		__emitter_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+		__emitter_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
 	func set_emitter_id(value : int) -> void:
 		__emitter_id.value = value
 	
@@ -956,7 +956,7 @@ class ShotSpawn:
 	func _init():
 		var service
 		
-		__owner = PBField.new("owner", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		__owner = PBField.new("owner", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
 		service.field = __owner
 		data[__owner.tag] = service
@@ -992,7 +992,7 @@ class ShotSpawn:
 		return __owner.value
 	func clear_owner() -> void:
 		data[1].state = PB_SERVICE_STATE.UNFILLED
-		__owner.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+		__owner.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
 	func set_owner(value : int) -> void:
 		__owner.value = value
 	

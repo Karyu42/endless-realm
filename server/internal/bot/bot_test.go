@@ -291,14 +291,14 @@ type scriptedServer struct {
 	mu               sync.Mutex
 	paused           bool
 	tick             uint32
-	applied          map[uint32]uint32
-	nextID           uint32
+	applied          map[uint64]uint32
+	nextID           uint64
 	dropAfterWelcome int // 1-based connection number to close after Welcome; 0 disables
 	conns            int
 }
 
 func newScriptedServer() *scriptedServer {
-	return &scriptedServer{applied: make(map[uint32]uint32), nextID: 1}
+	return &scriptedServer{applied: make(map[uint64]uint32), nextID: 1}
 }
 
 func (s *scriptedServer) setPaused(p bool) {

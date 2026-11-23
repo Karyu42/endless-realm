@@ -64,7 +64,7 @@ func test_hello_gets_welcome_then_snapshot_with_applied_seq() -> void:
 	assert_eq(w.get_instance_seed(), 7)
 	assert_almost_eq(w.get_multiplier(), 1.0, 1e-6)
 	assert_eq(w.get_m100(), 100)
-	assert_eq(w.get_instance_id_value(), LobbyHost.DEFAULT_INSTANCE_ID)
+	assert_eq(w.get_instance(), LobbyHost.DEFAULT_INSTANCE_ID)
 	assert_true(got[1].has_snapshot(), "then a Snapshot")
 	var me: int = w.get_player_id()
 

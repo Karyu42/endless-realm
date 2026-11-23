@@ -736,7 +736,7 @@ class Welcome:
 		service.field = __protocol_version
 		data[__protocol_version.tag] = service
 		
-		__player_id = PBField.new("player_id", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		__player_id = PBField.new("player_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
 		service.field = __player_id
 		data[__player_id.tag] = service
@@ -756,10 +756,10 @@ class Welcome:
 		service.field = __multiplier
 		data[__multiplier.tag] = service
 		
-		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		__instance = PBField.new("instance", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
-		service.field = __instance_id
-		data[__instance_id.tag] = service
+		service.field = __instance
+		data[__instance.tag] = service
 		
 		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 7, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
 		service = PBServiceField.new()
@@ -790,7 +790,7 @@ class Welcome:
 		return __player_id.value
 	func clear_player_id() -> void:
 		data[2].state = PB_SERVICE_STATE.UNFILLED
-		__player_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+		__player_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
 	func set_player_id(value : int) -> void:
 		__player_id.value = value
 	
@@ -833,18 +833,18 @@ class Welcome:
 	func set_multiplier(value : float) -> void:
 		__multiplier.value = value
 	
-	var __instance_id: PBField
-	func has_instance_id() -> bool:
-		if __instance_id.value != null:
+	var __instance: PBField
+	func has_instance() -> bool:
+		if __instance.value != null:
 			return true
 		return false
-	func get_instance_id_value() -> int:
-		return __instance_id.value
-	func clear_instance_id() -> void:
+	func get_instance() -> int:
+		return __instance.value
+	func clear_instance() -> void:
 		data[6].state = PB_SERVICE_STATE.UNFILLED
-		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
-	func set_instance_id(value : int) -> void:
-		__instance_id.value = value
+		__instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance(value : int) -> void:
+		__instance.value = value
 	
 	var __m100: PBField
 	func has_m100() -> bool:
@@ -990,6 +990,11 @@ class InputFrame:
 		service.field = __fire_held
 		data[__fire_held.tag] = service
 		
+		__interact_target_id = PBField.new("interact_target_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __interact_target_id
+		data[__interact_target_id.tag] = service
+		
 	var data = {}
 	
 	var __seq: PBField
@@ -1056,6 +1061,19 @@ class InputFrame:
 		__fire_held.value = DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL]
 	func set_fire_held(value : bool) -> void:
 		__fire_held.value = value
+	
+	var __interact_target_id: PBField
+	func has_interact_target_id() -> bool:
+		if __interact_target_id.value != null:
+			return true
+		return false
+	func get_interact_target_id() -> int:
+		return __interact_target_id.value
+	func clear_interact_target_id() -> void:
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__interact_target_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_interact_target_id(value : int) -> void:
+		__interact_target_id.value = value
 	
 	func _to_string() -> String:
 		return PBPacker.message_to_string(data)
@@ -1145,7 +1163,7 @@ class PlayerStub:
 	func _init():
 		var service
 		
-		__id = PBField.new("id", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		__id = PBField.new("id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
 		service.field = __id
 		data[__id.tag] = service
@@ -1166,7 +1184,7 @@ class PlayerStub:
 		return __id.value
 	func clear_id() -> void:
 		data[1].state = PB_SERVICE_STATE.UNFILLED
-		__id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+		__id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
 	func set_id(value : int) -> void:
 		__id.value = value
 	
@@ -1253,25 +1271,25 @@ class JoinInstance:
 	func _init():
 		var service
 		
-		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		__instance = PBField.new("instance", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
-		service.field = __instance_id
-		data[__instance_id.tag] = service
+		service.field = __instance
+		data[__instance.tag] = service
 		
 	var data = {}
 	
-	var __instance_id: PBField
-	func has_instance_id() -> bool:
-		if __instance_id.value != null:
+	var __instance: PBField
+	func has_instance() -> bool:
+		if __instance.value != null:
 			return true
 		return false
-	func get_instance_id_value() -> int:
-		return __instance_id.value
-	func clear_instance_id() -> void:
+	func get_instance() -> int:
+		return __instance.value
+	func clear_instance() -> void:
 		data[1].state = PB_SERVICE_STATE.UNFILLED
-		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
-	func set_instance_id(value : int) -> void:
-		__instance_id.value = value
+		__instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance(value : int) -> void:
+		__instance.value = value
 	
 	func _to_string() -> String:
 		return PBPacker.message_to_string(data)
@@ -1352,10 +1370,10 @@ class InstanceInfo:
 	func _init():
 		var service
 		
-		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		__instance = PBField.new("instance", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
-		service.field = __instance_id
-		data[__instance_id.tag] = service
+		service.field = __instance
+		data[__instance.tag] = service
 		
 		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
 		service = PBServiceField.new()
@@ -1379,18 +1397,18 @@ class InstanceInfo:
 		
 	var data = {}
 	
-	var __instance_id: PBField
-	func has_instance_id() -> bool:
-		if __instance_id.value != null:
+	var __instance: PBField
+	func has_instance() -> bool:
+		if __instance.value != null:
 			return true
 		return false
-	func get_instance_id_value() -> int:
-		return __instance_id.value
-	func clear_instance_id() -> void:
+	func get_instance() -> int:
+		return __instance.value
+	func clear_instance() -> void:
 		data[1].state = PB_SERVICE_STATE.UNFILLED
-		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
-	func set_instance_id(value : int) -> void:
-		__instance_id.value = value
+		__instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance(value : int) -> void:
+		__instance.value = value
 	
 	var __m100: PBField
 	func has_m100() -> bool:
@@ -1469,10 +1487,10 @@ class OpenPortalOk:
 	func _init():
 		var service
 		
-		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		__instance = PBField.new("instance", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
-		service.field = __instance_id
-		data[__instance_id.tag] = service
+		service.field = __instance
+		data[__instance.tag] = service
 		
 		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
 		service = PBServiceField.new()
@@ -1486,18 +1504,18 @@ class OpenPortalOk:
 		
 	var data = {}
 	
-	var __instance_id: PBField
-	func has_instance_id() -> bool:
-		if __instance_id.value != null:
+	var __instance: PBField
+	func has_instance() -> bool:
+		if __instance.value != null:
 			return true
 		return false
-	func get_instance_id_value() -> int:
-		return __instance_id.value
-	func clear_instance_id() -> void:
+	func get_instance() -> int:
+		return __instance.value
+	func clear_instance() -> void:
 		data[1].state = PB_SERVICE_STATE.UNFILLED
-		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
-	func set_instance_id(value : int) -> void:
-		__instance_id.value = value
+		__instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance(value : int) -> void:
+		__instance.value = value
 	
 	var __m100: PBField
 	func has_m100() -> bool:
@@ -1550,10 +1568,10 @@ class JoinInstanceOk:
 	func _init():
 		var service
 		
-		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		__instance = PBField.new("instance", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
 		service = PBServiceField.new()
-		service.field = __instance_id
-		data[__instance_id.tag] = service
+		service.field = __instance
+		data[__instance.tag] = service
 		
 		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
 		service = PBServiceField.new()
@@ -1567,18 +1585,18 @@ class JoinInstanceOk:
 		
 	var data = {}
 	
-	var __instance_id: PBField
-	func has_instance_id() -> bool:
-		if __instance_id.value != null:
+	var __instance: PBField
+	func has_instance() -> bool:
+		if __instance.value != null:
 			return true
 		return false
-	func get_instance_id_value() -> int:
-		return __instance_id.value
-	func clear_instance_id() -> void:
+	func get_instance() -> int:
+		return __instance.value
+	func clear_instance() -> void:
 		data[1].state = PB_SERVICE_STATE.UNFILLED
-		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
-	func set_instance_id(value : int) -> void:
-		__instance_id.value = value
+		__instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance(value : int) -> void:
+		__instance.value = value
 	
 	var __m100: PBField
 	func has_m100() -> bool:
@@ -1681,7 +1699,7 @@ enum ErrorCode {
 	OPEN_PORTAL_LIMIT = 5
 }
 
-class ErrorMsg:
+class ErrorReply:
 	func _init():
 		var service
 		
@@ -2183,12 +2201,12 @@ class ServerMessage:
 	var __error: PBField
 	func has_error() -> bool:
 		return data[7].state == PB_SERVICE_STATE.FILLED
-	func get_error() -> ErrorMsg:
+	func get_error() -> ErrorReply:
 		return __error.value
 	func clear_error() -> void:
 		data[7].state = PB_SERVICE_STATE.UNFILLED
 		__error.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
-	func new_error() -> ErrorMsg:
+	func new_error() -> ErrorReply:
 		__welcome.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
 		data[1].state = PB_SERVICE_STATE.UNFILLED
 		__reject.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
@@ -2203,7 +2221,7 @@ class ServerMessage:
 		data[6].state = PB_SERVICE_STATE.UNFILLED
 		data[7].state = PB_SERVICE_STATE.FILLED
 		_payload_case = 7
-		__error.value = ErrorMsg.new()
+		__error.value = ErrorReply.new()
 		return __error.value
 	
 	func get_payload_case() -> int:

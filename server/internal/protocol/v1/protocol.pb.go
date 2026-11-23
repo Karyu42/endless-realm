@@ -128,14 +128,14 @@ func (x *Hello) GetProtocolVersion() uint32 {
 type Welcome struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ProtocolVersion uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	PlayerId        uint32                 `protobuf:"varint,2,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
+	PlayerId        uint64                 `protobuf:"varint,2,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
 	TickHz          uint32                 `protobuf:"varint,3,opt,name=tick_hz,json=tickHz,proto3" json:"tick_hz,omitempty"`
 	InstanceSeed    uint64                 `protobuf:"varint,4,opt,name=instance_seed,json=instanceSeed,proto3" json:"instance_seed,omitempty"`
 	// Display only; the client must not use this to compute rewards.
 	Multiplier float32 `protobuf:"fixed32,5,opt,name=multiplier,proto3" json:"multiplier,omitempty"`
 	// Instance this session starts in (the process default / smoke instance).
-	InstanceId uint64 `protobuf:"varint,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	// Locked M100 of instance_id. Prefer this over the display float.
+	Instance uint64 `protobuf:"varint,6,opt,name=instance,proto3" json:"instance,omitempty"`
+	// Locked M100 of instance. Prefer this over the display float.
 	M100          uint32 `protobuf:"varint,7,opt,name=m100,proto3" json:"m100,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -178,7 +178,7 @@ func (x *Welcome) GetProtocolVersion() uint32 {
 	return 0
 }
 
-func (x *Welcome) GetPlayerId() uint32 {
+func (x *Welcome) GetPlayerId() uint64 {
 	if x != nil {
 		return x.PlayerId
 	}
@@ -206,9 +206,9 @@ func (x *Welcome) GetMultiplier() float32 {
 	return 0
 }
 
-func (x *Welcome) GetInstanceId() uint64 {
+func (x *Welcome) GetInstance() uint64 {
 	if x != nil {
-		return x.InstanceId
+		return x.Instance
 	}
 	return 0
 }
@@ -286,10 +286,17 @@ type InputFrame struct {
 	MoveX float32                `protobuf:"fixed32,2,opt,name=move_x,json=moveX,proto3" json:"move_x,omitempty"`
 	MoveY float32                `protobuf:"fixed32,3,opt,name=move_y,json=moveY,proto3" json:"move_y,omitempty"`
 	// Radians, Godot 2D convention. No sign flips on the server.
-	Aim           float32 `protobuf:"fixed32,4,opt,name=aim,proto3" json:"aim,omitempty"`
-	FireHeld      bool    `protobuf:"varint,5,opt,name=fire_held,json=fireHeld,proto3" json:"fire_held,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Aim      float32 `protobuf:"fixed32,4,opt,name=aim,proto3" json:"aim,omitempty"`
+	FireHeld bool    `protobuf:"varint,5,opt,name=fire_held,json=fireHeld,proto3" json:"fire_held,omitempty"`
+	// Entity id of the interactable (loot bag, portal, vendor) the client
+	// prompted for. 0 or unset means no interact. Nonzero is an interact press
+	// on this frame's seq. The host applies it at most once per seq and drops
+	// it silently (no ErrorReply) if the id is unknown, the target is not
+	// allowed for this player, or it is more than 2.0 tiles away, center to
+	// center, as measured by the host.
+	InteractTargetId uint64 `protobuf:"varint,6,opt,name=interact_target_id,json=interactTargetId,proto3" json:"interact_target_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *InputFrame) Reset() {
@@ -357,6 +364,13 @@ func (x *InputFrame) GetFireHeld() bool {
 	return false
 }
 
+func (x *InputFrame) GetInteractTargetId() uint64 {
+	if x != nil {
+		return x.InteractTargetId
+	}
+	return 0
+}
+
 // Snapshot is a stub: tick plus the last applied input seq per connected player.
 type Snapshot struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -412,7 +426,7 @@ func (x *Snapshot) GetPlayers() []*PlayerStub {
 
 type PlayerStub struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            uint32                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
 	AppliedSeq    uint32                 `protobuf:"varint,2,opt,name=applied_seq,json=appliedSeq,proto3" json:"applied_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -448,7 +462,7 @@ func (*PlayerStub) Descriptor() ([]byte, []int) {
 	return file_v1_protocol_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *PlayerStub) GetId() uint32 {
+func (x *PlayerStub) GetId() uint64 {
 	if x != nil {
 		return x.Id
 	}
@@ -513,7 +527,7 @@ func (x *OpenPortal) GetM100() uint32 {
 // returns the session to the process default / hub).
 type JoinInstance struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId    uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Instance      uint64                 `protobuf:"varint,1,opt,name=instance,proto3" json:"instance,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -548,9 +562,9 @@ func (*JoinInstance) Descriptor() ([]byte, []int) {
 	return file_v1_protocol_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *JoinInstance) GetInstanceId() uint64 {
+func (x *JoinInstance) GetInstance() uint64 {
 	if x != nil {
-		return x.InstanceId
+		return x.Instance
 	}
 	return 0
 }
@@ -629,9 +643,9 @@ func (*ListInstances) Descriptor() ([]byte, []int) {
 }
 
 type InstanceInfo struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	M100       uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Instance uint64                 `protobuf:"varint,1,opt,name=instance,proto3" json:"instance,omitempty"`
+	M100     uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
 	// Unset (0) in InstanceList. Seeds are only sent on Welcome,
 	// OpenPortalOk, and JoinInstanceOk for the caller's own instance.
 	Seed          uint64 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
@@ -671,9 +685,9 @@ func (*InstanceInfo) Descriptor() ([]byte, []int) {
 	return file_v1_protocol_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *InstanceInfo) GetInstanceId() uint64 {
+func (x *InstanceInfo) GetInstance() uint64 {
 	if x != nil {
-		return x.InstanceId
+		return x.Instance
 	}
 	return 0
 }
@@ -708,7 +722,7 @@ func (x *InstanceInfo) GetIsDefault() bool {
 
 type OpenPortalOk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId    uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Instance      uint64                 `protobuf:"varint,1,opt,name=instance,proto3" json:"instance,omitempty"`
 	M100          uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
 	Seed          uint64                 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -745,9 +759,9 @@ func (*OpenPortalOk) Descriptor() ([]byte, []int) {
 	return file_v1_protocol_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *OpenPortalOk) GetInstanceId() uint64 {
+func (x *OpenPortalOk) GetInstance() uint64 {
 	if x != nil {
-		return x.InstanceId
+		return x.Instance
 	}
 	return 0
 }
@@ -768,7 +782,7 @@ func (x *OpenPortalOk) GetSeed() uint64 {
 
 type JoinInstanceOk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId    uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Instance      uint64                 `protobuf:"varint,1,opt,name=instance,proto3" json:"instance,omitempty"`
 	M100          uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
 	Seed          uint64                 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -805,9 +819,9 @@ func (*JoinInstanceOk) Descriptor() ([]byte, []int) {
 	return file_v1_protocol_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *JoinInstanceOk) GetInstanceId() uint64 {
+func (x *JoinInstanceOk) GetInstance() uint64 {
 	if x != nil {
-		return x.InstanceId
+		return x.Instance
 	}
 	return 0
 }
@@ -870,7 +884,7 @@ func (x *InstanceList) GetInstances() []*InstanceInfo {
 	return nil
 }
 
-type Error struct {
+type ErrorReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          ErrorCode              `protobuf:"varint,1,opt,name=code,proto3,enum=endless.v1.ErrorCode" json:"code,omitempty"`
 	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
@@ -878,20 +892,20 @@ type Error struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Error) Reset() {
-	*x = Error{}
+func (x *ErrorReply) Reset() {
+	*x = ErrorReply{}
 	mi := &file_v1_protocol_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Error) String() string {
+func (x *ErrorReply) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Error) ProtoMessage() {}
+func (*ErrorReply) ProtoMessage() {}
 
-func (x *Error) ProtoReflect() protoreflect.Message {
+func (x *ErrorReply) ProtoReflect() protoreflect.Message {
 	mi := &file_v1_protocol_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -903,19 +917,19 @@ func (x *Error) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Error.ProtoReflect.Descriptor instead.
-func (*Error) Descriptor() ([]byte, []int) {
+// Deprecated: Use ErrorReply.ProtoReflect.Descriptor instead.
+func (*ErrorReply) Descriptor() ([]byte, []int) {
 	return file_v1_protocol_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *Error) GetCode() ErrorCode {
+func (x *ErrorReply) GetCode() ErrorCode {
 	if x != nil {
 		return x.Code
 	}
 	return ErrorCode_ERROR_CODE_UNSPECIFIED
 }
 
-func (x *Error) GetReason() string {
+func (x *ErrorReply) GetReason() string {
 	if x != nil {
 		return x.Reason
 	}
@@ -1175,7 +1189,7 @@ func (x *ServerMessage) GetInstanceList() *InstanceList {
 	return nil
 }
 
-func (x *ServerMessage) GetError() *Error {
+func (x *ServerMessage) GetError() *ErrorReply {
 	if x != nil {
 		if x, ok := x.Payload.(*ServerMessage_Error); ok {
 			return x.Error
@@ -1213,7 +1227,7 @@ type ServerMessage_InstanceList struct {
 }
 
 type ServerMessage_Error struct {
-	Error *Error `protobuf:"bytes,7,opt,name=error,proto3,oneof"`
+	Error *ErrorReply `protobuf:"bytes,7,opt,name=error,proto3,oneof"`
 }
 
 func (*ServerMessage_Welcome) isServerMessage_Payload() {}
@@ -1237,66 +1251,63 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\x11v1/protocol.proto\x12\n" +
 	"endless.v1\"2\n" +
 	"\x05Hello\x12)\n" +
-	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\"\xe4\x01\n" +
+	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\"\xdf\x01\n" +
 	"\aWelcome\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1b\n" +
-	"\tplayer_id\x18\x02 \x01(\rR\bplayerId\x12\x17\n" +
+	"\tplayer_id\x18\x02 \x01(\x04R\bplayerId\x12\x17\n" +
 	"\atick_hz\x18\x03 \x01(\rR\x06tickHz\x12#\n" +
 	"\rinstance_seed\x18\x04 \x01(\x04R\finstanceSeed\x12\x1e\n" +
 	"\n" +
 	"multiplier\x18\x05 \x01(\x02R\n" +
-	"multiplier\x12\x1f\n" +
-	"\vinstance_id\x18\x06 \x01(\x04R\n" +
-	"instanceId\x12\x12\n" +
+	"multiplier\x12\x1a\n" +
+	"\binstance\x18\x06 \x01(\x04R\binstance\x12\x12\n" +
 	"\x04m100\x18\a \x01(\rR\x04m100\"\x90\x01\n" +
 	"\x06Reject\x126\n" +
 	"\x17server_protocol_version\x18\x01 \x01(\rR\x15serverProtocolVersion\x126\n" +
 	"\x17client_protocol_version\x18\x02 \x01(\rR\x15clientProtocolVersion\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"{\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xa9\x01\n" +
 	"\n" +
 	"InputFrame\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\rR\x03seq\x12\x15\n" +
 	"\x06move_x\x18\x02 \x01(\x02R\x05moveX\x12\x15\n" +
 	"\x06move_y\x18\x03 \x01(\x02R\x05moveY\x12\x10\n" +
 	"\x03aim\x18\x04 \x01(\x02R\x03aim\x12\x1b\n" +
-	"\tfire_held\x18\x05 \x01(\bR\bfireHeld\"P\n" +
+	"\tfire_held\x18\x05 \x01(\bR\bfireHeld\x12,\n" +
+	"\x12interact_target_id\x18\x06 \x01(\x04R\x10interactTargetId\"P\n" +
 	"\bSnapshot\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\rR\x04tick\x120\n" +
 	"\aplayers\x18\x02 \x03(\v2\x16.endless.v1.PlayerStubR\aplayers\"=\n" +
 	"\n" +
 	"PlayerStub\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\rR\x02id\x12\x1f\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1f\n" +
 	"\vapplied_seq\x18\x02 \x01(\rR\n" +
 	"appliedSeq\" \n" +
 	"\n" +
 	"OpenPortal\x12\x12\n" +
-	"\x04m100\x18\x01 \x01(\rR\x04m100\"/\n" +
-	"\fJoinInstance\x12\x1f\n" +
-	"\vinstance_id\x18\x01 \x01(\x04R\n" +
-	"instanceId\"\x0f\n" +
+	"\x04m100\x18\x01 \x01(\rR\x04m100\"*\n" +
+	"\fJoinInstance\x12\x1a\n" +
+	"\binstance\x18\x01 \x01(\x04R\binstance\"\x0f\n" +
 	"\rLeaveInstance\"\x0f\n" +
-	"\rListInstances\"\x99\x01\n" +
-	"\fInstanceInfo\x12\x1f\n" +
-	"\vinstance_id\x18\x01 \x01(\x04R\n" +
-	"instanceId\x12\x12\n" +
+	"\rListInstances\"\x94\x01\n" +
+	"\fInstanceInfo\x12\x1a\n" +
+	"\binstance\x18\x01 \x01(\x04R\binstance\x12\x12\n" +
 	"\x04m100\x18\x02 \x01(\rR\x04m100\x12\x12\n" +
 	"\x04seed\x18\x03 \x01(\x04R\x04seed\x12!\n" +
 	"\fplayer_count\x18\x04 \x01(\rR\vplayerCount\x12\x1d\n" +
 	"\n" +
-	"is_default\x18\x05 \x01(\bR\tisDefault\"W\n" +
-	"\fOpenPortalOk\x12\x1f\n" +
-	"\vinstance_id\x18\x01 \x01(\x04R\n" +
-	"instanceId\x12\x12\n" +
+	"is_default\x18\x05 \x01(\bR\tisDefault\"R\n" +
+	"\fOpenPortalOk\x12\x1a\n" +
+	"\binstance\x18\x01 \x01(\x04R\binstance\x12\x12\n" +
 	"\x04m100\x18\x02 \x01(\rR\x04m100\x12\x12\n" +
-	"\x04seed\x18\x03 \x01(\x04R\x04seed\"Y\n" +
-	"\x0eJoinInstanceOk\x12\x1f\n" +
-	"\vinstance_id\x18\x01 \x01(\x04R\n" +
-	"instanceId\x12\x12\n" +
+	"\x04seed\x18\x03 \x01(\x04R\x04seed\"T\n" +
+	"\x0eJoinInstanceOk\x12\x1a\n" +
+	"\binstance\x18\x01 \x01(\x04R\binstance\x12\x12\n" +
 	"\x04m100\x18\x02 \x01(\rR\x04m100\x12\x12\n" +
 	"\x04seed\x18\x03 \x01(\x04R\x04seed\"F\n" +
 	"\fInstanceList\x126\n" +
-	"\tinstances\x18\x01 \x03(\v2\x18.endless.v1.InstanceInfoR\tinstances\"J\n" +
-	"\x05Error\x12)\n" +
+	"\tinstances\x18\x01 \x03(\v2\x18.endless.v1.InstanceInfoR\tinstances\"O\n" +
+	"\n" +
+	"ErrorReply\x12)\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x15.endless.v1.ErrorCodeR\x04code\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xf9\x02\n" +
 	"\rClientMessage\x12)\n" +
@@ -1307,15 +1318,15 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\rjoin_instance\x18\x04 \x01(\v2\x18.endless.v1.JoinInstanceH\x00R\fjoinInstance\x12B\n" +
 	"\x0elist_instances\x18\x05 \x01(\v2\x19.endless.v1.ListInstancesH\x00R\rlistInstances\x12B\n" +
 	"\x0eleave_instance\x18\x06 \x01(\v2\x19.endless.v1.LeaveInstanceH\x00R\rleaveInstanceB\t\n" +
-	"\apayload\"\xa3\x03\n" +
+	"\apayload\"\xa8\x03\n" +
 	"\rServerMessage\x12/\n" +
 	"\awelcome\x18\x01 \x01(\v2\x13.endless.v1.WelcomeH\x00R\awelcome\x12,\n" +
 	"\x06reject\x18\x02 \x01(\v2\x12.endless.v1.RejectH\x00R\x06reject\x122\n" +
 	"\bsnapshot\x18\x03 \x01(\v2\x14.endless.v1.SnapshotH\x00R\bsnapshot\x12@\n" +
 	"\x0eopen_portal_ok\x18\x04 \x01(\v2\x18.endless.v1.OpenPortalOkH\x00R\fopenPortalOk\x12F\n" +
 	"\x10join_instance_ok\x18\x05 \x01(\v2\x1a.endless.v1.JoinInstanceOkH\x00R\x0ejoinInstanceOk\x12?\n" +
-	"\rinstance_list\x18\x06 \x01(\v2\x18.endless.v1.InstanceListH\x00R\finstanceList\x12)\n" +
-	"\x05error\x18\a \x01(\v2\x11.endless.v1.ErrorH\x00R\x05errorB\t\n" +
+	"\rinstance_list\x18\x06 \x01(\v2\x18.endless.v1.InstanceListH\x00R\finstanceList\x12.\n" +
+	"\x05error\x18\a \x01(\v2\x16.endless.v1.ErrorReplyH\x00R\x05errorB\t\n" +
 	"\apayload*\x9a\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
@@ -1355,14 +1366,14 @@ var file_v1_protocol_proto_goTypes = []any{
 	(*OpenPortalOk)(nil),   // 12: endless.v1.OpenPortalOk
 	(*JoinInstanceOk)(nil), // 13: endless.v1.JoinInstanceOk
 	(*InstanceList)(nil),   // 14: endless.v1.InstanceList
-	(*Error)(nil),          // 15: endless.v1.Error
+	(*ErrorReply)(nil),     // 15: endless.v1.ErrorReply
 	(*ClientMessage)(nil),  // 16: endless.v1.ClientMessage
 	(*ServerMessage)(nil),  // 17: endless.v1.ServerMessage
 }
 var file_v1_protocol_proto_depIdxs = []int32{
 	6,  // 0: endless.v1.Snapshot.players:type_name -> endless.v1.PlayerStub
 	11, // 1: endless.v1.InstanceList.instances:type_name -> endless.v1.InstanceInfo
-	0,  // 2: endless.v1.Error.code:type_name -> endless.v1.ErrorCode
+	0,  // 2: endless.v1.ErrorReply.code:type_name -> endless.v1.ErrorCode
 	1,  // 3: endless.v1.ClientMessage.hello:type_name -> endless.v1.Hello
 	4,  // 4: endless.v1.ClientMessage.input:type_name -> endless.v1.InputFrame
 	7,  // 5: endless.v1.ClientMessage.open_portal:type_name -> endless.v1.OpenPortal
@@ -1375,7 +1386,7 @@ var file_v1_protocol_proto_depIdxs = []int32{
 	12, // 12: endless.v1.ServerMessage.open_portal_ok:type_name -> endless.v1.OpenPortalOk
 	13, // 13: endless.v1.ServerMessage.join_instance_ok:type_name -> endless.v1.JoinInstanceOk
 	14, // 14: endless.v1.ServerMessage.instance_list:type_name -> endless.v1.InstanceList
-	15, // 15: endless.v1.ServerMessage.error:type_name -> endless.v1.Error
+	15, // 15: endless.v1.ServerMessage.error:type_name -> endless.v1.ErrorReply
 	16, // [16:16] is the sub-list for method output_type
 	16, // [16:16] is the sub-list for method input_type
 	16, // [16:16] is the sub-list for extension type_name

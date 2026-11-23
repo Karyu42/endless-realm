@@ -245,7 +245,7 @@ func runOne(ctx context.Context, cfg Config, wantM100, idx int) (uint64, error) 
 
 type snapTracker struct {
 	mu          sync.Mutex
-	playerID    uint32
+	playerID    uint64
 	lastTick    uint32
 	lastApplied uint32
 	lastAt      time.Time
@@ -254,7 +254,7 @@ type snapTracker struct {
 	snapshots   uint64
 }
 
-func newSnapTracker(playerID uint32) *snapTracker {
+func newSnapTracker(playerID uint64) *snapTracker {
 	return &snapTracker{playerID: playerID}
 }
 
