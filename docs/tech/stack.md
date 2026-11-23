@@ -2,13 +2,13 @@
 
 **Audience:** Chief of Staff, Karyu, ER Gameplay Engineer  
 **Date:** 23 Nov 2026 (Europe/Vienna)  
-**Status:** Decisions below are **proposed by Chief of Staff, pending Karyu’s confirmation**. No merge and no server code until confirmed.
+**Status:** Accepted.
 
 **Constraints:** Godot **4.7.2-stable** (4.8 is still beta) plus matching export templates. Client in **typed GDScript** (Godot 4 C# cannot export to web; Android C# is experimental). Targets: Windows / Linux / macOS + Android; no iOS; web export is a nice-to-have. Authoritative Go server; portal opener sets that instance’s level multiplier (0.5–1.5 in v0.1, locked at open); no level cap; endless gear tiers; everything except cosmetics is farmable; no paid cosmetics at first playable.
 
 ## Decisions
 
-Proposed by Chief of Staff, pending Karyu’s confirmation:
+Confirmed by Karyu, 2026-11-23:
 
 1. **Client:** Godot 4.7.2-stable, typed GDScript, matching export templates. Web export is a nice-to-have (locks WebSocket/WebRTC in, and keeps us off Godot C#).
 2. **Server language:** Go.
