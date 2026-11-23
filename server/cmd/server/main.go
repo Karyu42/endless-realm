@@ -31,7 +31,7 @@ func main() {
 	defer stop()
 	go inst.Run(ctx)
 
-	srv := ernet.New(inst)
+	srv := ernet.NewContext(ctx, inst)
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)

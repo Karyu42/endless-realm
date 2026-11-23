@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,15 +27,25 @@ type Server struct {
 	http    *http.Server
 	nextID  atomic.Uint32
 	writeTO time.Duration
+	baseCtx context.Context
+	cancel  context.CancelFunc
 }
 
 func New(inst *instance.Instance) *Server {
-	s := &Server{inst: inst, writeTO: 5 * time.Second}
+	return NewContext(context.Background(), inst)
+}
+
+// NewContext is like New but derives session lifetimes from ctx. Sessions
+// are cancelled when ctx is cancelled, when Shutdown/Close is called, or
+// when the WebSocket disconnects.
+func NewContext(ctx context.Context, inst *instance.Instance) *Server {
+	ctx, cancel := context.WithCancel(ctx)
+	s := &Server{inst: inst, writeTO: 5 * time.Second, baseCtx: ctx, cancel: cancel}
 	s.nextID.Store(1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/ws", s.handleWS)
-	s.http = &http.Server{Handler: mux}
+	s.http = &http.Server{Handler: mux, BaseContext: func(net.Listener) context.Context { return s.baseCtx }}
 	return s
 }
 
@@ -43,20 +55,41 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) ListenAndServe(addr string) error {
 	s.http.Addr = addr
-	log.Printf("health: http://localhost%s/healthz", advertised(addr))
-	log.Printf("connect: ws://localhost%s/ws", advertised(addr))
+	health, connect := listenURLs(addr)
+	log.Printf("health: %s", health)
+	log.Printf("connect: %s", connect)
 	return s.http.ListenAndServe()
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.Close()
 	return s.http.Shutdown(ctx)
 }
 
-func advertised(addr string) string {
-	if len(addr) > 0 && addr[0] == ':' {
-		return addr
+// Close cancels the server context, ending all sessions.
+func (s *Server) Close() {
+	if s.cancel != nil {
+		s.cancel()
 	}
-	return addr
+}
+
+// listenURLs builds the advertised health and WebSocket URLs for a listen
+// address. Wildcard or empty hosts are shown as localhost so a bind of
+// "127.0.0.1:8080" is not concatenated onto the word "localhost".
+func listenURLs(addr string) (health, connect string) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		if strings.HasPrefix(addr, ":") {
+			host, port = "", strings.TrimPrefix(addr, ":")
+		} else {
+			host, port = "localhost", "8080"
+		}
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "localhost"
+	}
+	hp := net.JoinHostPort(host, port)
+	return "http://" + hp + "/healthz", "ws://" + hp + "/ws"
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -77,22 +110,33 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	conn.SetReadLimit(64 << 10)
 
-	ctx := r.Context()
-	if err := s.session(ctx, conn); err != nil {
+	sessCtx, cancel := context.WithCancel(s.baseCtx)
+	defer cancel()
+	stop := context.AfterFunc(r.Context(), cancel)
+	defer stop()
+
+	if err := s.session(sessCtx, conn); err != nil {
 		log.Printf("ws session: %v", err)
 	}
 }
 
 func (s *Server) session(ctx context.Context, conn *websocket.Conn) error {
 	hctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
-	playerID, err := s.handshake(hctx, conn)
+	if _, err := s.readHello(hctx, conn); err != nil {
+		cancel()
+		return err
+	}
 	cancel()
+
+	// Subscribe before Welcome so ticks that land after the handshake is
+	// accepted are not dropped.
+	snaps, unsub := s.inst.Subscribe()
+	defer unsub()
+
+	id, err := s.writeWelcome(ctx, conn)
 	if err != nil {
 		return err
 	}
-
-	snaps, unsub := s.inst.Subscribe()
-	defer unsub()
 
 	var writeMu sync.Mutex
 	write := func(ctx context.Context, msg *protocolv1.ServerMessage) error {
@@ -148,7 +192,7 @@ func (s *Server) session(ctx context.Context, conn *websocket.Conn) error {
 				return
 			}
 			s.inst.SubmitInput(instance.Input{
-				PlayerID: playerID,
+				PlayerID: id,
 				Seq:      in.GetSeq(),
 				MoveX:    float64(in.GetMoveX()),
 				MoveY:    float64(in.GetMoveY()),
@@ -157,30 +201,34 @@ func (s *Server) session(ctx context.Context, conn *websocket.Conn) error {
 			})
 		}
 	}()
-	return <-errCh
+	err = <-errCh
+	return err
 }
 
-func (s *Server) handshake(ctx context.Context, conn *websocket.Conn) (uint32, error) {
+func (s *Server) readHello(ctx context.Context, conn *websocket.Conn) (*protocolv1.Hello, error) {
 	typ, data, err := conn.Read(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("read hello: %w", err)
+		return nil, fmt.Errorf("read hello: %w", err)
 	}
 	if typ != websocket.MessageBinary {
-		return 0, s.reject(ctx, conn, 0, "expected a binary Hello frame")
+		return nil, s.reject(ctx, conn, 0, "expected a binary Hello frame")
 	}
 	var cm protocolv1.ClientMessage
 	if err := proto.Unmarshal(data, &cm); err != nil {
-		return 0, s.reject(ctx, conn, 0, "invalid Hello protobuf")
+		return nil, s.reject(ctx, conn, 0, "invalid Hello protobuf")
 	}
 	hello := cm.GetHello()
 	if hello == nil {
-		return 0, s.reject(ctx, conn, 0, "first message must be Hello")
+		return nil, s.reject(ctx, conn, 0, "first message must be Hello")
 	}
 	if hello.GetProtocolVersion() != instance.ProtocolVersion {
 		reason := fmt.Sprintf("protocol version mismatch: client=%d server=%d", hello.GetProtocolVersion(), instance.ProtocolVersion)
-		return 0, s.reject(ctx, conn, hello.GetProtocolVersion(), reason)
+		return nil, s.reject(ctx, conn, hello.GetProtocolVersion(), reason)
 	}
+	return hello, nil
+}
 
+func (s *Server) writeWelcome(ctx context.Context, conn *websocket.Conn) (uint32, error) {
 	id := s.nextID.Add(1) - 1
 	welcome := &protocolv1.ServerMessage{
 		Payload: &protocolv1.ServerMessage_Welcome{Welcome: &protocolv1.Welcome{

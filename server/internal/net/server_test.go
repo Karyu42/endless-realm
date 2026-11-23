@@ -17,21 +17,19 @@ import (
 	protocolv1 "github.com/Karyu42/endless-realm/server/internal/protocol/v1"
 )
 
-func startTestServer(t *testing.T, clk *clock.Fake, seed uint64, mult float64) (*httptest.Server, *instance.Instance, context.CancelFunc) {
+func startTestServer(t *testing.T, clk *clock.Fake, seed uint64, mult float64) (*httptest.Server, *instance.Instance, *Server) {
 	t.Helper()
 	inst, err := instance.New(seed, mult, clk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	go inst.Run(ctx)
 	s := New(inst)
 	hs := httptest.NewServer(s)
 	t.Cleanup(func() {
-		cancel()
+		s.Close()
 		hs.Close()
 	})
-	return hs, inst, cancel
+	return hs, inst, s
 }
 
 func wsURL(hs *httptest.Server) string {
@@ -65,6 +63,16 @@ func writeClient(t *testing.T, ctx context.Context, conn *websocket.Conn, msg *p
 	}
 }
 
+func dial(t *testing.T, ctx context.Context, hs *httptest.Server) *websocket.Conn {
+	t.Helper()
+	conn, _, err := websocket.Dial(ctx, wsURL(hs), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	return conn
+}
+
 func TestHealthz(t *testing.T) {
 	clk := clock.NewFake(time.Unix(1, 0))
 	hs, _, _ := startTestServer(t, clk, 1, 1.0)
@@ -85,14 +93,8 @@ func TestHealthz(t *testing.T) {
 func TestHandshakeWelcome(t *testing.T) {
 	clk := clock.NewFake(time.Unix(1, 0))
 	hs, inst, _ := startTestServer(t, clk, 99, 1.25)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL(hs), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	ctx := t.Context()
+	conn := dial(t, ctx, hs)
 
 	writeClient(t, ctx, conn, &protocolv1.ClientMessage{
 		Payload: &protocolv1.ClientMessage_Hello{Hello: &protocolv1.Hello{ProtocolVersion: instance.ProtocolVersion}},
@@ -119,57 +121,72 @@ func TestHandshakeWelcome(t *testing.T) {
 	}
 }
 
-func TestHandshakeRejectsVersionMismatch(t *testing.T) {
+func TestHandshakeRejectsVersionEdges(t *testing.T) {
 	clk := clock.NewFake(time.Unix(1, 0))
 	hs, _, _ := startTestServer(t, clk, 1, 1.0)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL(hs), nil)
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name string
+		msg  *protocolv1.ClientMessage
+		want string
+	}{
+		{
+			name: "version 0",
+			msg:  &protocolv1.ClientMessage{Payload: &protocolv1.ClientMessage_Hello{Hello: &protocolv1.Hello{ProtocolVersion: 0}}},
+			want: "mismatch",
+		},
+		{
+			name: "higher version",
+			msg:  &protocolv1.ClientMessage{Payload: &protocolv1.ClientMessage_Hello{Hello: &protocolv1.Hello{ProtocolVersion: 99}}},
+			want: "mismatch",
+		},
+		{
+			name: "missing Hello",
+			msg:  &protocolv1.ClientMessage{},
+			want: "first message must be Hello",
+		},
+		{
+			name: "wrong first message",
+			msg:  &protocolv1.ClientMessage{Payload: &protocolv1.ClientMessage_Input{Input: &protocolv1.InputFrame{Seq: 1}}},
+			want: "first message must be Hello",
+		},
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	writeClient(t, ctx, conn, &protocolv1.ClientMessage{
-		Payload: &protocolv1.ClientMessage_Hello{Hello: &protocolv1.Hello{ProtocolVersion: 99}},
-	})
-	msg := readServerMsg(t, ctx, conn)
-	rej := msg.GetReject()
-	if rej == nil {
-		t.Fatalf("want Reject, got %#v", msg.Payload)
-	}
-	if rej.GetServerProtocolVersion() != instance.ProtocolVersion {
-		t.Fatalf("server version %d", rej.GetServerProtocolVersion())
-	}
-	if rej.GetClientProtocolVersion() != 99 {
-		t.Fatalf("client version %d", rej.GetClientProtocolVersion())
-	}
-	if !strings.Contains(rej.GetReason(), "mismatch") {
-		t.Fatalf("reason %q", rej.GetReason())
-	}
-
-	_, _, err = conn.Read(ctx)
-	if err == nil {
-		t.Fatal("expected connection to close after reject")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			conn := dial(t, ctx, hs)
+			writeClient(t, ctx, conn, tc.msg)
+			msg := readServerMsg(t, ctx, conn)
+			rej := msg.GetReject()
+			if rej == nil {
+				t.Fatalf("want Reject, got %#v", msg.Payload)
+			}
+			if rej.GetServerProtocolVersion() != instance.ProtocolVersion {
+				t.Fatalf("server version %d", rej.GetServerProtocolVersion())
+			}
+			if !strings.Contains(rej.GetReason(), tc.want) {
+				t.Fatalf("reason %q, want substring %q", rej.GetReason(), tc.want)
+			}
+			if _, _, err := conn.Read(ctx); err == nil {
+				t.Fatal("expected connection to close after reject")
+			}
+		})
 	}
 }
 
 func TestBotClientHandshakeInputSnapshot(t *testing.T) {
-	// Integration: a small Go bot client connects over WebSocket, completes
-	// the v1 handshake, sends an input frame, and receives a snapshot.
+	// Integration: a Go bot connects, handshakes, sends one input, then we
+	// step exactly one tick and read exactly one snapshot. Sync is via
+	// channels (OnSubmit), not sleeps or wall-clock deadlines.
 	clk := clock.NewFake(time.Unix(1, 0))
 	hs, inst, _ := startTestServer(t, clk, 42, 0.75)
-	clk.BlockUntilWaiters(1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	submitted := make(chan instance.Input, 1)
+	inst.SetOnSubmit(func(in instance.Input) { submitted <- in })
 
-	conn, _, err := websocket.Dial(ctx, wsURL(hs), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	ctx := t.Context()
+	conn := dial(t, ctx, hs)
 
 	writeClient(t, ctx, conn, &protocolv1.ClientMessage{
 		Payload: &protocolv1.ClientMessage_Hello{Hello: &protocolv1.Hello{ProtocolVersion: 1}},
@@ -183,29 +200,52 @@ func TestBotClientHandshakeInputSnapshot(t *testing.T) {
 			Seq: 7, MoveX: 1, MoveY: 0, Aim: 0, FireHeld: true,
 		}},
 	})
-
-	// Give the server a moment to apply the input, then step one tick.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		clk.Advance(instance.TickDuration)
-		clk.BlockUntilWaiters(1)
-		msg := readServerMsg(t, ctx, conn)
-		snap := msg.GetSnapshot()
-		if snap == nil {
-			t.Fatalf("want Snapshot, got %#v", msg.Payload)
+	select {
+	case in := <-submitted:
+		if in.Seq != 7 {
+			t.Fatalf("submitted seq = %d, want 7", in.Seq)
 		}
-		if snap.GetTick() == 0 {
-			t.Fatal("snapshot tick should be > 0")
-		}
-		for _, p := range snap.GetPlayers() {
-			if p.GetAppliedSeq() == 7 {
-				if inst.Tick() == 0 {
-					t.Fatal("instance tick still 0 after snapshot")
-				}
-				return
-			}
-		}
-		// Input may have landed after this tick; try once more.
+	case <-ctx.Done():
+		t.Fatal("input was not submitted")
 	}
-	t.Fatal("bot never saw applied_seq=7 in a snapshot")
+
+	if snap := inst.Step(); snap.Tick != 1 {
+		t.Fatalf("step tick = %d, want 1", snap.Tick)
+	}
+	msg := readServerMsg(t, ctx, conn)
+	got := msg.GetSnapshot()
+	if got == nil {
+		t.Fatalf("want Snapshot, got %#v", msg.Payload)
+	}
+	if got.GetTick() != 1 {
+		t.Fatalf("snapshot tick = %d, want 1", got.GetTick())
+	}
+	found := false
+	for _, p := range got.GetPlayers() {
+		if p.GetAppliedSeq() == 7 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("snapshot missing applied_seq=7: %#v", got.GetPlayers())
+	}
+}
+
+func TestListenURLs(t *testing.T) {
+	cases := []struct {
+		addr, health, connect string
+	}{
+		{":8080", "http://localhost:8080/healthz", "ws://localhost:8080/ws"},
+		{"127.0.0.1:8080", "http://127.0.0.1:8080/healthz", "ws://127.0.0.1:8080/ws"},
+		{"0.0.0.0:9000", "http://localhost:9000/healthz", "ws://localhost:9000/ws"},
+		{"[::]:8080", "http://localhost:8080/healthz", "ws://localhost:8080/ws"},
+		{"localhost:8080", "http://localhost:8080/healthz", "ws://localhost:8080/ws"},
+	}
+	for _, tc := range cases {
+		health, connect := listenURLs(tc.addr)
+		if health != tc.health || connect != tc.connect {
+			t.Fatalf("addr %q: health=%q connect=%q, want %q %q", tc.addr, health, connect, tc.health, tc.connect)
+		}
+	}
 }

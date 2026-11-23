@@ -30,7 +30,7 @@ From the repository root (Go **1.27.4** is pinned in `server/go.mod` and `tools/
 |---|---|
 | `make dev` | `docker compose up --build` — starts pinned Postgres and the game server |
 | `make run` | run the server on the host (`:8080` by default) |
-| `make test` | `go vet ./...` and `go test ./...` in `server/` |
+| `make test` | `go vet ./...` and `go test -race ./...` in `server/` |
 | `make proto` | regenerate `server/internal/protocol/v1/protocol.pb.go` |
 
 ```sh
@@ -44,7 +44,9 @@ Flags and env (env is the default; flags override):
 
 - `--listen` / `ER_LISTEN_ADDR` (default `:8080`)
 - `--seed` / `ER_SEED` (default `1`)
-- `--multiplier` / `ER_MULTIPLIER` (default `1.0`, must be in `[0.5, 1.5]`, locked at process start)
+- `--multiplier` / `ER_MULTIPLIER` (default `1.0`, must be in `[0.5, 1.5]` on a **0.05** step, locked at process start)
+
+Compose binds Postgres to `127.0.0.1:5432` only. The server does not connect to it yet.
 
 The first WebSocket message must be a protobuf `Hello` with `protocol_version = 1`. A mismatch is rejected with a `Reject` frame and the connection is closed.
 

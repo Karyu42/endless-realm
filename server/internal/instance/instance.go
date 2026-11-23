@@ -5,6 +5,7 @@ package instance
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -12,11 +13,14 @@ import (
 )
 
 const (
-	TickRate        = 20
-	TickDuration    = time.Second / TickRate
-	MinMultiplier   = 0.5
-	MaxMultiplier   = 1.5
-	ProtocolVersion = 1
+	TickRate          = 20
+	TickDuration      = time.Second / TickRate
+	MinMultiplier     = 0.5
+	MaxMultiplier     = 1.5
+	MultiplierStep    = 0.05
+	multiplierStepN   = 20.0 // 1 / MultiplierStep
+	multiplierStepEps = 1e-9
+	ProtocolVersion   = 1
 )
 
 // Input is one client frame waiting to be applied on the next tick.
@@ -50,10 +54,11 @@ type Instance struct {
 	inputs    map[uint32]Input
 	applied   map[uint32]uint32
 	listeners map[chan Snapshot]struct{}
+	onSubmit  func(Input)
 }
 
 // New creates an instance and locks seed and multiplier. Multiplier must be
-// in [0.5, 1.5]. If clk is nil, the wall clock is used.
+// in [0.5, 1.5] on a 0.05 step (v0.1). If clk is nil, the wall clock is used.
 func New(seed uint64, multiplier float64, clk clock.Clock) (*Instance, error) {
 	if err := ValidateMultiplier(multiplier); err != nil {
 		return nil, err
@@ -71,9 +76,17 @@ func New(seed uint64, multiplier float64, clk clock.Clock) (*Instance, error) {
 	}, nil
 }
 
+// ValidateMultiplier accepts m in [MinMultiplier, MaxMultiplier] on a
+// MultiplierStep (0.05) grid. NaN and ±Inf are rejected because they fail
+// the inclusive range check `!(m >= Min && m <= Max)`.
 func ValidateMultiplier(m float64) error {
-	if m < MinMultiplier || m > MaxMultiplier {
+	if !(m >= MinMultiplier && m <= MaxMultiplier) {
 		return fmt.Errorf("level multiplier %g is outside [%g, %g]", m, MinMultiplier, MaxMultiplier)
+	}
+	scaled := m * multiplierStepN
+	rounded := math.Round(scaled)
+	if math.Abs(scaled-rounded) > multiplierStepEps {
+		return fmt.Errorf("level multiplier %g is not a multiple of %g", m, MultiplierStep)
 	}
 	return nil
 }
@@ -97,10 +110,22 @@ func (i *Instance) SetMultiplier(float64) error {
 	return fmt.Errorf("level multiplier is locked at %g and cannot be changed after the instance is created", i.multiplier)
 }
 
-func (i *Instance) SubmitInput(in Input) {
+// SetOnSubmit registers a hook invoked after an input is queued. Tests use
+// this to synchronize without sleeping. The hook must not take Instance locks.
+func (i *Instance) SetOnSubmit(fn func(Input)) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	i.onSubmit = fn
+}
+
+func (i *Instance) SubmitInput(in Input) {
+	i.mu.Lock()
 	i.inputs[in.PlayerID] = in
+	hook := i.onSubmit
+	i.mu.Unlock()
+	if hook != nil {
+		hook(in)
+	}
 }
 
 // Subscribe receives a snapshot after every tick. The caller must Unsubscribe.
