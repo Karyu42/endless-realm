@@ -1,0 +1,74 @@
+# Godot host soak: 50 bot clients against the headless Godot lobby host for 600 s,
+# with the same gates as the godot-host-smoke job in ci.yml (HOST_READY, no skipped
+# ticks, tick p99 <= 40 ms, bot exit 0).
+# Nightly + on demand. NOT a required check (it never runs on pull_request).
+name: godot-host-soak
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "47 2 * * *"   # nightly, 02:47 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: godot-host-soak-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+  # Same pin as ci.yml. Published SHA512 from https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/SHA512-SUMS.txt
+  GODOT_EDITOR_SHA512: 9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  godot-host-soak:
+    name: godot-host-soak (50 clients, 600 s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: inputs
+        uses: ./.github/actions/check-inputs
+        with:
+          paths: |
+            client/project.godot
+            client/src/net/host/host_main.gd
+            server/go.mod
+            server/cmd/bot
+            tools/loadtest/godot_host_loadtest.py
+      - if: steps.inputs.outputs.present == 'true'
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - if: steps.inputs.outputs.present == 'true'
+        uses: ./.github/actions/setup-godot
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          editor-sha512: ${{ env.GODOT_EDITOR_SHA512 }}
+      - name: godot --headless --import
+        if: steps.inputs.outputs.present == 'true'
+        run: godot --headless --path client --import
+      - name: Host soak (50 clients, 600 s)
+        if: steps.inputs.outputs.present == 'true'
+        run: >-
+          python3 tools/loadtest/godot_host_loadtest.py --godot godot
+          --clients 50 --duration 600 --max-skipped-ticks 0 --max-p99-ms 40
+      - name: Job summary
+        if: always() && steps.inputs.outputs.present == 'true'
+        run: |
+          if [ -f loadtest-results/results.md ]; then
+            { echo "### godot-host-soak"; echo; cat loadtest-results/results.md; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload loadtest-results
+        if: always() && steps.inputs.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: godot-host-soak-results
+          path: loadtest-results/
+          if-no-files-found: warn
