@@ -15,10 +15,10 @@ for real and can fail.
 |---|---|---|---|---|
 | Shared data | `data/` JSON parses and matches its JSON Schema | `check-jsonschema` against `data/schema/<name>.schema.json` (by file stem, then parent folder); plus `make data-validate` if defined | `data-validate` | `data/schema/` |
 | Wire codegen | Go and GDScript (godobuf) code generated from `proto/` is committed and current | `make proto`, then `git diff --exit-code` (untracked files count too) | `proto-codegen-check` | `proto/`, `server/go.mod`, `Makefile` with a `proto` target |
-| Server unit | Go code vets, builds and passes tests under the race detector | `go vet ./...`, `go build ./...`, `go test -race ./...` with the Go version from `server/go.mod` | `server-build-test` | `server/go.mod` |
+| Server unit | Go code vets, builds and passes tests under the race detector | `make test` (vet + `go test -race`, with `GOFLAGS=-timeout=3m -count=1`), or the raw go commands if there's no `test` target, plus `go build ./...`. Uses the Go version from `server/go.mod` | `server-build-test` | `server/go.mod` |
 | Client unit | GDScript sim and client code pass GUT | Godot 4.7.2 headless `--import`, then GUT 9.7.1 with JUnit output. **Fails if the XML is missing or reports 0 tests.** | `client-tests` | `client/project.godot` |
 | Golden fixtures parity | Go and GDScript give the same results for the same fixture: pattern positions at tick N within epsilon (PCG32, fixed seeding), and Protobuf round-trips byte for byte | `make fixtures-parity` (runs both sides against `fixtures/`) | `fixtures-parity` | `fixtures/`, `server/go.mod`, `client/project.godot`, `Makefile` with a `fixtures-parity` target |
-| Client–server integration smoke | The compose stack comes up healthy and one bot client completes a session | `docker compose up --wait`, then `bot -clients=1 -seed=1 -mult=1.0`, then `docker compose down -v`. Logs are uploaded on failure. | `integration-smoke` | a compose file at the repo root, `server/cmd/bot` |
+| Client–server integration smoke | The compose stack comes up healthy and one bot client completes a session | `docker compose up --wait`, poll `http://127.0.0.1:8080/healthz`, then `bot -url ws://127.0.0.1:8080/ws -clients=1 -seed=1 -mult=1.0`, then `docker compose down -v`. Logs are uploaded on failure. | `integration-smoke` | a compose file at the repo root, `server/cmd/bot` |
 | Multi-client soak | The server stays up and responsive with 8–32 concurrent clients for about 10 minutes | Nightly runs use 8 and 32 clients; manual runs choose 8–32 clients and the duration | `soak` (**not required**) | same as the integration smoke |
 | Export / playable build | The client exports for every target, and the Android APK installs and launches | Godot 4.7.2 export templates, `--export-debug` per preset; Android uses JDK 17, the Android SDK and a debug keystore generated in CI | `export-builds (linux)`, `export-builds (windows)`, `export-builds (android)` | `client/project.godot`, `client/export_presets.cfg` with presets `Linux`, `Windows Desktop`, `Android` |
 
@@ -28,6 +28,7 @@ for real and can fail.
 - **GUT:** tests go under `client/test/` (or a `client/.gutconfig.json` that points at them). The editor's Android SDK path and keystore are set by CI and are never committed.
 - **Fixtures:** each golden fixture is one JSON input plus its expected output in `fixtures/`, read by both the Go and GDScript tests. Changing the expected output needs a design or engineering note in the PR saying why.
 - **Makefile targets CI calls when they exist:** `proto`, `tools` (installs the pinned protoc, protoc-gen-go and godobuf), `fixtures-parity`, `data-validate`.
+- **Supply chain:** actions are pinned to commit SHAs. The Godot editor and export templates are checked against pinned SHA512s from the release's published sums, and GUT against a pinned sha256.
 - **No secrets in the repo.** Signing keys for release builds will come from repository secrets later. Debug builds use a throwaway keystore made in CI.
 
 ### Android playable check (manual, per release candidate)
