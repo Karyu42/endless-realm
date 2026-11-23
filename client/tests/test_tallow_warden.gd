@@ -64,30 +64,39 @@ func test_getters_are_read_only_and_start_closed() -> void:
 	yard.set_practice_yard(true)
 	assert_false(yard.boss_defeated())
 	assert_false(yard.vault_exit_open())
+	assert_false(yard.arena_sealed())
 	var yard_state: Dictionary = yard.dungeon_state()
 	assert_eq(yard_state["boss_defeated"], false)
 	assert_eq(yard_state["vault_exit_open"], false)
+	assert_eq(yard_state["arena_sealed"], false)
 	# Mutating the copy must not write back into the sim.
 	yard_state["boss_defeated"] = true
 	yard_state["vault_exit_open"] = true
+	yard_state["arena_sealed"] = true
 	assert_false(yard.boss_defeated())
 	assert_false(yard.vault_exit_open())
+	assert_false(yard.arena_sealed())
 	assert_false(yard.dungeon_state()["boss_defeated"])
 
 	var sim := _vault()
 	assert_false(sim.boss_defeated(), "the Warden is alive on room entry")
 	assert_false(sim.vault_exit_open())
+	assert_false(sim.arena_sealed(), "the seal starts on first damage, not on entry")
 	var state: Dictionary = sim.dungeon_state()
 	assert_eq(state["boss_defeated"], false)
 	assert_eq(state["vault_exit_open"], false)
+	assert_eq(state["arena_sealed"], false)
 	state["boss_defeated"] = true
 	state["vault_exit_open"] = true
+	state["arena_sealed"] = true
 	assert_false(sim.boss_defeated())
 	assert_false(sim.vault_exit_open())
+	assert_false(sim.arena_sealed())
 	# Calling the getters does not change sim state.
 	var tick := sim.tick()
 	assert_false(sim.boss_defeated())
 	assert_false(sim.vault_exit_open())
+	assert_false(sim.arena_sealed())
 	var _ignored: Dictionary = sim.dungeon_state()
 	assert_eq(sim.tick(), tick)
 
@@ -594,3 +603,55 @@ func test_non_practice_vault_still_grants_per_rule_7() -> void:
 	assert_eq(out.pending_riftstone, 4)
 	assert_gt(out.xp_tenths, 0)
 
+func _walk_east(sim: LocalSim, pid: int, steps: int, seq0: int, keep_alive: int = 0) -> void:
+	for i in range(steps):
+		if keep_alive != 0:
+			var occupant := sim.get_player(keep_alive)
+			if occupant != null:
+				occupant.hp = maxi(occupant.hp, 9999)
+		sim.apply_input(pid, InputIntent.from_raw(seq0 + i, 1.0, 0.0, 0.0, false))
+		sim.step()
+
+
+func test_late_entrant_after_first_damage_is_blocked_and_does_not_raise_n_peak() -> void:
+	var sim := _vault()
+	var w := _warden(sim)
+	assert_not_null(w)
+	var opener: int = sim.player_ids()[0]
+	sim.hurt_enemy(w.id, 1, opener)
+	assert_true(sim.arena_sealed(), "the arena seals on the tick the boss first takes damage")
+	assert_eq(sim.boss_n_peak(), 1)
+	assert_gt(sim.arena_seal_segments().size(), 0, "the sealed doorway is visible")
+	var pid2: int = sim.alloc_player_id()
+	# Just west of the arena door, in the approach corridor / Drip Hall.
+	sim.place_player(pid2, 30.0, 6.0)
+	assert_true(sim.player_ids().has(pid2))
+	# Keep the already-inside player alive so a wipe cannot lift the seal mid-test.
+	_walk_east(sim, pid2, 80, 1, opener)
+	var late := sim.get_player(pid2)
+	assert_not_null(late)
+	assert_lt(late.x, 34.0, "a late arrival cannot walk into the sealed arena")
+	assert_true(sim.arena_sealed())
+	assert_eq(sim.boss_n_peak(), 1, "newcomers after the first damage do not raise n_peak")
+	assert_eq(_warden(sim).max_hp, 5500)
+
+
+func test_entrant_before_first_damage_still_counts() -> void:
+	var sim := _vault()
+	assert_false(sim.arena_sealed())
+	var pid2: int = sim.alloc_player_id()
+	sim.place_player(pid2, 30.0, 6.0)
+	assert_true(sim.player_ids().has(pid2))
+	_walk_east(sim, pid2, 80, 1)
+	var early := sim.get_player(pid2)
+	assert_not_null(early)
+	assert_gte(early.x, 34.0, "a player can still walk in before the first damage")
+	assert_eq(sim.boss_n_peak(), 2, "entrants before the first damage still count")
+	var expect: int = _catalog().scaling.encounter_hp(5500, 1, 2, "boss")
+	assert_eq(_warden(sim).max_hp, expect)
+	var opener: int = sim.player_ids()[0]
+	sim.hurt_enemy(_warden(sim).id, 1, opener)
+	sim.step()
+	assert_true(sim.arena_sealed())
+	assert_eq(sim.boss_n_peak(), 2, "n_peak stays at the pre-seal count")
+	assert_eq(_warden(sim).max_hp, expect)
