@@ -18,13 +18,13 @@ static func from_raw(seq: int, raw_x: float, raw_y: float, aim: float, fire_held
 	intent.seq = seq
 	intent.aim = aim
 	intent.fire_held = fire_held
-	var len := sqrt(raw_x * raw_x + raw_y * raw_y)
-	if len <= SimConstants.MOVE_EPS:
+	var move_len := sqrt(raw_x * raw_x + raw_y * raw_y)
+	if move_len <= SimConstants.MOVE_EPS:
 		intent.move_x = 0.0
 		intent.move_y = 0.0
-	elif len > 1.0:
-		intent.move_x = raw_x / len
-		intent.move_y = raw_y / len
+	elif move_len > 1.0:
+		intent.move_x = raw_x / move_len
+		intent.move_y = raw_y / move_len
 	else:
 		intent.move_x = raw_x
 		intent.move_y = raw_y

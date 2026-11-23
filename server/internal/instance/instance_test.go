@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -73,12 +74,15 @@ func TestParseAndFloatRejectVisionCases(t *testing.T) {
 }
 
 func TestParseMultiplierBareIntegerHint(t *testing.T) {
-	_, err := ParseMultiplier("2")
-	if err == nil {
-		t.Fatal("want error for bare 2")
-	}
-	if want := "integers under 10 are decimals"; !strings.Contains(err.Error(), want) {
-		t.Fatalf("error %q, want substring %q", err, want)
+	want := "integers under 10 are decimals, 10 and above are hundredths"
+	for _, s := range []string{"2", "45", "107", "151"} {
+		_, err := ParseMultiplier(s)
+		if err == nil {
+			t.Fatalf("ParseMultiplier(%q): want error", s)
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("ParseMultiplier(%q) error %q, want substring %q", s, err, want)
+		}
 	}
 }
 
@@ -315,5 +319,18 @@ func waitSnap(t *testing.T, ctx context.Context, snaps <-chan Snapshot, want uin
 		}
 	case <-ctx.Done():
 		t.Fatalf("cancelled waiting for tick %d: %v", want, ctx.Err())
+	}
+}
+
+func TestValidateM100U32Sentinel(t *testing.T) {
+	for _, m := range []uint32{0, 45, 49, 51, 151, 155, 1 << 31, ^uint32(0)} {
+		if err := ValidateM100U32(m); !errors.Is(err, ErrInvalidMultiplier) {
+			t.Fatalf("m100=%d: %v", m, err)
+		}
+	}
+	for _, m := range []uint32{50, 55, 100, 150} {
+		if err := ValidateM100U32(m); err != nil {
+			t.Fatalf("m100=%d: %v", m, err)
+		}
 	}
 }

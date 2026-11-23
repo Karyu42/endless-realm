@@ -24,7 +24,8 @@ godot --path client
 Controls:
 
 - **Desktop:** WASD or arrows to move (diagonals are normalized), mouse to aim,
-  hold the left button to fire.
+  hold the left button to fire. These are InputMap actions (`move_up` / `move_down`
+  / `move_left` / `move_right`, `fire`).
 - **Android / touch:** left virtual stick moves, right stick aims and fires
   while held.
 
@@ -53,5 +54,7 @@ godot --headless --path client --import
 godot --headless --path client -s addons/gut/gut_cmdln.gd -gdir=res://tests -gexit
 ```
 
-The tests cover 8-dir movement and diagonal normalization, the fire-rate
-cooldown, projectile lifetime and range, tick stepping, and the `NetClient` stub.
+The tests cover 8-dir movement and diagonal normalization, fire-on-press
+timing from `docs/design/content-v0.1.md` §1 (float64 `next_ready` in seconds,
+Driftrunner golden ticks 0/6/12/18/23/29, Thornguard 0/10/20, no tap-burst),
+projectile lifetime and range, tick stepping, and the `NetClient` stub.

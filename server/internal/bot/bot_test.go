@@ -90,6 +90,14 @@ func TestParseFlagsHelpListsDuration(t *testing.T) {
 	}
 }
 
+func TestResultSummary(t *testing.T) {
+	got := Result{Clients: 3, Snapshots: 12, Duration: 1500 * time.Millisecond}.Summary()
+	want := "bot ok: clients=3 snapshots=12 duration=1.5s"
+	if got != want {
+		t.Fatalf("Summary() = %q, want %q", got, want)
+	}
+}
+
 func TestRunHandshakeAndSnapshot(t *testing.T) {
 	ctx, cancel := testCtx(t)
 	defer cancel()
@@ -111,8 +119,15 @@ func TestRunHandshakeAndSnapshot(t *testing.T) {
 
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 	cfg := Config{URL: url, Clients: 1, Seed: 1, Mult: "1.0"}
-	if err := Run(ctx, cfg); err != nil {
+	res, err := Run(ctx, cfg)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if res.Clients != 1 || res.Snapshots < 1 {
+		t.Fatalf("result = %+v, want 1 client and at least 1 snapshot", res)
+	}
+	if !strings.HasPrefix(res.Summary(), "bot ok: clients=1 snapshots=") {
+		t.Fatalf("summary %q", res.Summary())
 	}
 }
 
@@ -137,7 +152,7 @@ func TestRunFailsOnSeedMismatch(t *testing.T) {
 
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 	cfg := Config{URL: url, Clients: 1, Seed: 99, Mult: "1.0"}
-	if err := Run(ctx, cfg); err == nil {
+	if _, err := Run(ctx, cfg); err == nil {
 		t.Fatal("expected seed mismatch error")
 	}
 }
@@ -161,30 +176,32 @@ func TestParseFlagsStallTimeoutAndBareMult(t *testing.T) {
 }
 
 func TestRunSoakShortStallOKLongStallFails(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	// Inject a short stall-timeout so both cases finish well under 1s.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	ctrl := newScriptedServer()
 	url := ctrl.start(t)
 
-	t.Run("600ms stall is tolerated", func(t *testing.T) {
-		sub, subCancel := context.WithTimeout(ctx, 8*time.Second)
+	t.Run("short stall is tolerated", func(t *testing.T) {
+		sub, subCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer subCancel()
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- Run(sub, Config{
+			_, err := Run(sub, Config{
 				URL: url, Clients: 1, Seed: 1, Mult: "1.0",
-				Duration: 1500 * time.Millisecond, StallTimeout: 5 * time.Second,
+				Duration: 400 * time.Millisecond, StallTimeout: 200 * time.Millisecond,
 			})
+			errCh <- err
 		}()
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(40 * time.Millisecond)
 		ctrl.setPaused(true)
-		time.Sleep(600 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		ctrl.setPaused(false)
 		select {
 		case err := <-errCh:
 			if err != nil {
-				t.Fatalf("600ms stall should be tolerated: %v", err)
+				t.Fatalf("short stall should be tolerated: %v", err)
 			}
 		case <-sub.Done():
 			t.Fatal(sub.Err())
@@ -192,17 +209,18 @@ func TestRunSoakShortStallOKLongStallFails(t *testing.T) {
 	})
 
 	t.Run("stall longer than stall-timeout fails", func(t *testing.T) {
-		sub, subCancel := context.WithTimeout(ctx, 15*time.Second)
+		sub, subCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer subCancel()
 		errCh := make(chan error, 1)
 		start := time.Now()
 		go func() {
-			errCh <- Run(sub, Config{
+			_, err := Run(sub, Config{
 				URL: url, Clients: 1, Seed: 1, Mult: "1.0",
-				Duration: 30 * time.Second, StallTimeout: 5 * time.Second,
+				Duration: 2 * time.Second, StallTimeout: 150 * time.Millisecond,
 			})
+			errCh <- err
 		}()
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(40 * time.Millisecond)
 		ctrl.setPaused(true)
 		defer ctrl.setPaused(false)
 		select {
@@ -213,8 +231,8 @@ func TestRunSoakShortStallOKLongStallFails(t *testing.T) {
 			if !strings.Contains(err.Error(), "no new snapshot") {
 				t.Fatalf("err = %v, want stall message", err)
 			}
-			if elapsed := time.Since(start); elapsed > 12*time.Second {
-				t.Fatalf("stall failure took %s, want ~5s", elapsed)
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("stall failure took %s, want well under 1s", elapsed)
 			}
 		case <-sub.Done():
 			t.Fatal(sub.Err())
@@ -231,7 +249,7 @@ func TestRunFirstClientErrorCancelsOthers(t *testing.T) {
 	url := ctrl.start(t)
 
 	start := time.Now()
-	err := Run(ctx, Config{
+	_, err := Run(ctx, Config{
 		URL: url, Clients: 2, Seed: 1, Mult: "1.0",
 		Duration: 8 * time.Second, StallTimeout: 5 * time.Second,
 	})
@@ -264,7 +282,7 @@ func TestRunSoakTicksAdvance(t *testing.T) {
 
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 	cfg := Config{URL: url, Clients: 1, Seed: 1, Mult: "1.0", Duration: 300 * time.Millisecond}
-	if err := Run(ctx, cfg); err != nil {
+	if _, err := Run(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -48,7 +48,7 @@ func main() {
 		_ = srv.Shutdown(shut)
 	}()
 
-	log.Printf("instance seed=%d multiplier=%s (%d hundredths) tick=%dHz", inst.Seed(), instance.FormatMultiplier(inst.MultiplierHundredths()), inst.MultiplierHundredths(), instance.TickRate)
+	log.Printf("instance seed=%d multiplier=%s (%d hundredths) max-players=%d tick=%dHz", inst.Seed(), instance.FormatMultiplier(inst.MultiplierHundredths()), inst.MultiplierHundredths(), cfg.MaxPlayers, instance.TickRate)
 	if err := srv.ListenAndServe(cfg.ListenAddr); err != nil && ctx.Err() == nil {
 		log.Fatal(err)
 	}

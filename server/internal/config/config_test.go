@@ -8,6 +8,7 @@ func TestParseMultiplierFlagDecimalAndHundredths(t *testing.T) {
 	t.Setenv(EnvListenAddr, "")
 	t.Setenv(EnvSeed, "")
 	t.Setenv(EnvMultiplier, "")
+	t.Setenv(EnvMaxPlayers, "")
 
 	cfg, err := Parse([]string{"-multiplier", "1.05", "-seed", "9"})
 	if err != nil {
@@ -31,6 +32,7 @@ func TestParseMultiplierFlagDecimalAndHundredths(t *testing.T) {
 
 func TestParseRejectsOffStepAndOutOfRange(t *testing.T) {
 	t.Setenv(EnvMultiplier, "")
+	t.Setenv(EnvMaxPlayers, "")
 	for _, arg := range []string{"0.45", "1.55", "1.07", "45", "107"} {
 		if _, err := Parse([]string{"-multiplier", arg}); err == nil {
 			t.Fatalf("multiplier %s: want error", arg)
@@ -60,6 +62,7 @@ func TestFromEnvParsesDecimalAndHundredths(t *testing.T) {
 
 func TestParseHealthcheckFlag(t *testing.T) {
 	t.Setenv(EnvMultiplier, "")
+	t.Setenv(EnvMaxPlayers, "")
 	cfg, err := Parse([]string{"-healthcheck", "-listen", ":9090"})
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +80,7 @@ func TestParseHealthcheckFlag(t *testing.T) {
 
 func TestParseDefaultMultiplier(t *testing.T) {
 	t.Setenv(EnvMultiplier, "")
+	t.Setenv(EnvMaxPlayers, "")
 	cfg, err := Parse(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +92,7 @@ func TestParseDefaultMultiplier(t *testing.T) {
 
 func TestParseBareOneAndRejectOffHundredth(t *testing.T) {
 	t.Setenv(EnvMultiplier, "")
+	t.Setenv(EnvMaxPlayers, "")
 	cfg, err := Parse([]string{"-multiplier", "1"})
 	if err != nil {
 		t.Fatal(err)
@@ -97,5 +102,52 @@ func TestParseBareOneAndRejectOffHundredth(t *testing.T) {
 	}
 	if _, err := Parse([]string{"-multiplier", "1.053"}); err == nil {
 		t.Fatal("1.053: want error")
+	}
+}
+
+func TestParseMaxPlayers(t *testing.T) {
+	t.Setenv(EnvMaxPlayers, "")
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxPlayers != 50 {
+		t.Fatalf("default max players %d, want 50", cfg.MaxPlayers)
+	}
+
+	cfg, err = Parse([]string{"-max-players", "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxPlayers != 1 {
+		t.Fatalf("got %d, want 1", cfg.MaxPlayers)
+	}
+	cfg, err = Parse([]string{"-max-players", "50"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxPlayers != 50 {
+		t.Fatalf("got %d, want 50", cfg.MaxPlayers)
+	}
+	for _, arg := range []string{"0", "51", "-1"} {
+		if _, err := Parse([]string{"-max-players", arg}); err == nil {
+			t.Fatalf("max-players %s: want error", arg)
+		}
+	}
+
+	t.Setenv(EnvMaxPlayers, "8")
+	cfg, err = Parse(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxPlayers != 8 {
+		t.Fatalf("env max players %d, want 8", cfg.MaxPlayers)
+	}
+	cfg, err = Parse([]string{"-max-players", "4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxPlayers != 4 {
+		t.Fatalf("flag should override env: got %d, want 4", cfg.MaxPlayers)
 	}
 }
