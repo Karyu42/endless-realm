@@ -277,10 +277,11 @@ The practice slice of the Hollowmere Vault (from #49) is entered through the pra
 - **Exceptions to vision §6.1:**
   - **Rule 5 (player cap):** capacity is still the lobby's max players, stored when the door's record is created, and the lobby-wide live admission cap still applies. But it counts **current occupants**, not distinct admitted players. A player leaving frees a slot, and the door never closes because a set number of players has been admitted.
   - **Rule 8 (lifetimes):** the door has no 120 s admission window and never closes. The instance doesn't close 60 s after it empties; it resets instead (next bullet). With no deposit, deposit forfeiture doesn't apply.
-- **Reset when empty:** once no living player is inside, the whole slice is rebuilt on the next entry: trash, the Tallow Warden and the exit. No clears are tracked per player.
+- **Reset when empty:** once no character is inside the instance (connected or lingering), the whole slice is rebuilt on the next entry: trash, the Tallow Warden and the exit. No clears are tracked per player.
 - **Nothing gained inside persists:** on entry the host snapshots the player's carried progression, meaning the `PlayerCarry` fields: `level`, `xp_tenths`, `pending_glint`, `pending_riftstone` (#54) and the inventory with equipment. On any way out (the exit portal or leaving the lobby), those fields are restored to the entry snapshot.
   - What the player **brought in is kept unchanged**, carry and pending Riftstone included; it is never stripped or reduced.
   - Only what was **gained or changed inside** is discarded: XP and levels, currency or season progress (Glint, Riftstone, Echo Dust, Sparks or any other), and gear or loot-bag pickups.
+  - Consumables or anything else used up inside also **come back on exit**, because the whole inventory and equipment are restored to the entry snapshot.
   - HP and Focus/cooldown are not progression; they carry out as they are, like any portal move.
   - The vault drops no found portals, and no onward portal can be entered from inside it.
   - That's why the resets are free.
