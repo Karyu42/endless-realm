@@ -120,7 +120,8 @@
                     "type": "string",
                     "enum": [
                       "chase_hover",
-                      "rooted"
+                      "rooted",
+                      "boss"
                     ]
                   },
                   "pattern": {
@@ -129,7 +130,47 @@
                   "fire_interval_ticks": {
                     "type": "integer",
                     "minimum": 1
+                  },
+                  "alt_pattern": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "alt_every_cycles": {
+                    "type": "integer",
+                    "minimum": 2
+                  },
+                  "sidestep_tiles": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "sidestep_interval_ticks": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "sidestep_duration_ticks": {
+                    "type": "integer",
+                    "minimum": 1
                   }
+                }
+              },
+              "party_scaling": {
+                "type": "string",
+                "enum": [
+                  "normal",
+                  "boss"
+                ]
+              },
+              "target_rule": {
+                "type": "string",
+                "enum": [
+                  "living_in_arena"
+                ]
+              },
+              "phases": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/phase"
                 }
               }
             }
@@ -164,8 +205,181 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "type": "object",
+              "properties": {
+                "rank": {
+                  "const": "boss"
+                }
+              },
+              "required": [
+                "rank"
+              ]
+            },
+            "then": {
+              "required": [
+                "phases",
+                "party_scaling"
+              ]
+            }
           }
         ]
+      }
+    }
+  },
+  "$defs": {
+    "phase": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hp_above": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "transition": {
+          "type": "boolean"
+        },
+        "ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "invulnerable": {
+          "type": "boolean"
+        },
+        "move_speed": {
+          "type": "number",
+          "minimum": 0
+        },
+        "move": {
+          "type": "string",
+          "enum": [
+            "drift_center",
+            "anchor_center"
+          ]
+        },
+        "move_to": {
+          "type": "string",
+          "enum": [
+            "center"
+          ]
+        },
+        "loop_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "loops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/phase_loop"
+          }
+        },
+        "on_enter": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/phase_enter_action"
+          }
+        },
+        "enrage": {
+          "$ref": "#/$defs/enrage"
+        }
+      }
+    },
+    "phase_loop": {
+      "type": "object",
+      "required": [
+        "pattern"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "minLength": 1
+        },
+        "every_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "offset_ticks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window_start_ticks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window_end_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "at_loop_start": {
+          "type": "boolean"
+        },
+        "once_per_loop": {
+          "type": "boolean"
+        }
+      }
+    },
+    "phase_enter_action": {
+      "type": "object",
+      "required": [
+        "summon",
+        "at",
+        "count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "summon": {
+          "type": "string",
+          "minLength": 1
+        },
+        "at": {
+          "type": "string",
+          "enum": [
+            "corners"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "loot": {
+          "type": "boolean"
+        }
+      }
+    },
+    "enrage": {
+      "type": "object",
+      "required": [
+        "timer_start",
+        "after_ticks",
+        "interval_mult"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "timer_start": {
+          "type": "string",
+          "enum": [
+            "seal"
+          ]
+        },
+        "after_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "interval_mult": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
       }
     }
   }

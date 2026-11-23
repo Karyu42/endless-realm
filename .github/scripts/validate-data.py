@@ -82,7 +82,7 @@ if enemies_path.exists() and patterns_path.exists():
             fire = obj.get("fire")
             if isinstance(fire, str) and fire:
                 acc.append((f"{path}.fire" if path else "fire", fire))
-            for key in ("pattern", "pattern_id"):
+            for key in ("pattern", "pattern_id", "alt_pattern"):
                 val = obj.get(key)
                 if isinstance(val, str) and val:
                     acc.append((f"{path}.{key}" if path else key, val))
@@ -90,7 +90,7 @@ if enemies_path.exists() and patterns_path.exists():
             if isinstance(child, str) and child:
                 acc.append((f"{path}.child" if path else "child", child))
             for k, v in obj.items():
-                if k in ("pattern", "pattern_id", "fire", "child") and isinstance(v, str):
+                if k in ("pattern", "pattern_id", "alt_pattern", "fire", "child") and isinstance(v, str):
                     continue
                 pattern_refs(v, acc, f"{path}.{k}" if path else k)
         elif isinstance(obj, list):
@@ -112,14 +112,22 @@ if enemies_path.exists() and patterns_path.exists():
             if pid not in pattern_ids:
                 err(f"{loc}: pattern reference {pid!r} is not in patterns.json")
                 continue
-            key = str(patterns_by_id[pid].get("damage_key") or "")
-            if not key:
-                continue
-            used_keys.add(key)
-            if key not in damage:
-                err(
-                    f"{eid}: pattern {pid!r} damage_key {key!r} is missing from base.damage"
-                )
+            def damage_keys(pat: dict) -> list:
+                keys = []
+                key = str(pat.get("damage_key") or "")
+                if key:
+                    keys.append(key)
+                child = pat.get("child")
+                if isinstance(child, dict):
+                    keys.extend(damage_keys(child))
+                return keys
+
+            for key in damage_keys(patterns_by_id[pid]):
+                used_keys.add(key)
+                if key not in damage:
+                    err(
+                        f"{eid}: pattern {pid!r} damage_key {key!r} is missing from base.damage"
+                    )
         for key in sorted(damage):
             if key not in used_keys:
                 print(f"::warning::{eid}: unused damage_key {key!r} in base.damage")

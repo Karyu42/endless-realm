@@ -107,6 +107,7 @@ func test_entering_opens_a_seeded_dungeon_instance() -> void:
 	assert_eq(xfer2.seed, xfer.seed, "same yard seed, portal, and tick -> same instance seed")
 	assert_almost_eq(xfer.arrival_x, 6.0, 0.0001)
 	assert_almost_eq(xfer.arrival_y, 6.0, 0.0001)
+	assert_false(xfer.grants_persistent, "the practice-yard entrance packs grants_persistent false")
 
 	var catalog := _catalog()
 	var def := catalog.dungeon(xfer.dungeon_id)
@@ -114,7 +115,7 @@ func test_entering_opens_a_seeded_dungeon_instance() -> void:
 	dungeon.set_lobby_settings(_default_settings())
 	dungeon.configure_dungeon(
 		def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
-		xfer.opener_id, xfer.opener_lp
+		xfer.opener_id, xfer.opener_lp, xfer.grants_persistent
 	)
 	var carry := PlayerCarry.from_sim(yard.get_player(pid), yard.ability_state(pid))
 	dungeon.apply_carried_player(carry, xfer.arrival_x, xfer.arrival_y)
@@ -130,8 +131,9 @@ func test_entering_opens_a_seeded_dungeon_instance() -> void:
 	for item in start.portals:
 		if item.kind == PortalSnapshot.KIND_PLACEHOLDER:
 			placeholders += 1
-			assert_eq(item.marker_id, "tallow_warden")
-	assert_eq(placeholders, 1)
+	assert_eq(placeholders, 0, "the Warden is a real spawn, not a placeholder marker")
+	assert_false(dungeon.boss_defeated())
+	assert_false(dungeon.vault_exit_open())
 
 
 func test_rooms_activate_on_entry_and_exit_spawns_when_cleared() -> void:
@@ -139,7 +141,7 @@ func test_rooms_activate_on_entry_and_exit_spawns_when_cleared() -> void:
 	var def := catalog.dungeon("hollowmere_vault")
 	var sim := LocalSim.new(SimConfig.new(), 6.0, 6.0, catalog)
 	sim.set_lobby_settings(_default_settings())
-	sim.configure_dungeon(def, 42, 100, 1, 1, _pid(sim), 1)
+	sim.configure_dungeon(def, 42, 100, 1, 1, _pid(sim), 1, def.practice_grants_persistent())
 	assert_eq(sim.snapshot().enemies.size(), 0)
 	var pid := _pid(sim)
 	var p := sim.get_player(pid)
@@ -158,8 +160,24 @@ func test_rooms_activate_on_entry_and_exit_spawns_when_cleared() -> void:
 	p.y = 6.0
 	sim.step()
 	var after_kennels := sim.snapshot()
-	assert_eq(after_kennels.enemies.size(), 1, "Wick Kennels Driftcap spawns")
-	assert_eq(after_kennels.enemies[0].def_id, "driftcap_spore")
+	var ids: PackedStringArray = PackedStringArray()
+	for e in after_kennels.enemies:
+		ids.append(e.def_id)
+	assert_eq(after_kennels.enemies.size(), 2, "Wick Kennels spawns a Driftcap and the Tallow Warden")
+	assert_true("driftcap_spore" in ids)
+	assert_true("tallow_warden" in ids)
+	assert_false(sim.boss_defeated())
+	assert_false(sim.vault_exit_open())
+	# Clear only the Driftcap: the exit stays closed while the Warden lives.
+	for e in after_kennels.enemies:
+		if e.def_id == "driftcap_spore":
+			var cap: EnemyState = sim.get_enemy(e.id)
+			if cap != null:
+				cap.invulnerable = false
+				sim.hurt_enemy(e.id, cap.hp, pid)
+	sim.step()
+	assert_false(sim.boss_defeated())
+	assert_false(sim.vault_exit_open(), "trash clear does not open the vault exit")
 	sim.defeat_all_enemies()
 	sim.step()
 	var exits := 0
@@ -169,7 +187,9 @@ func test_rooms_activate_on_entry_and_exit_spawns_when_cleared() -> void:
 			exits += 1
 			exit_id = item.id
 			assert_almost_eq(item.x, 44.0, 0.0001)
-	assert_eq(exits, 1, "exit portal appears once combat rooms are cleared")
+	assert_eq(exits, 1, "exit portal appears once the Tallow Warden is defeated")
+	assert_true(sim.boss_defeated())
+	assert_true(sim.vault_exit_open())
 	p.x = 44.0
 	p.y = 6.0
 	sim.apply_input(pid, _enter_intent(1, exit_id))
@@ -247,7 +267,7 @@ func test_level_sync_down_inside_a_portal() -> void:
 	var sim := LocalSim.new(SimConfig.new(), 6.0, 6.0, catalog)
 	sim.set_lobby_settings(_default_settings())
 	var pid := _pid(sim)
-	sim.configure_dungeon(def, 7, 100, 10, 10, pid, 20)
+	sim.configure_dungeon(def, 7, 100, 10, 10, pid, 20, def.grants_persistent)
 	var p := sim.get_player(pid)
 	p.level = 20
 	assert_eq(sim.effective_level(), 15, "Le = min(20, 10+5)")
@@ -304,7 +324,7 @@ func test_player_xp_focus_cooldown_and_inventory_carry_into_and_out_of_the_vault
 	dungeon.set_lobby_settings(_default_settings())
 	dungeon.configure_dungeon(
 		def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
-		xfer.opener_id, xfer.opener_lp
+		xfer.opener_id, xfer.opener_lp, xfer.grants_persistent
 	)
 	if dungeon.get_player(pid) == null:
 		assert_true(dungeon.add_player(pid, {"x": xfer.arrival_x, "y": xfer.arrival_y}))
@@ -339,7 +359,7 @@ func test_reentering_mid_clear_starts_uncleared() -> void:
 	var sim := LocalSim.new(SimConfig.new(), 6.0, 6.0, catalog)
 	sim.set_lobby_settings(_default_settings())
 	var pid := _pid(sim)
-	sim.configure_dungeon(def, 42, 100, 1, 1, pid, 1)
+	sim.configure_dungeon(def, 42, 100, 1, 1, pid, 1, def.practice_grants_persistent())
 	var p := sim.get_player(pid)
 	p.x = 16.0
 	p.y = 6.0
@@ -358,7 +378,7 @@ func test_reentering_mid_clear_starts_uncleared() -> void:
 	if again.get_player(pid) == null:
 		assert_true(again.add_player(pid, {"x": 6.0, "y": 6.0}))
 		again.step()
-	again.configure_dungeon(def, 42, 100, 1, 1, pid, 1)
+	again.configure_dungeon(def, 42, 100, 1, 1, pid, 1, def.practice_grants_persistent())
 	assert_eq(again.snapshot().enemies.size(), 0, "antechamber starts empty")
 	exits = 0
 	for item in again.snapshot().portals:

@@ -19,3 +19,5 @@ var opener_id: int = 0
 var opener_lp: int = 0
 var arrival_x: float = 0.0
 var arrival_y: float = 0.0
+## Packed entrance flag, consumed by configure_dungeon. Official true, practice false.
+var grants_persistent: bool = false

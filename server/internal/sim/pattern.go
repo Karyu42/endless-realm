@@ -48,20 +48,36 @@ type SkipSpec struct {
 
 // PatternDef is one entry from data/patterns.json.
 type PatternDef struct {
-	ID                  string    `json:"id"`
-	Type                string    `json:"type"`
-	Count               int       `json:"count"`
-	SpreadDeg           float64   `json:"spread_deg"`
-	Aim                 string    `json:"aim"`
-	StartAngleDeg       float64   `json:"start_angle_deg"`
-	RotatePerFireDeg    float64   `json:"rotate_per_fire_deg"`
-	AngleOffsetCycleDeg []float64 `json:"angle_offset_cycle_deg"`
-	Skip                *SkipSpec `json:"skip"`
-	Speed               float64   `json:"speed"`
-	Range               float64   `json:"range"`
-	Size                string    `json:"size"`
-	DamageKey           string    `json:"damage_key"`
-	Trigger             string    `json:"trigger"`
+	ID                      string      `json:"id"`
+	Type                    string      `json:"type"`
+	Count                   int         `json:"count"`
+	SpreadDeg               float64     `json:"spread_deg"`
+	Aim                     string      `json:"aim"`
+	StartAngleDeg           float64     `json:"start_angle_deg"`
+	RotatePerFireDeg        float64     `json:"rotate_per_fire_deg"`
+	AngleOffsetCycleDeg     []float64   `json:"angle_offset_cycle_deg"`
+	Skip                    *SkipSpec   `json:"skip"`
+	Speed                   float64     `json:"speed"`
+	Range                   float64     `json:"range"`
+	Size                    string      `json:"size"`
+	DamageKey               string      `json:"damage_key"`
+	Trigger                 string      `json:"trigger"`
+	IntervalTicks           int         `json:"interval_ticks"`
+	Arms                    int         `json:"arms"`
+	EmitIntervalTicks       int         `json:"emit_interval_ticks"`
+	RotatePerEmitDeg        float64     `json:"rotate_per_emit_deg"`
+	DurationTicks           int         `json:"duration_ticks"`
+	Repeats                 int         `json:"repeats"`
+	Reaim                   bool        `json:"reaim"`
+	AngleOffsetPerRepeatDeg float64     `json:"angle_offset_per_repeat_deg"`
+	Child                   *PatternDef `json:"child"`
+	Shape                   string      `json:"shape"`
+	Radius                  float64     `json:"radius"`
+	Placement               string      `json:"placement"`
+	MaxTargets              int         `json:"max_targets"`
+	TelegraphTicks          int         `json:"telegraph_ticks"`
+	TickIntervalTicks       int         `json:"tick_interval_ticks"`
+	SlowPct                 float64     `json:"slow_pct"`
 }
 
 type patternFile struct {
@@ -167,6 +183,10 @@ func EmitBullets(def PatternDef, seed uint64, originX, originY, aimRad float64, 
 		return emitFan(def, originX, originY, base)
 	case "ring":
 		return emitRing(def, rng, originX, originY, base)
+	case "spiral":
+		return emitSpiral(def, originX, originY, base, volleyIndex)
+	case "burst":
+		return emitBurst(def, seed, originX, originY, aimRad, volleyIndex)
 	default:
 		return nil
 	}
@@ -221,6 +241,36 @@ func emitRing(def PatternDef, rng *PCG32, ox, oy, base float64) []Bullet {
 			continue
 		}
 		out = append(out, newBullet(def, i, base+float64(i)*step, ox, oy))
+	}
+	return out
+}
+
+func emitSpiral(def PatternDef, ox, oy, base float64, emitIndex int) []Bullet {
+	n := def.Arms
+	if n < 1 {
+		n = 1
+	}
+	step := 2 * math.Pi / float64(n)
+	rot := DegToRad(def.RotatePerEmitDeg * float64(emitIndex))
+	out := make([]Bullet, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, newBullet(def, i, base+float64(i)*step+rot, ox, oy))
+	}
+	return out
+}
+
+func emitBurst(def PatternDef, seed uint64, ox, oy, aimRad float64, repeatIndex int) []Bullet {
+	if def.Child == nil {
+		return nil
+	}
+	child := *def.Child
+	extra := DegToRad(def.AngleOffsetPerRepeatDeg * float64(repeatIndex))
+	// Child volley is 0: rotation/offset for the burst lives on the parent.
+	out := EmitBullets(child, seed, ox, oy, aimRad+extra, 0)
+	if child.Aim == "fixed" && extra != 0 {
+		for i := range out {
+			out[i].AngleRad += extra
+		}
 	}
 	return out
 }

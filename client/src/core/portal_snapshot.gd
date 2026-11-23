@@ -16,6 +16,8 @@ var dungeon_name: String = ""
 var m100: int = 0
 var content_level: int = 0
 var base_level: int = 0
+## From the packed entrance: whether the destination instance grants persistent rewards.
+var grants_persistent: bool = false
 ## For KIND_PLACEHOLDER, the packed boss id (not spawned yet).
 var marker_id: String = ""
 var marker_name: String = ""

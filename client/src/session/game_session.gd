@@ -369,7 +369,7 @@ func _switch_solo_instance(old: LocalSim, xfer: PortalTransfer) -> void:
 	var player := old.get_player(xfer.player_id)
 	if player == null:
 		return
-	var carry := PlayerCarry.from_sim(player, old.ability_state(xfer.player_id))
+	var carry := old.carry_out(xfer.player_id)
 	var next: LocalSim
 	if xfer.kind == PortalTransfer.KIND_ENTER:
 		next = _new_dungeon_sim(xfer)
@@ -387,7 +387,7 @@ func _new_dungeon_sim(xfer: PortalTransfer) -> LocalSim:
 	if def != null:
 		sim.configure_dungeon(
 			def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
-			xfer.opener_id, xfer.opener_lp
+			xfer.opener_id, xfer.opener_lp, xfer.grants_persistent
 		)
 	return sim
 

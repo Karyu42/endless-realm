@@ -20,6 +20,12 @@ const PORTAL_COLOR := Color(0.42, 0.78, 0.95)
 const PORTAL_CORE := Color(0.08, 0.16, 0.28)
 const EXIT_COLOR := Color(0.95, 0.78, 0.38)
 const PLACEHOLDER_COLOR := Color(0.72, 0.58, 0.28)
+const WARDEN_COLOR := Color(0.93, 0.84, 0.62)
+const WARDEN_MELT := Color(0.95, 0.55, 0.22)
+const WARDEN_LAST := Color(0.96, 0.95, 0.90)
+const ACOLYTE_COLOR := Color(0.72, 0.62, 0.42)
+const HAZARD_TELEGRAPH := Color(0.95, 0.72, 0.22, 0.28)
+const HAZARD_ACTIVE := Color(0.92, 0.48, 0.12, 0.40)
 const CRYPT_FLOOR := Color(0.11, 0.09, 0.08)
 const CRYPT_DARK := Color(0.16, 0.12, 0.10)
 
@@ -219,6 +225,7 @@ func _draw() -> void:
 			if (x + y) % 2 == 0:
 				draw_rect(Rect2(float(x) * px, float(y) * px, px, px), dark)
 	draw_rect(Rect2(0.0, 0.0, size, size), edge, false, 2.0)
+	_draw_hazards()
 
 
 func _physics_process(delta: float) -> void:
@@ -247,9 +254,9 @@ func _process(delta: float) -> void:
 func _refresh_hint() -> void:
 	_hint_touch = _sticks.using_touch
 	if _hint_touch:
-		_hint.text = "Left stick moves · right stick aims and fires · ability above the right stick · interact appears beside it when something is in range · a Burrmite, a Driftcap Spore, and a Hollowmere portal share the yard"
+		_hint.text = "Left stick moves · right stick aims and fires · ability above the right stick · interact appears beside it when something is in range · a Burrmite, a Driftcap Spore, and a Hollowmere portal share the yard · beat the Tallow Warden to open the vault exit"
 	else:
-		_hint.text = "WASD or left stick to move · mouse or right stick to aim · hold left click or RT to fire · Space, right-click or LB for ability · E or Y to loot or enter · 1–8 equip · a Burrmite, a Driftcap Spore, and a Hollowmere portal share the yard"
+		_hint.text = "WASD or left stick to move · mouse or right stick to aim · hold left click or RT to fire · Space, right-click or LB for ability · E or Y to loot or enter · 1–8 equip · a Burrmite, a Driftcap Spore, and a Hollowmere portal share the yard · beat the Tallow Warden to open the vault exit"
 
 
 func _sample_input(delta: float) -> void:
@@ -334,6 +341,20 @@ func _circle_shape(radius_px: float, sides: int = 10) -> PackedVector2Array:
 	return pts
 
 
+func _warden_shape(radius_px: float) -> PackedVector2Array:
+	# Stacked candle silhouette, taller than trash enemies.
+	return PackedVector2Array([
+		Vector2(0.0, -radius_px * 1.25),
+		Vector2(radius_px * 0.28, -radius_px * 0.85),
+		Vector2(radius_px * 0.55, -radius_px * 0.15),
+		Vector2(radius_px * 0.7, radius_px * 0.85),
+		Vector2(0.0, radius_px * 1.05),
+		Vector2(-radius_px * 0.7, radius_px * 0.85),
+		Vector2(-radius_px * 0.55, -radius_px * 0.15),
+		Vector2(-radius_px * 0.28, -radius_px * 0.85),
+	])
+
+
 func _cap_shape(radius_px: float) -> PackedVector2Array:
 	# Wide mushroom cap, distinct from the Burrmite silhouette.
 	return PackedVector2Array([
@@ -377,6 +398,8 @@ func _acquire_view(
 	view.color = color
 	if kind == "enemy":
 		view.polygon = _enemy_shape(radius_px)
+	elif kind == "warden":
+		view.polygon = _warden_shape(radius_px)
 	elif kind == "driftcap":
 		view.polygon = _cap_shape(radius_px)
 	elif kind == "spore":
@@ -455,8 +478,18 @@ func _update_enemy_views() -> void:
 		var e: EnemySnapshot = live[id]
 		var r: float = e.radius * SimConstants.TILE_PX
 		var is_cap: bool = e.def_id == "driftcap_spore"
-		var color: Color = DRIFTCAP_COLOR if is_cap else ENEMY_COLOR
-		var kind: String = "driftcap" if is_cap else "enemy"
+		var is_warden: bool = e.def_id == "tallow_warden"
+		var is_acolyte: bool = e.def_id == "waxen_acolyte"
+		var color: Color = ENEMY_COLOR
+		var kind: String = "enemy"
+		if is_cap:
+			color = DRIFTCAP_COLOR
+			kind = "driftcap"
+		elif is_warden:
+			color = _warden_color(e)
+			kind = "warden"
+		elif is_acolyte:
+			color = ACOLYTE_COLOR
 		var view := _acquire_view(_enemies, _enemy_views, _enemy_free, id, color, r, kind)
 		var x: float = e.x
 		var y: float = e.y
@@ -465,8 +498,8 @@ func _update_enemy_views() -> void:
 			x = lerpf(p.x, e.x, alpha)
 			y = lerpf(p.y, e.y, alpha)
 		view.position = Vector2(x * SimConstants.TILE_PX, y * SimConstants.TILE_PX)
-		# Rooted Driftcaps do not rotate with aim; Burrmites still do.
-		if not is_cap:
+		# Rooted Driftcaps and the Warden's candle body do not spin with aim.
+		if not is_cap and not is_warden:
 			view.rotation = e.aim
 		var feel: FeelSettings = GameSession.feel()
 		if e.flash_ticks > 0 and feel != null:
@@ -800,6 +833,31 @@ func _sync_float_labels(dt: float) -> void:
 		col.a = _float_pool.alpha_of(slot, feel.floater_lifetime_seconds)
 		lab.add_theme_color_override("font_color", col)
 		lab.position = Vector2(slot.x - 10.0, slot.y - 10.0)
+
+
+func _warden_color(e: EnemySnapshot) -> Color:
+	match e.phase_id:
+		"t1", "p2":
+			return WARDEN_MELT
+		"t2", "p3":
+			return WARDEN_LAST
+		_:
+			return WARDEN_COLOR
+
+
+func _draw_hazards() -> void:
+	if GameSession.curr_snapshot == null:
+		return
+	var tick: int = GameSession.curr_snapshot.tick
+	for h in GameSession.curr_snapshot.hazards:
+		var px: float = h.x * SimConstants.TILE_PX
+		var py: float = h.y * SimConstants.TILE_PX
+		var r: float = h.radius * SimConstants.TILE_PX
+		var color: Color = HAZARD_TELEGRAPH if h.is_telegraph(tick) else HAZARD_ACTIVE
+		draw_circle(Vector2(px, py), r, color)
+		var edge := color
+		edge.a = minf(0.85, color.a + 0.35)
+		draw_arc(Vector2(px, py), r, 0.0, TAU, 32, edge, 1.5, true)
 
 
 func _begin_hit_feel(events: Array) -> void:

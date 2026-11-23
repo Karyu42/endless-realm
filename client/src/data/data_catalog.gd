@@ -213,6 +213,15 @@ func unknown_reference_ids() -> PackedStringArray:
 			if not seen.has(edef.pattern_id):
 				ids.append(edef.pattern_id)
 				seen[edef.pattern_id] = true
+		for ref in edef.pattern_ids():
+			if ref.begins_with("summon:"):
+				var sid: String = ref.substr(7)
+				if sid != "" and not enemies.has(sid) and not seen.has(sid):
+					ids.append(sid)
+					seen[sid] = true
+			elif ref != "" and not patterns.has(ref) and not seen.has(ref):
+				ids.append(ref)
+				seen[ref] = true
 		for mid in edef.missing_pack_ids():
 			if not seen.has(mid):
 				ids.append(mid)
