@@ -175,6 +175,17 @@ func test_slipstep_stops_on_a_diagonal_past_a_blocked_corner() -> void:
 	assert_almost_eq(sim.snapshot().player_y, 10.0 - SimConstants.MOVE_EPS, 1e-9)
 
 
+func test_slipstep_does_not_cut_a_diagonal_wall_gap() -> void:
+	# Exact-corner crossing with a solid tile on either side must not slip
+	# through the diagonal gap between (10, 9) and (9, 10).
+	var sim := _class_sim("driftrunner", 8.5, 8.5)
+	sim.set_blocking_tile(10, 9, true)
+	sim.set_blocking_tile(9, 10, true)
+	_act(sim, 1, true, false, 1.0, 1.0)
+	assert_almost_eq(sim.snapshot().player_x, 10.0 - SimConstants.MOVE_EPS, 1e-9)
+	assert_almost_eq(sim.snapshot().player_y, 10.0 - SimConstants.MOVE_EPS, 1e-9)
+
+
 func test_slipstep_invuln_drops_damage_for_six_ticks() -> void:
 	var sim := _class_sim("driftrunner")
 	var def := EnemyDef.new()
