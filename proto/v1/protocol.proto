@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package endless.v1;
+
+option go_package = "github.com/Karyu42/endless-realm/server/internal/protocol/v1;protocolv1";
+
+// Protocol v1. The protocol_version field is the agreed u16 version
+// (proto3 has no uint16; the value must be exactly 1).
+//
+// Wire: binary WebSocket frames containing a ClientMessage or ServerMessage.
+// Angles are radians in Godot 2D convention (+X = 0, +Y down, clockwise
+// positive). float fields are float32 on the wire; sim math is float64.
+// Time in snapshots is tick index, not milliseconds.
+
+message Hello {
+  uint32 protocol_version = 1;
+}
+
+message Welcome {
+  uint32 protocol_version = 1;
+  uint32 player_id = 2;
+  uint32 tick_hz = 3;
+  uint64 instance_seed = 4;
+  // Display only; the client must not use this to compute rewards.
+  float multiplier = 5;
+}
+
+message Reject {
+  uint32 server_protocol_version = 1;
+  uint32 client_protocol_version = 2;
+  string reason = 3;
+}
+
+message InputFrame {
+  uint32 seq = 1;
+  float move_x = 2;
+  float move_y = 3;
+  // Radians, Godot 2D convention. No sign flips on the server.
+  float aim = 4;
+  bool fire_held = 5;
+}
+
+// Snapshot is a stub: tick plus the last applied input seq per connected player.
+message Snapshot {
+  uint32 tick = 1;
+  repeated PlayerStub players = 2;
+}
+
+message PlayerStub {
+  uint32 id = 1;
+  uint32 applied_seq = 2;
+}
+
+message ClientMessage {
+  oneof payload {
+    Hello hello = 1;
+    InputFrame input = 2;
+  }
+}
+
+message ServerMessage {
+  oneof payload {
+    Welcome welcome = 1;
+    Reject reject = 2;
+    Snapshot snapshot = 3;
+  }
+}
