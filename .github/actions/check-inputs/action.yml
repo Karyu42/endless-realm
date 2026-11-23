@@ -1,0 +1,43 @@
+name: check-inputs
+description: >-
+  Checks that every listed path exists. If one is missing, emits a
+  "skipped: <path> not present yet" notice, writes it to the job summary and
+  sets present=false so later steps can be skipped (the job still passes).
+inputs:
+  paths:
+    description: Newline-separated repo-relative paths (files or directories) the job needs.
+    required: true
+outputs:
+  present:
+    description: "'true' when every path exists, otherwise 'false'."
+    value: ${{ steps.check.outputs.present }}
+  missing:
+    description: The first missing path, if any.
+    value: ${{ steps.check.outputs.missing }}
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        INPUT_PATHS: ${{ inputs.paths }}
+      run: |
+        set -euo pipefail
+        present=true
+        missing=""
+        while IFS= read -r p; do
+          p="$(echo "$p" | xargs)"   # trim
+          [ -z "$p" ] && continue
+          if [ ! -e "$p" ]; then
+            present=false
+            missing="$p"
+            break
+          fi
+        done <<< "$INPUT_PATHS"
+        if [ "$present" = "false" ]; then
+          msg="skipped: ${missing} not present yet"
+          echo "::notice title=${GITHUB_JOB} skipped::${msg}"
+          echo "### ${GITHUB_JOB}: ${msg}" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        echo "present=${present}" >> "$GITHUB_OUTPUT"
+        echo "missing=${missing}" >> "$GITHUB_OUTPUT"
