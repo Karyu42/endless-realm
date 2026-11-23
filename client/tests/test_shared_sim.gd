@@ -309,3 +309,33 @@ func test_unknown_player_position_does_not_fall_back_to_default() -> void:
 	assert_ne(pos.x, 3.0)
 	assert_ne(pos.y, 4.0)
 
+
+func test_projectiles_and_bags_are_readable_by_id() -> void:
+	var catalog := DataCatalog.load_default()
+	var sim := LocalSim.new(SimConfig.new(), 0.0, 0.0, catalog)
+	sim.set_world_seed(1)
+	var pid: int = sim.player_ids()[0]
+	sim.set_player_class_for(pid, "thornguard")
+	sim.apply_input(pid, _intent(1, 0.0, 0.0, 0.0, true))
+	sim.step()
+	var shots: Array[SimProjectile] = sim.projectiles()
+	assert_gt(shots.size(), 0)
+	assert_eq(shots.size(), sim.projectile_count())
+	# Same array (read-only: do not mutate).
+	assert_eq(shots[0].id, sim.projectiles()[0].id)
+	var def := EnemyDef.new()
+	def.base_hp = 1
+	def.radius = 0.35
+	var eid: int = sim.spawn_enemy_from_def(def, 0.0, 0.0)
+	var item: ItemState = null
+	for i in range(24):
+		item = sim.try_grant_roll_for(eid, i, "thornguard")
+		if item != null:
+			break
+	assert_not_null(item, "a bag should drop within enough rolls")
+	assert_gt(sim.ground_drops().size(), 0)
+	assert_eq(sim.bags().size(), sim.ground_drops().size())
+	var bag: GroundDrop = sim.ground_drops()[0]
+	assert_eq(sim.bag_by_id(bag.id), bag)
+	assert_null(sim.bag_by_id(bag.id + 999999))
+

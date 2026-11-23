@@ -5,12 +5,9 @@ extends WorldSource
 ## RefCounted classes — no Node, SceneTree, Input, or rendering dependencies —
 ## and is deterministic (tick-based, PCG32 only).
 ##
-## Advance the world with step(), not tick(). tick() is the completed-tick
-## getter used by WorldSource and LobbyHost (which calls p.sim.tick() as a
-## getter after step()). The host contract named the advance tick(); until
-## the host switches, step() stays the advance so existing host CI keeps
-## working. apply_input(id, intent) then step() is the multi-player loop.
-## Solo play is one player: submit_input(intent) applies to that player.
+## Contract: apply_input(id, intent) then step() to advance. tick() is the
+## completed-tick getter, not the advance. Solo play is one player:
+## submit_input(intent) applies to that player, then step().
 
 const READY_EPS: float = 1e-9
 ## content-v0.1 §2.3: nearest player in aggro range, re-picked every 1 s.
@@ -421,6 +418,11 @@ func world_view(player_id: int) -> WorldSnapshot:
 		snap.ward_ticks = ast.ward_ticks
 		snap.invuln_ticks = ast.invuln_ticks
 	return snap
+
+
+## Read-only view of in-flight player shots. Do not mutate or keep past a step().
+func projectiles() -> Array[SimProjectile]:
+	return _projectiles
 
 
 func projectile_count() -> int:
@@ -895,6 +897,24 @@ func pending_glint() -> int:
 	return p.pending_glint if p != null else 0
 
 
+## Read-only view of ground bags. Do not mutate or keep past a step().
+func ground_drops() -> Array[GroundDrop]:
+	return _ground_drops
+
+
+## Same read-only array as ground_drops().
+func bags() -> Array[GroundDrop]:
+	return _ground_drops
+
+
+## The bag with this entity id, or null. Do not mutate the returned bag.
+func bag_by_id(id: int) -> GroundDrop:
+	for bag in _ground_drops:
+		if bag.id == id:
+			return bag
+	return null
+
+
 func ground_drop_count() -> int:
 	var n: int = 0
 	for bag in _ground_drops:
@@ -1156,10 +1176,7 @@ func _live_own_bag(p: SimPlayerState, bag: GroundDrop) -> bool:
 
 
 func _bag_by_id(id: int) -> GroundDrop:
-	for bag in _ground_drops:
-		if bag.id == id:
-			return bag
-	return null
+	return bag_by_id(id)
 
 
 func _ability_of(player_id: int) -> PlayerAbilityState:
