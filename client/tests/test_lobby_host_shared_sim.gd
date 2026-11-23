@@ -25,7 +25,7 @@ func _bag(owner: int, x: float, y: float, tier: int = 1) -> GroundDrop:
 	item.tier = tier
 	item.drop_id = "test-%d-%d" % [owner, _host.sim._ground_drops.size()]
 	var bag := GroundDrop.new()
-	bag.id = 900000 + _host.sim._ground_drops.size()
+	bag.id = _host.sim._alloc_id()
 	bag.item = item
 	bag.x = x
 	bag.y = y
@@ -264,3 +264,107 @@ func test_snapshot_bags_are_per_viewer() -> void:
 	var shared = PB.ServerMessage.new()
 	shared.from_bytes(_host._encode_snapshot())
 	assert_eq(shared.get_snapshot().get_bags().size(), 0, "shared bytes carry no bags")
+
+
+# --- ability state across leave / rejoin ------------------------------------------
+
+func _cast(id: int, seq: int) -> void:
+	var it := InputIntent.from_raw(seq, 0.0, 0.0, 0.0, false)
+	it.ability_pressed = true
+	_host.submit_local_input(id, it)
+
+
+func test_leave_clears_sim_ability_entry() -> void:
+	_host = _new_host()
+	var a := _host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	assert_true(_host.sim._ability_by_player.has(b))
+	_host.remove_local_player(b)
+	_host.run_tick()
+	assert_false(_host.sim._ability_by_player.has(b))
+	assert_true(_host.sim._ability_by_player.has(a))
+
+
+func test_rejoin_keeps_cooldown_and_focus() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	_cast(b, 1)
+	_host.run_tick()
+	var cd := _host.sim.ability_cooldown_ticks(b)
+	var focus := _host.sim.focus(b)
+	assert_gt(cd, 0, "on cooldown")
+	assert_lt(focus, float(_host.sim.focus_max(b)), "Focus spent")
+	_host.remove_local_player(b)
+	_host.run_tick()
+	assert_eq(_host.add_local_player(null, b), b, "same id back")
+	_host.run_tick()
+	assert_eq(_host.sim.ability_cooldown_ticks(b), cd, "cooldown not reset")
+	assert_almost_eq(_host.sim.focus(b), focus, 1e-6, "Focus not refilled")
+	_cast(b, 1)
+	_host.run_tick()
+	assert_eq(_host.ability_presses, 2)
+	assert_eq(_host.sim.ability_cooldown_ticks(b), cd - 1, "still cooling down, no recast")
+
+
+func test_rejoin_before_the_leave_is_stepped_keeps_state() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	_cast(b, 1)
+	_host.run_tick()
+	var cd := _host.sim.ability_cooldown_ticks(b)
+	var focus := _host.sim.focus(b)
+	_host.remove_local_player(b)
+	assert_eq(_host.add_local_player(null, b), b)
+	assert_eq(_host.sim.ability_cooldown_ticks(b), cd)
+	assert_almost_eq(_host.sim.focus(b), focus, 1e-6)
+
+
+func test_new_player_starts_fresh() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	_cast(b, 1)
+	_host.run_tick()
+	_host.remove_local_player(b)
+	_host.run_tick()
+	var c := _host.add_local_player()  # no rejoin id
+	assert_ne(c, b, "fresh id, never reused")
+	_host.run_tick()
+	assert_eq(_host.sim.ability_cooldown_ticks(c), 0)
+	assert_almost_eq(_host.sim.focus(c), float(_host.sim.focus_max(c)), 1e-6)
+	assert_eq(_host.add_local_player(null, 987654), _host.players[-1].id, "unknown rejoin id is ignored")
+	assert_ne(_host.players[-1].id, 987654)
+
+
+func test_ability_stash_is_bounded_and_cleared_on_close() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	_host.run_tick()
+	for i in range(LobbyHost.MAX_ABILITY_STASH + 20):
+		var id := _host.add_local_player()
+		_host.run_tick()
+		_host.remove_local_player(id)
+	assert_eq(_host.ability_stash_size(), LobbyHost.MAX_ABILITY_STASH)
+	_host.stop()
+	assert_eq(_host.ability_stash_size(), 0)
+
+
+func test_player_ids_never_collide_with_sim_entities() -> void:
+	_host = _new_host()
+	var a := _host.add_local_player()
+	_host.run_tick()
+	var e := _host.sim.spawn_enemy("burrmite", 5.0, 5.0)
+	var b := _host.add_local_player()
+	_host.run_tick()
+	_bag(a, 1.0, 1.0)
+	var ids := {}
+	for id in [a, b, e]:
+		assert_false(ids.has(id), "id %d reused" % id)
+		ids[id] = true
+	assert_gt(b, e, "player id taken from the shared allocator")

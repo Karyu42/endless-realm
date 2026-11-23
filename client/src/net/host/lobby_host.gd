@@ -37,6 +37,10 @@ const START_HP: int = 100
 ## Class for remote players until the host-lobby protocol carries one.
 ## TODO(host-lobby protocol PR): take the class from the joining client.
 const DEFAULT_CLASS_ID := "thornguard"
+## Saved ability states (remaining cooldown, Focus) of players who left,
+## kept for the life of the lobby so a rejoin cannot reset them. Oldest
+## entries are dropped past this many.
+const MAX_ABILITY_STASH: int = 256
 const EMITTER_RADIUS: float = 0.6
 ## Matches the Go server's instance.DefaultInstanceID (the smoke instance).
 const DEFAULT_INSTANCE_ID: int = 1
@@ -114,6 +118,9 @@ class HostPlayer:
 	var class_id: String = ""
 	## True once a sim step has run with this player in it.
 	var in_sim: bool = false
+	## Ability state to restore right after the step that adds this player
+	## ({"cooldown": int, "focus": float}), or {} for a fresh player.
+	var restore_ability: Dictionary = {}
 	var imported_character := PackedByteArray()
 
 
@@ -150,7 +157,10 @@ var on_interact: Callable = Callable()
 ## The shared world: every player, enemy, projectile and loot bag.
 var sim: LocalSim
 var catalog: DataCatalog
-var _sim_stepped: bool = false
+## player id -> {"cooldown", "focus"} for players who left (bounded FIFO).
+var _ability_stash: Dictionary = {}
+var _ability_stash_order: Array[int] = []
+var _builtin_taken: bool = false
 
 # State
 var tick: int = 0
@@ -176,7 +186,6 @@ var _settings := LobbySettings.new()
 var _unsafe_max_players: int = 0
 var _tcp := TCPServer.new()
 var _conns: Array[HostConn] = []
-var _next_player_id: int = 1
 var _config: SimConfig
 var _start_usec: int = 0
 var _n: int = 0  # index of the next due tick
@@ -239,6 +248,9 @@ func stop() -> void:
 	for p in players:
 		sim.remove_player(p.id)
 	players.clear()
+	# The lobby is closing: saved ability states do not outlive it.
+	_ability_stash.clear()
+	_ability_stash_order.clear()
 	_tcp.stop()
 
 
@@ -280,10 +292,14 @@ func is_m100_allowed(m100: int) -> bool:
 ## max_players. Returns the player id, or -1 if the lobby is full.
 ## `character` is passed to the shared sim: null (DEFAULT_CLASS_ID), a class
 ## id String, or a Dictionary {class_id, x?, y?, hp?}.
-func add_local_player(character: Variant = null) -> int:
+## `rejoin_id` is a player id that left this lobby earlier: the player gets
+## that id back with the remaining ability cooldown and Focus it left with.
+## An unknown or live id is ignored and a fresh id is used.
+## TODO(host-lobby protocol PR): key this by the player's identity.
+func add_local_player(character: Variant = null, rejoin_id: int = 0) -> int:
 	if players.size() >= max_players:
 		return -1
-	var p := _add_player(character)
+	var p := _add_player(character, rejoin_id)
 	p.is_local = true
 	return p.id
 
@@ -303,9 +319,7 @@ func remove_local_player(player_id: int) -> void:
 	var p := _find_player(player_id)
 	if p == null or not p.is_local:
 		return
-	interact_validator.forget_player(p.id)
-	sim.remove_player(p.id)
-	players.erase(p)
+	_leave(p)
 
 
 ## Read-only view for one player after the last tick: the shared sim's
@@ -654,15 +668,21 @@ static func _finite_or_zero(v: float) -> float:
 	return v if is_finite(v) else 0.0
 
 
-func _add_player(character: Variant = null) -> HostPlayer:
+func _add_player(character: Variant = null, rejoin_id: int = 0) -> HostPlayer:
 	var p := HostPlayer.new()
-	# Sim-only players (e.g. LocalSim.place_ally) share the sim roster but are
-	# not host players: they never count toward max_players, get no socket or
-	# Snapshot stub, and their ids are never reused for a joining player.
-	while _sim_id_taken(_next_player_id):
-		_next_player_id += 1
-	p.id = _next_player_id
-	_next_player_id += 1
+	# Ids come from the sim's one entity allocator, so a player id never
+	# collides with an enemy, projectile or bag (or a sim-only player such
+	# as LocalSim.place_ally, which never counts toward max_players).
+	if rejoin_id > 0 and _ability_stash.has(rejoin_id) and _find_player(rejoin_id) == null:
+		p.id = rejoin_id
+		p.restore_ability = _ability_stash[rejoin_id]
+		_ability_stash.erase(rejoin_id)
+		_ability_stash_order.erase(rejoin_id)
+	elif _sim_has_builtin_player():
+		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
+		_builtin_taken = true
+	else:
+		p.id = sim.alloc_player_id()
 	# Spread spawns over the arena deterministically by id.
 	var a: float = float(p.id) * 2.399963
 	var r: float = arena_size * 0.35 * sqrt(float(p.id % 50) / 50.0)
@@ -672,11 +692,13 @@ func _add_player(character: Variant = null) -> HostPlayer:
 	p.x = float(rec["x"])
 	p.y = float(rec["y"])
 	if sim.get_player(p.id) != null:
-		# LocalSim's built-in player 1 before the first step: keep it
-		# (add_player cancels its pending removal) and set it up in place.
+		# Still in the sim (built-in player 1, or a leave not yet stepped):
+		# add_player cancels the pending removal; set it up in place.
 		sim.add_player(p.id)
 		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if rec.has("hp") else -1)
 		sim.set_player_class_for(p.id, p.class_id)
+		if not p.restore_ability.is_empty():
+			_restore_ability(p)
 	else:
 		sim.add_player(p.id, rec)
 	p.join_tick = tick
@@ -684,14 +706,44 @@ func _add_player(character: Variant = null) -> HostPlayer:
 	return p
 
 
-## True if `id` is already a sim player the host does not own. LocalSim's
-## built-in player 1 is free until the first step removes it.
-func _sim_id_taken(id: int) -> bool:
-	if _find_player(id) != null:
-		return true
-	if sim.get_player(id) == null:
-		return false
-	return not (id == 1 and not _sim_stepped)
+## LocalSim spawns a solo player 1; it stays in the sim (pending removal)
+## until the first step unless a host player takes it over.
+func _sim_has_builtin_player() -> bool:
+	return not _builtin_taken and sim.tick() == 0 and sim.get_player(1) != null
+
+
+## Removes a host player from the lobby and the sim, saving their ability
+## state so a rejoin with the same id gets it back.
+func _leave(p: HostPlayer) -> void:
+	interact_validator.forget_player(p.id)
+	var saved: Dictionary = p.restore_ability
+	if saved.is_empty() and sim.get_player(p.id) != null:
+		saved = {"cooldown": sim.ability_cooldown_ticks(p.id), "focus": sim.focus(p.id)}
+	if not saved.is_empty():
+		_stash_ability(p.id, saved)
+	sim.remove_player(p.id)
+	players.erase(p)
+
+
+func _stash_ability(id: int, saved: Dictionary) -> void:
+	if _ability_stash.has(id):
+		_ability_stash_order.erase(id)
+	_ability_stash[id] = saved
+	_ability_stash_order.append(id)
+	while _ability_stash_order.size() > MAX_ABILITY_STASH:
+		_ability_stash.erase(_ability_stash_order.pop_front())
+
+
+func _restore_ability(p: HostPlayer) -> void:
+	var saved := p.restore_ability
+	p.restore_ability = {}
+	sim.set_ability_cooldown_ticks(p.id, int(saved["cooldown"]))
+	sim.set_focus(p.id, float(saved["focus"]))
+
+
+## Number of saved ability states (bounded by MAX_ABILITY_STASH).
+func ability_stash_size() -> int:
+	return _ability_stash.size()
 
 
 ## Character record for LocalSim.add_player: class (default for remote and
@@ -713,9 +765,7 @@ static func _sim_character(character: Variant, spawn_x: float, spawn_y: float) -
 func _drop_player(c: HostConn) -> void:
 	if c.player == null:
 		return
-	interact_validator.forget_player(c.player.id)
-	sim.remove_player(c.player.id)
-	players.erase(c.player)
+	_leave(c.player)
 	c.player = null
 
 
@@ -739,7 +789,6 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			p.ability_pressed = false  # one-shot
 		sim.apply_input(p.id, intent)
 	sim.step()
-	_sim_stepped = true
 	var px := PackedFloat64Array()
 	var py := PackedFloat64Array()
 	var hp := PackedInt32Array()
@@ -751,6 +800,9 @@ func _step_sim() -> Array[PackedFloat64Array]:
 		var sp := sim.get_player(p.id)
 		if sp != null:
 			p.in_sim = true
+			if not p.restore_ability.is_empty():
+				# Before any input of theirs is applied (see above).
+				_restore_ability(p)
 			p.x = sp.x
 			p.y = sp.y
 			p.aim_applied = sp.aim

@@ -246,7 +246,14 @@ returns the id, or -1 when full; it counts toward `max_players`.
 The character goes to the shared sim: `null` means `LobbyHost.DEFAULT_CLASS_ID`
 (the v0.1 default, `thornguard`), a String is a class id, and a Dictionary
 `{class_id, x?, y?, hp?}` also sets the spawn. Remote players get the default
-class until the host-lobby protocol carries one.
+class until the host-lobby protocol carries one. Player ids come from the
+sim's single entity allocator (`LocalSim.alloc_player_id()`), so they never
+collide with enemy, projectile or bag ids; `add_player` / `place_player`
+reserve a caller-chosen id and refuse one already held by an entity.
+Leaving removes the player's ability state from the sim; the host saves the
+remaining cooldown and Focus (bounded, `MAX_ABILITY_STASH`, cleared by
+`stop()`), and `add_local_player(character, rejoin_id)` gives them back.
+A new player starts fresh.
 `submit_local_input(player_id, intent: InputIntent)` uses the same per-tick
 queue and rules as a remote InputFrame (applied once per seq, interact presses
 go through the interact validator), with no socket and no message budget.

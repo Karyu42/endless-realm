@@ -135,15 +135,17 @@ func player_count() -> int:
 
 ## Queue a player to join at the start of the next step(). character may be
 ## null, a class-id String, or a Dictionary {class_id, x, y, hp?}.
-func add_player(id: int, character: Variant = null) -> void:
-	if id <= 0:
-		return
+func add_player(id: int, character: Variant = null) -> bool:
+	if id <= 0 or _entity_id_in_use(id):
+		return false
+	_reserve_id(id)
 	_pending_removes.erase(id)
 	if _players.has(id) or _pending_adds.has(id):
 		if _pending_adds.has(id):
 			_pending_adds[id]["character"] = character
-		return
+		return true
 	_pending_adds[id] = {"character": character}
+	return true
 
 
 ## Queue a player to leave at the start of the next step(). Their in-flight
@@ -249,10 +251,41 @@ func _apply_character(p: SimPlayerState, character: Variant) -> void:
 
 
 func _alloc_id() -> int:
+	# One id space for players, enemies, projectiles, pattern bullets and
+	# bags. Ids are handed out in increasing order and never reused;
+	# _reserve_id moves the counter past any id a caller picks itself.
 	var id: int = _next_id
 	if _next_id < MAX_ENTITY_ID:
 		_next_id += 1
 	return id
+
+
+## Reserves an externally chosen id (add_player / place_player) so the
+## entity allocator never hands it out again.
+func _reserve_id(id: int) -> void:
+	if id >= _next_id and id < MAX_ENTITY_ID:
+		_next_id = id + 1
+
+
+## True if a live non-player entity (enemy, projectile, pattern bullet, bag)
+## already has this id.
+func _entity_id_in_use(id: int) -> bool:
+	for e in _enemies:
+		if e.id == id:
+			return true
+	for shot in _projectiles:
+		if shot.id == id:
+			return true
+	for b in _pattern_bullets:
+		if b.id == id:
+			return true
+	return _bag_by_id(id) != null
+
+
+## A fresh player id from the shared entity allocator. Hosts use this so
+## player ids can never collide with enemy, projectile or bag ids.
+func alloc_player_id() -> int:
+	return _alloc_id()
 
 
 func spawn_enemy(def_id: String, x: float, y: float, content_level: int = 1) -> int:
@@ -531,6 +564,9 @@ func _spawn_projectile(p: SimPlayerState, sim_tick: int) -> void:
 func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p == null:
+		if id <= 0 or _entity_id_in_use(id):
+			return
+		_reserve_id(id)
 		_pending_adds.erase(id)
 		_pending_removes.erase(id)
 		p = _make_player(id, x, y, null)
@@ -1484,6 +1520,9 @@ func _apply_pending_roster() -> void:
 			var pid: int = int(id)
 			if _players.has(pid):
 				_players.erase(pid)
+				# Ability state goes with the player; a host that wants it
+				# back on rejoin saves it first (focus / cooldown getters).
+				_ability_by_player.erase(pid)
 				changed = true
 		_pending_removes.clear()
 		# Drop that player's in-flight shots.
