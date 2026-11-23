@@ -194,10 +194,27 @@ func player_count() -> int:
 ## the pre-spawned player 1). Accepts an id at or below the high-water mark
 ## that is not currently live. Refuses, and logs, an id above the mark or
 ## any live player or entity id.
+## A same-tick re-add of a still-live player who was queued to leave cancels
+## that leave and, if a character Dictionary has x/y, applies the position
+## immediately through _set_placed_position.
 ## Sealed arena placement invariants: a spawn inside a sealed arena is moved
 ## to a deterministic safe spot outside the doorway. A returning player never
 ## lands inside a live fight.
 func add_player(id: int, character: Variant = null) -> bool:
+	var live: SimPlayerState = _players.get(id, null) as SimPlayerState
+	if live != null and _pending_removes.has(id):
+		# Keep a live player who was queued to leave (same-tick re-add).
+		_pending_removes.erase(id)
+		_pending_adds.erase(id)
+		if character is Dictionary:
+			var d: Dictionary = character
+			var x: float = float(d["x"]) if d.has("x") else live.x
+			var y: float = float(d["y"]) if d.has("y") else live.y
+			if d.has("x") or d.has("y"):
+				_set_placed_position(live, x, y)
+			if d.has("hp"):
+				live.hp = int(d["hp"])
+		return true
 	if not _player_id_accept(id):
 		return false
 	_pending_removes.erase(id)
