@@ -579,8 +579,8 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 ## Shared by remote InputFrames and submit_local_input: applied once per seq,
 ## interact presses queued for the validator on the next tick.
 func _queue_input(p: HostPlayer, seq: int, mx: float, my: float, aim: float, fire: bool, target: int) -> void:
-	if seq <= p.seq:
-		return  # stale or duplicate
+	if not Seq.seq_is_next(seq, p.seq):
+		return  # stale or duplicate, including across the uint32 wrap
 	p.seq = seq
 	p.move_x = _finite_or_zero(mx)
 	p.move_y = _finite_or_zero(my)

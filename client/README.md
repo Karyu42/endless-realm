@@ -86,14 +86,34 @@ make fixtures-parity
 
 `make fixtures-parity` runs `go test -race ./internal/sim` and `make client-test`.
 
+## Loot and XP
+
+Kills in `LocalSim` roll personal loot and credit XP from `data/loot.json` and
+`data/scaling.json` (vision §3.4 and §4.2, content-v0.1 §4). Drops use PCG32
+seeded from the instance seed, the enemy id and the drop index, with the looter
+as the stream. Each drop has an idempotent `drop_id`. Bags expire after 60 s
+(1200 ticks). The HUD shows HP, level and an XP bar; E picks up a bag in range,
+and keys 1–8 equip an inventory slot.
+
+Interact prompt (1.5 tiles) and accept (2.0 tiles) ranges, and the practice-yard
+enemy level (E = 1), come from `data/scaling.json`. The client auto-selects a
+target in the prompt range and sends `interact_target_id` (0 means none). The
+sim applies a nonzero id as a press, at most once per seq, and silently drops
+an unknown id, a bag the player may not use, or a target farther than the
+accept range. The Server Engineer's protocol PR will add
+`uint64 interact_target_id = 6` to `InputFrame`; until then the field lives
+in `InputIntent` and `LocalSim`. Entity ids are `int` from one counter and stay below 2^63 so they fit the uint64 wire field.
+Every practice-yard enemy is fixed at the data E: kills give normal
+`killXP(1)`, Glint `ceil(m(1))` = 1, and loot rolls at T* = 0.
 
 ## Host interact hook
 
 `proto/v1.InputFrame.interact_target_id` is a uint64 entity id, not a boolean.
 Zero means none; a nonzero target is a press on that seq. `LobbyHost` queues
 presses from accepted inputs and evaluates them after movement using the
-host's position. Unknown / disallowed targets and targets beyond 2 tiles are
-silently dropped; the same seq cannot interact twice.
+host's position. Unknown / disallowed targets and targets beyond the accept range in
+`data/scaling.json` (`interact_accept_range_tiles`) are silently dropped;
+the same seq cannot interact twice, including across the uint32 wrap.
 
 The host has not wired the shared sim's interactables yet. For the loot work,
 set `host.interact_validator.resolver` to
@@ -170,23 +190,3 @@ and signature check come with the identity work.
 shots). The world is not one shared multi-player `LocalSim` yet, so players
 don't see shared enemies. The stand-in bullet field only runs for the load
 test (`--emitters N`, default 0).
-
-## Loot and XP
-
-Kills in `LocalSim` roll personal loot and credit XP from `data/loot.json` and
-`data/scaling.json` (vision §3.4 and §4.2, content-v0.1 §4). Drops use PCG32
-seeded from the instance seed, the enemy id and the drop index, with the looter
-as the stream. Each drop has an idempotent `drop_id`. Bags expire after 60 s
-(1200 ticks). The HUD shows HP, level and an XP bar; E picks up a bag in range,
-and keys 1–8 equip an inventory slot.
-
-Interact prompt (1.5 tiles) and accept (2.0 tiles) ranges, and the practice-yard
-enemy level (E = 1), come from `data/scaling.json`. The client auto-selects a
-target in the prompt range and sends `interact_target_id` (0 means none). The
-sim applies a nonzero id as a press, at most once per seq, and silently drops
-an unknown id, a bag the player may not use, or a target farther than the
-accept range. The Server Engineer's protocol PR will add
-`uint64 interact_target_id = 6` to `InputFrame`; until then the field lives
-in `InputIntent` and `LocalSim`. Entity ids are `int` from one counter and stay below 2^63 so they fit the uint64 wire field.
-Every practice-yard enemy is fixed at the data E: kills give normal
-`killXP(1)`, Glint `ceil(m(1))` = 1, and loot rolls at T* = 0.

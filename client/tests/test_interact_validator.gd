@@ -40,12 +40,14 @@ func test_applies_at_most_once_per_seq() -> void:
 	assert_eq(v.dropped_repeat, 2)
 
 
-func test_out_of_range_is_dropped_and_two_tiles_is_allowed() -> void:
+func test_out_of_range_is_dropped_and_accept_range_is_allowed() -> void:
 	var v := HostInteractValidator.new()
-	v.resolver = _at(2.0, 0.0)
-	assert_true(v.validate(1, 1, 42, 0.0, 0.0), "exactly 2.0 tiles")
-	v.resolver = _at(1.5, 1.33)  # ~2.005 tiles
-	assert_false(v.validate(1, 2, 42, 0.0, 0.0), "just past 2.0 tiles")
+	var max_r: float = v.max_range_tiles()
+	assert_gt(max_r, 0.0, "accept range loaded from data/scaling.json")
+	v.resolver = _at(max_r, 0.0)
+	assert_true(v.validate(1, 1, 42, 0.0, 0.0), "exactly the accept range")
+	v.resolver = _at(max_r + 0.005, 0.0)
+	assert_false(v.validate(1, 2, 42, 0.0, 0.0), "just past the accept range")
 	assert_eq(v.dropped_range, 1)
 
 
@@ -143,3 +145,70 @@ func test_host_drops_unknown_and_out_of_range_silently() -> void:
 	assert_eq(seen.size(), 0, "nothing applied")
 	assert_eq(_errors_received(), 0, "no ErrorReply")
 	assert_eq(_ws.get_ready_state(), WebSocketPeer.STATE_OPEN)
+
+func test_seq_newer_half_range_boundary() -> void:
+	assert_false(Seq.seq_newer(5, 5))
+	assert_false(Seq.seq_newer(4, 5))
+	assert_true(Seq.seq_newer(6, 5))
+	assert_true(Seq.seq_newer(1, 0xFFFFFFFF), "wrap 0xFFFFFFFF -> 1")
+	# Difference of 2^31-1 is newer; 2^31 is not (the half-range boundary).
+	assert_true(Seq.seq_newer(0x7FFFFFFE, 0xFFFFFFFF))
+	assert_false(Seq.seq_newer(0x7FFFFFFF, 0xFFFFFFFF))
+	assert_false(Seq.seq_newer(0x80000000, 0))
+	assert_true(Seq.seq_newer(0x7FFFFFFF, 0))
+
+
+func test_seq_is_next_treats_last_zero_as_uninitialized() -> void:
+	assert_false(Seq.seq_is_next(0, 0))
+	assert_true(Seq.seq_is_next(1, 0))
+	assert_true(Seq.seq_is_next(0x80000000, 0), "first seq may be in the upper half")
+	assert_true(Seq.seq_is_next(0xFFFFFFFF, 0))
+	assert_false(Seq.seq_is_next(1, 1))
+	assert_true(Seq.seq_is_next(1, 0xFFFFFFFF))
+
+
+func test_interact_accepted_once_after_seq_wrap() -> void:
+	var v := HostInteractValidator.new()
+	v.resolver = _at(0.0, 0.0)
+	assert_true(v.validate(1, 0xFFFFFFFF, 42, 0.0, 0.0), "last seq before wrap")
+	assert_true(v.validate(1, 1, 42, 0.0, 0.0), "interact right after the wrap")
+	assert_false(v.validate(1, 1, 42, 0.0, 0.0), "same post-wrap seq again")
+	assert_eq(v.accepted, 2)
+	assert_eq(v.dropped_repeat, 1)
+
+
+func test_resent_pre_wrap_seq_is_dropped() -> void:
+	var v := HostInteractValidator.new()
+	v.resolver = _at(0.0, 0.0)
+	assert_true(v.validate(1, 0xFFFFFFFF, 42, 0.0, 0.0))
+	assert_true(v.validate(1, 1, 42, 0.0, 0.0))
+	assert_false(v.validate(1, 0xFFFFFFFF, 42, 0.0, 0.0), "resent seq just before the wrap")
+	assert_eq(v.accepted, 2)
+	assert_eq(v.dropped_repeat, 1)
+
+
+func test_host_applies_input_frames_across_seq_wrap() -> void:
+	_start()
+	var seen: Array = []
+	var p: LobbyHost.HostPlayer = _host.players[0]
+	_host.interact_validator.resolver = func(t: int, _pid: int) -> Dictionary:
+		return {"x": p.x, "y": p.y} if t == 42 else {}
+	_host.on_interact = func(pid: int, t: int) -> void: seen.append([pid, t])
+	_send_input(0xFFFFFFFE, 0)
+	_send_input(0xFFFFFFFF, 42)
+	_send_input(1, 42)
+	_send_input(2, 0)
+	assert_true(_pump(func() -> bool: return p.seq == 2), "stream 0xFFFFFFFF -> 1 stays applied")
+	assert_eq(seen.size(), 2, "interact at wrap and immediately after, each once")
+	assert_eq(seen[0][1], 42)
+	assert_eq(seen[1][1], 42)
+	_send_input(0xFFFFFFFF, 42)  # resent pre-wrap seq
+	_send_input(1, 42)  # resent post-wrap interact
+	for i in range(5):
+		_host.run_tick()
+		_ws.poll()
+	assert_eq(p.seq, 2, "resent pre-wrap seq did not roll the host back")
+	assert_eq(seen.size(), 2, "resent wrap seqs did not apply another interact")
+	_send_input(3, 42)
+	assert_true(_pump(func() -> bool: return seen.size() == 3), "a fresh seq can interact")
+
