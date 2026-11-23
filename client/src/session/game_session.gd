@@ -1,14 +1,22 @@
 extends Node
 ## Autoload. Owns a WorldSource, steps it at 20 Hz, and exposes snapshots for
 ## render interpolation. Gameplay nodes emit input and read state only.
-## Solo play and a later player-hosted lobby both run LocalSim (plain
-## RefCounted game rules). This node is the session wrapper, not the sim.
+## Solo, listen-host, and remote client all submit InputIntent through source.
+## The sim itself is LocalSim (plain RefCounted game rules), not this node.
+
+enum Mode { SOLO, HOST, CLIENT }
 
 var config: SimConfig
 var source: WorldSource
 var prev_snapshot: WorldSnapshot = WorldSnapshot.new()
 var curr_snapshot: WorldSnapshot = WorldSnapshot.new()
 var alpha: float = 0.0
+var mode: Mode = Mode.SOLO
+var lobby_host: LobbyHost
+var lobby_client: LobbyClient
+var lobby_settings: LobbySettings
+var played_offline: bool = true
+var local_player_id: int = 1
 
 ## Latest raw input, written by the arena / virtual sticks each display frame.
 var move_x: float = 0.0
@@ -25,17 +33,92 @@ func _ready() -> void:
 	config = load("res://resources/sim_config.tres") as SimConfig
 	if config == null:
 		config = SimConfig.new()
+	# Boot may immediately switch to host/client; default solo keeps the
+	# practice yard working if the arena is opened on its own.
+	start_solo()
+
+
+func start_solo() -> void:
+	_teardown_net()
+	mode = Mode.SOLO
+	local_player_id = 1
+	source = _new_sim()
+	_reset_snapshots()
+
+
+func start_host(settings: LobbySettings, bind_host: String = "*") -> Error:
+	_teardown_net()
+	lobby_settings = settings
+	var sim := _new_sim()
+	lobby_host = LobbyHost.new()
+	lobby_host.name = "LobbyHost"
+	add_child(lobby_host)
+	var err: Error = lobby_host.start(settings, sim, bind_host)
+	if err != OK:
+		lobby_host.queue_free()
+		lobby_host = null
+		start_solo()
+		return err
+	mode = Mode.HOST
+	local_player_id = lobby_host.host_player_id
+	source = HostWorldSource.new(lobby_host)
+	_reset_snapshots()
+	return OK
+
+
+func start_client(url: String, offline: bool = true, join_code: String = "") -> Error:
+	_teardown_net()
+	played_offline = offline
+	lobby_client = LobbyClient.new()
+	lobby_client.name = "LobbyClient"
+	add_child(lobby_client)
+	var err: Error = lobby_client.connect_to(url, offline, join_code)
+	if err != OK:
+		lobby_client.queue_free()
+		lobby_client = null
+		start_solo()
+		return err
+	lobby_client.welcomed.connect(_on_client_welcomed)
+	mode = Mode.CLIENT
+	source = ClientWorldSource.new(lobby_client)
+	_reset_snapshots()
+	return OK
+
+
+func _on_client_welcomed(pid: int) -> void:
+	local_player_id = pid
+
+
+func _new_sim() -> LocalSim:
 	var catalog := DataCatalog.load_default()
 	var sim := LocalSim.new(config, 16.0, 16.0, catalog)
 	sim.set_bounds(0.0, 0.0, 32.0, 32.0)
 	sim.set_world_seed(1)
 	sim.spawn_enemy("burrmite", 24.0, 10.0)
-	source = sim
-	curr_snapshot = source.snapshot()
+	return sim
+
+
+func _reset_snapshots() -> void:
+	_accum = 0.0
+	_seq = 0
+	curr_snapshot = source.snapshot() if source != null else WorldSnapshot.new()
 	prev_snapshot = curr_snapshot.duplicate_snapshot()
 
 
+func _teardown_net() -> void:
+	if lobby_host != null:
+		lobby_host.stop()
+		lobby_host.queue_free()
+		lobby_host = null
+	if lobby_client != null:
+		lobby_client.stop()
+		lobby_client.queue_free()
+		lobby_client = null
+
+
 func _process(delta: float) -> void:
+	if source == null:
+		return
 	var dt: float = SimConstants.TICK_DT
 	_accum += delta
 	var steps: int = 0
@@ -47,7 +130,7 @@ func _process(delta: float) -> void:
 		if _seq > 0xFFFFFFFF:
 			_seq = 1
 		var intent := InputIntent.from_raw(_seq, move_x, move_y, aim, fire_held)
-		source.submit_input(intent)
+		source.submit_player_input(local_player_id, intent)
 		source.step()
 		prev_snapshot = curr_snapshot
 		curr_snapshot = source.snapshot()
