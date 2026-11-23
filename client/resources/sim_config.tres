@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="SimConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/core/sim_config.gd" id="1_cfg"]
+
+[resource]
+script = ExtResource("1_cfg")
+move_speed_tiles_per_s = 5.0
+fire_rate_shots_per_s = 2.0
+tempo_bonus = 0.0
+projectile_speed_tiles_per_s = 14.0
+projectile_range_tiles = 7.0
+projectile_lifetime_ticks_override = 0
+player_radius_tiles = 0.35
+projectile_radius_tiles = 0.15

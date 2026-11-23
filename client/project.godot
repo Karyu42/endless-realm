@@ -1,0 +1,29 @@
+; Endless Realm client (Godot 4.7.2-stable). Edited as text on purpose;
+; open it in the editor if you want to tweak display settings.
+config_version=5
+
+[application]
+
+config/name="Endless Realm"
+config/description="Offline practice slice: move, aim, and shoot."
+config/version="0.1.0"
+run/main_scene="res://src/render/arena.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+config/icon="res://icon.svg"
+
+[autoload]
+
+GameSession="*res://src/session/game_session.gd"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/canvas_textures/default_texture_filter=0
