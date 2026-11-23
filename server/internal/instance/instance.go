@@ -4,6 +4,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -29,6 +30,15 @@ const (
 	MaxMultiplier   = 1.5
 	MultiplierStep  = 0.05
 	ProtocolVersion = 1
+
+	// DefaultInstanceID is the process-default instance the bot/smoke path
+	// and a new session start in.
+	DefaultInstanceID = uint64(1)
+	// DefaultMaxPlayers is the lobby max-player default (GD spec: 1–50, default 50).
+	// Portal instances cap at the lobby's configured max. Tests use a smaller value.
+	DefaultMaxPlayers = 50
+	MinMaxPlayers     = 1
+	MaxMaxPlayers     = 50
 
 	// MaxCatchUpTicks is the most Steps Run will take after falling behind.
 	// Further overdue ticks are skipped so a long stall does not replay
@@ -92,15 +102,35 @@ func New(seed uint64, m100 int, clk clock.Clock) (*Instance, error) {
 	}, nil
 }
 
+// ErrInvalidMultiplier is the sentinel wrapped by multiplier validators.
+var ErrInvalidMultiplier = errors.New("invalid multiplier")
+
+// ValidateMaxPlayers accepts a lobby max-player count.
+func ValidateMaxPlayers(n int) error {
+	if n < MinMaxPlayers || n > MaxMaxPlayers {
+		return fmt.Errorf("max players %d is outside [%d, %d]", n, MinMaxPlayers, MaxMaxPlayers)
+	}
+	return nil
+}
+
 // ValidateM100 accepts a multiplier in hundredths on the v0.1 grid.
 func ValidateM100(m100 int) error {
 	if m100 < MinM100 || m100 > MaxM100 {
-		return fmt.Errorf("level multiplier %d hundredths is outside [%d, %d]", m100, MinM100, MaxM100)
+		return fmt.Errorf("%w: level multiplier %d hundredths is outside [%d, %d]", ErrInvalidMultiplier, m100, MinM100, MaxM100)
 	}
 	if m100%M100Step != 0 {
-		return fmt.Errorf("level multiplier %d hundredths is not a multiple of %d (0.05 steps)", m100, M100Step)
+		return fmt.Errorf("%w: level multiplier %d hundredths is not a multiple of %d (0.05 steps)", ErrInvalidMultiplier, m100, M100Step)
 	}
 	return nil
+}
+
+// ValidateM100U32 is ValidateM100 for a wire uint32, so values above MaxInt
+// (or above MaxM100) are rejected without overflowing a 32-bit int.
+func ValidateM100U32(m100 uint32) error {
+	if m100 > uint32(MaxM100) {
+		return fmt.Errorf("%w: level multiplier %d hundredths is outside [%d, %d]", ErrInvalidMultiplier, m100, MinM100, MaxM100)
+	}
+	return ValidateM100(int(m100))
 }
 
 // MultiplierFromFloat accepts m only when it is a whole number of
@@ -109,12 +139,12 @@ func ValidateM100(m100 int) error {
 // rounded. NaN and ±Inf are rejected.
 func MultiplierFromFloat(m float64) (int, error) {
 	if math.IsNaN(m) || math.IsInf(m, 0) {
-		return 0, fmt.Errorf("level multiplier %v is not a finite number", m)
+		return 0, fmt.Errorf("%w: level multiplier %v is not a finite number", ErrInvalidMultiplier, m)
 	}
 	scaled := m * 100
 	rounded := math.Round(scaled)
 	if math.Abs(scaled-rounded) > hundredthsEps {
-		return 0, fmt.Errorf("level multiplier %g is not a whole number of hundredths", m)
+		return 0, fmt.Errorf("%w: level multiplier %g is not a whole number of hundredths", ErrInvalidMultiplier, m)
 	}
 	m100 := int(rounded)
 	if err := ValidateM100(m100); err != nil {
@@ -150,16 +180,17 @@ func ParseMultiplier(s string) (int, error) {
 	if int64(int(n)) != n {
 		return 0, fmt.Errorf("level multiplier %q overflows", s)
 	}
+	const intHint = "integers under 10 are decimals, 10 and above are hundredths"
 	if n >= 0 && n < 10 {
 		m100, err := MultiplierFromFloat(float64(n))
 		if err != nil {
-			return 0, fmt.Errorf("level multiplier %q is taken as %d.00 (integers under 10 are decimals, 10 and above are hundredths): %w", s, n, err)
+			return 0, fmt.Errorf("level multiplier %q is taken as %d.00 (%s): %w", s, n, intHint, err)
 		}
 		return m100, nil
 	}
 	m100 := int(n)
 	if err := ValidateM100(m100); err != nil {
-		return 0, fmt.Errorf("level multiplier %q: %w", s, err)
+		return 0, fmt.Errorf("level multiplier %q is taken as %d hundredths (%s): %w", s, m100, intHint, err)
 	}
 	return m100, nil
 }

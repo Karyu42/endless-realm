@@ -21,6 +21,66 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Application error (the connection stays open). Handshake failures still
+// use Reject and close the socket.
+type ErrorCode int32
+
+const (
+	ErrorCode_ERROR_CODE_UNSPECIFIED ErrorCode = 0
+	ErrorCode_INVALID_MULTIPLIER     ErrorCode = 1
+	ErrorCode_INSTANCE_NOT_FOUND     ErrorCode = 2
+	ErrorCode_ALREADY_IN_INSTANCE    ErrorCode = 3
+	ErrorCode_INSTANCE_FULL          ErrorCode = 4
+	ErrorCode_OPEN_PORTAL_LIMIT      ErrorCode = 5
+)
+
+// Enum value maps for ErrorCode.
+var (
+	ErrorCode_name = map[int32]string{
+		0: "ERROR_CODE_UNSPECIFIED",
+		1: "INVALID_MULTIPLIER",
+		2: "INSTANCE_NOT_FOUND",
+		3: "ALREADY_IN_INSTANCE",
+		4: "INSTANCE_FULL",
+		5: "OPEN_PORTAL_LIMIT",
+	}
+	ErrorCode_value = map[string]int32{
+		"ERROR_CODE_UNSPECIFIED": 0,
+		"INVALID_MULTIPLIER":     1,
+		"INSTANCE_NOT_FOUND":     2,
+		"ALREADY_IN_INSTANCE":    3,
+		"INSTANCE_FULL":          4,
+		"OPEN_PORTAL_LIMIT":      5,
+	}
+)
+
+func (x ErrorCode) Enum() *ErrorCode {
+	p := new(ErrorCode)
+	*p = x
+	return p
+}
+
+func (x ErrorCode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ErrorCode) Descriptor() protoreflect.EnumDescriptor {
+	return file_v1_protocol_proto_enumTypes[0].Descriptor()
+}
+
+func (ErrorCode) Type() protoreflect.EnumType {
+	return &file_v1_protocol_proto_enumTypes[0]
+}
+
+func (x ErrorCode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ErrorCode.Descriptor instead.
+func (ErrorCode) EnumDescriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{0}
+}
+
 type Hello struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ProtocolVersion uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
@@ -72,7 +132,11 @@ type Welcome struct {
 	TickHz          uint32                 `protobuf:"varint,3,opt,name=tick_hz,json=tickHz,proto3" json:"tick_hz,omitempty"`
 	InstanceSeed    uint64                 `protobuf:"varint,4,opt,name=instance_seed,json=instanceSeed,proto3" json:"instance_seed,omitempty"`
 	// Display only; the client must not use this to compute rewards.
-	Multiplier    float32 `protobuf:"fixed32,5,opt,name=multiplier,proto3" json:"multiplier,omitempty"`
+	Multiplier float32 `protobuf:"fixed32,5,opt,name=multiplier,proto3" json:"multiplier,omitempty"`
+	// Instance this session starts in (the process default / smoke instance).
+	InstanceId uint64 `protobuf:"varint,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	// Locked M100 of instance_id. Prefer this over the display float.
+	M100          uint32 `protobuf:"varint,7,opt,name=m100,proto3" json:"m100,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -138,6 +202,20 @@ func (x *Welcome) GetInstanceSeed() uint64 {
 func (x *Welcome) GetMultiplier() float32 {
 	if x != nil {
 		return x.Multiplier
+	}
+	return 0
+}
+
+func (x *Welcome) GetInstanceId() uint64 {
+	if x != nil {
+		return x.InstanceId
+	}
+	return 0
+}
+
+func (x *Welcome) GetM100() uint32 {
+	if x != nil {
+		return x.M100
 	}
 	return 0
 }
@@ -384,12 +462,476 @@ func (x *PlayerStub) GetAppliedSeq() uint32 {
 	return 0
 }
 
+// Open a new portal instance with a locked multiplier.
+// m100 is whole hundredths: 50 ≤ m100 ≤ 150 and m100 % 5 == 0 (v0.1).
+// On success the opener is moved into the new instance.
+type OpenPortal struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	M100          uint32                 `protobuf:"varint,1,opt,name=m100,proto3" json:"m100,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OpenPortal) Reset() {
+	*x = OpenPortal{}
+	mi := &file_v1_protocol_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OpenPortal) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OpenPortal) ProtoMessage() {}
+
+func (x *OpenPortal) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OpenPortal.ProtoReflect.Descriptor instead.
+func (*OpenPortal) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *OpenPortal) GetM100() uint32 {
+	if x != nil {
+		return x.M100
+	}
+	return 0
+}
+
+// Join an existing instance by id (including the default instance, which
+// returns the session to the process default / hub).
+type JoinInstance struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId    uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JoinInstance) Reset() {
+	*x = JoinInstance{}
+	mi := &file_v1_protocol_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JoinInstance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JoinInstance) ProtoMessage() {}
+
+func (x *JoinInstance) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JoinInstance.ProtoReflect.Descriptor instead.
+func (*JoinInstance) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *JoinInstance) GetInstanceId() uint64 {
+	if x != nil {
+		return x.InstanceId
+	}
+	return 0
+}
+
+// Return to the process default instance without closing the portal.
+type LeaveInstance struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LeaveInstance) Reset() {
+	*x = LeaveInstance{}
+	mi := &file_v1_protocol_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LeaveInstance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LeaveInstance) ProtoMessage() {}
+
+func (x *LeaveInstance) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LeaveInstance.ProtoReflect.Descriptor instead.
+func (*LeaveInstance) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{8}
+}
+
+type ListInstances struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListInstances) Reset() {
+	*x = ListInstances{}
+	mi := &file_v1_protocol_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListInstances) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListInstances) ProtoMessage() {}
+
+func (x *ListInstances) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListInstances.ProtoReflect.Descriptor instead.
+func (*ListInstances) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{9}
+}
+
+type InstanceInfo struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	M100       uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
+	// Unset (0) in InstanceList. Seeds are only sent on Welcome,
+	// OpenPortalOk, and JoinInstanceOk for the caller's own instance.
+	Seed          uint64 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
+	PlayerCount   uint32 `protobuf:"varint,4,opt,name=player_count,json=playerCount,proto3" json:"player_count,omitempty"`
+	IsDefault     bool   `protobuf:"varint,5,opt,name=is_default,json=isDefault,proto3" json:"is_default,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InstanceInfo) Reset() {
+	*x = InstanceInfo{}
+	mi := &file_v1_protocol_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstanceInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstanceInfo) ProtoMessage() {}
+
+func (x *InstanceInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstanceInfo.ProtoReflect.Descriptor instead.
+func (*InstanceInfo) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *InstanceInfo) GetInstanceId() uint64 {
+	if x != nil {
+		return x.InstanceId
+	}
+	return 0
+}
+
+func (x *InstanceInfo) GetM100() uint32 {
+	if x != nil {
+		return x.M100
+	}
+	return 0
+}
+
+func (x *InstanceInfo) GetSeed() uint64 {
+	if x != nil {
+		return x.Seed
+	}
+	return 0
+}
+
+func (x *InstanceInfo) GetPlayerCount() uint32 {
+	if x != nil {
+		return x.PlayerCount
+	}
+	return 0
+}
+
+func (x *InstanceInfo) GetIsDefault() bool {
+	if x != nil {
+		return x.IsDefault
+	}
+	return false
+}
+
+type OpenPortalOk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId    uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	M100          uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
+	Seed          uint64                 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OpenPortalOk) Reset() {
+	*x = OpenPortalOk{}
+	mi := &file_v1_protocol_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OpenPortalOk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OpenPortalOk) ProtoMessage() {}
+
+func (x *OpenPortalOk) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OpenPortalOk.ProtoReflect.Descriptor instead.
+func (*OpenPortalOk) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *OpenPortalOk) GetInstanceId() uint64 {
+	if x != nil {
+		return x.InstanceId
+	}
+	return 0
+}
+
+func (x *OpenPortalOk) GetM100() uint32 {
+	if x != nil {
+		return x.M100
+	}
+	return 0
+}
+
+func (x *OpenPortalOk) GetSeed() uint64 {
+	if x != nil {
+		return x.Seed
+	}
+	return 0
+}
+
+type JoinInstanceOk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId    uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	M100          uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
+	Seed          uint64                 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JoinInstanceOk) Reset() {
+	*x = JoinInstanceOk{}
+	mi := &file_v1_protocol_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JoinInstanceOk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JoinInstanceOk) ProtoMessage() {}
+
+func (x *JoinInstanceOk) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JoinInstanceOk.ProtoReflect.Descriptor instead.
+func (*JoinInstanceOk) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *JoinInstanceOk) GetInstanceId() uint64 {
+	if x != nil {
+		return x.InstanceId
+	}
+	return 0
+}
+
+func (x *JoinInstanceOk) GetM100() uint32 {
+	if x != nil {
+		return x.M100
+	}
+	return 0
+}
+
+func (x *JoinInstanceOk) GetSeed() uint64 {
+	if x != nil {
+		return x.Seed
+	}
+	return 0
+}
+
+type InstanceList struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Instances     []*InstanceInfo        `protobuf:"bytes,1,rep,name=instances,proto3" json:"instances,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InstanceList) Reset() {
+	*x = InstanceList{}
+	mi := &file_v1_protocol_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstanceList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstanceList) ProtoMessage() {}
+
+func (x *InstanceList) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstanceList.ProtoReflect.Descriptor instead.
+func (*InstanceList) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *InstanceList) GetInstances() []*InstanceInfo {
+	if x != nil {
+		return x.Instances
+	}
+	return nil
+}
+
+type Error struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Code          ErrorCode              `protobuf:"varint,1,opt,name=code,proto3,enum=endless.v1.ErrorCode" json:"code,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Error) Reset() {
+	*x = Error{}
+	mi := &file_v1_protocol_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Error) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Error) ProtoMessage() {}
+
+func (x *Error) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Error.ProtoReflect.Descriptor instead.
+func (*Error) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *Error) GetCode() ErrorCode {
+	if x != nil {
+		return x.Code
+	}
+	return ErrorCode_ERROR_CODE_UNSPECIFIED
+}
+
+func (x *Error) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 type ClientMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Payload:
 	//
 	//	*ClientMessage_Hello
 	//	*ClientMessage_Input
+	//	*ClientMessage_OpenPortal
+	//	*ClientMessage_JoinInstance
+	//	*ClientMessage_ListInstances
+	//	*ClientMessage_LeaveInstance
 	Payload       isClientMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -397,7 +939,7 @@ type ClientMessage struct {
 
 func (x *ClientMessage) Reset() {
 	*x = ClientMessage{}
-	mi := &file_v1_protocol_proto_msgTypes[6]
+	mi := &file_v1_protocol_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -409,7 +951,7 @@ func (x *ClientMessage) String() string {
 func (*ClientMessage) ProtoMessage() {}
 
 func (x *ClientMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[6]
+	mi := &file_v1_protocol_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -422,7 +964,7 @@ func (x *ClientMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientMessage.ProtoReflect.Descriptor instead.
 func (*ClientMessage) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{6}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ClientMessage) GetPayload() isClientMessage_Payload {
@@ -450,6 +992,42 @@ func (x *ClientMessage) GetInput() *InputFrame {
 	return nil
 }
 
+func (x *ClientMessage) GetOpenPortal() *OpenPortal {
+	if x != nil {
+		if x, ok := x.Payload.(*ClientMessage_OpenPortal); ok {
+			return x.OpenPortal
+		}
+	}
+	return nil
+}
+
+func (x *ClientMessage) GetJoinInstance() *JoinInstance {
+	if x != nil {
+		if x, ok := x.Payload.(*ClientMessage_JoinInstance); ok {
+			return x.JoinInstance
+		}
+	}
+	return nil
+}
+
+func (x *ClientMessage) GetListInstances() *ListInstances {
+	if x != nil {
+		if x, ok := x.Payload.(*ClientMessage_ListInstances); ok {
+			return x.ListInstances
+		}
+	}
+	return nil
+}
+
+func (x *ClientMessage) GetLeaveInstance() *LeaveInstance {
+	if x != nil {
+		if x, ok := x.Payload.(*ClientMessage_LeaveInstance); ok {
+			return x.LeaveInstance
+		}
+	}
+	return nil
+}
+
 type isClientMessage_Payload interface {
 	isClientMessage_Payload()
 }
@@ -462,9 +1040,33 @@ type ClientMessage_Input struct {
 	Input *InputFrame `protobuf:"bytes,2,opt,name=input,proto3,oneof"`
 }
 
+type ClientMessage_OpenPortal struct {
+	OpenPortal *OpenPortal `protobuf:"bytes,3,opt,name=open_portal,json=openPortal,proto3,oneof"`
+}
+
+type ClientMessage_JoinInstance struct {
+	JoinInstance *JoinInstance `protobuf:"bytes,4,opt,name=join_instance,json=joinInstance,proto3,oneof"`
+}
+
+type ClientMessage_ListInstances struct {
+	ListInstances *ListInstances `protobuf:"bytes,5,opt,name=list_instances,json=listInstances,proto3,oneof"`
+}
+
+type ClientMessage_LeaveInstance struct {
+	LeaveInstance *LeaveInstance `protobuf:"bytes,6,opt,name=leave_instance,json=leaveInstance,proto3,oneof"`
+}
+
 func (*ClientMessage_Hello) isClientMessage_Payload() {}
 
 func (*ClientMessage_Input) isClientMessage_Payload() {}
+
+func (*ClientMessage_OpenPortal) isClientMessage_Payload() {}
+
+func (*ClientMessage_JoinInstance) isClientMessage_Payload() {}
+
+func (*ClientMessage_ListInstances) isClientMessage_Payload() {}
+
+func (*ClientMessage_LeaveInstance) isClientMessage_Payload() {}
 
 type ServerMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -473,6 +1075,10 @@ type ServerMessage struct {
 	//	*ServerMessage_Welcome
 	//	*ServerMessage_Reject
 	//	*ServerMessage_Snapshot
+	//	*ServerMessage_OpenPortalOk
+	//	*ServerMessage_JoinInstanceOk
+	//	*ServerMessage_InstanceList
+	//	*ServerMessage_Error
 	Payload       isServerMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -480,7 +1086,7 @@ type ServerMessage struct {
 
 func (x *ServerMessage) Reset() {
 	*x = ServerMessage{}
-	mi := &file_v1_protocol_proto_msgTypes[7]
+	mi := &file_v1_protocol_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -492,7 +1098,7 @@ func (x *ServerMessage) String() string {
 func (*ServerMessage) ProtoMessage() {}
 
 func (x *ServerMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[7]
+	mi := &file_v1_protocol_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -505,7 +1111,7 @@ func (x *ServerMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerMessage.ProtoReflect.Descriptor instead.
 func (*ServerMessage) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{7}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ServerMessage) GetPayload() isServerMessage_Payload {
@@ -542,6 +1148,42 @@ func (x *ServerMessage) GetSnapshot() *Snapshot {
 	return nil
 }
 
+func (x *ServerMessage) GetOpenPortalOk() *OpenPortalOk {
+	if x != nil {
+		if x, ok := x.Payload.(*ServerMessage_OpenPortalOk); ok {
+			return x.OpenPortalOk
+		}
+	}
+	return nil
+}
+
+func (x *ServerMessage) GetJoinInstanceOk() *JoinInstanceOk {
+	if x != nil {
+		if x, ok := x.Payload.(*ServerMessage_JoinInstanceOk); ok {
+			return x.JoinInstanceOk
+		}
+	}
+	return nil
+}
+
+func (x *ServerMessage) GetInstanceList() *InstanceList {
+	if x != nil {
+		if x, ok := x.Payload.(*ServerMessage_InstanceList); ok {
+			return x.InstanceList
+		}
+	}
+	return nil
+}
+
+func (x *ServerMessage) GetError() *Error {
+	if x != nil {
+		if x, ok := x.Payload.(*ServerMessage_Error); ok {
+			return x.Error
+		}
+	}
+	return nil
+}
+
 type isServerMessage_Payload interface {
 	isServerMessage_Payload()
 }
@@ -558,11 +1200,35 @@ type ServerMessage_Snapshot struct {
 	Snapshot *Snapshot `protobuf:"bytes,3,opt,name=snapshot,proto3,oneof"`
 }
 
+type ServerMessage_OpenPortalOk struct {
+	OpenPortalOk *OpenPortalOk `protobuf:"bytes,4,opt,name=open_portal_ok,json=openPortalOk,proto3,oneof"`
+}
+
+type ServerMessage_JoinInstanceOk struct {
+	JoinInstanceOk *JoinInstanceOk `protobuf:"bytes,5,opt,name=join_instance_ok,json=joinInstanceOk,proto3,oneof"`
+}
+
+type ServerMessage_InstanceList struct {
+	InstanceList *InstanceList `protobuf:"bytes,6,opt,name=instance_list,json=instanceList,proto3,oneof"`
+}
+
+type ServerMessage_Error struct {
+	Error *Error `protobuf:"bytes,7,opt,name=error,proto3,oneof"`
+}
+
 func (*ServerMessage_Welcome) isServerMessage_Payload() {}
 
 func (*ServerMessage_Reject) isServerMessage_Payload() {}
 
 func (*ServerMessage_Snapshot) isServerMessage_Payload() {}
+
+func (*ServerMessage_OpenPortalOk) isServerMessage_Payload() {}
+
+func (*ServerMessage_JoinInstanceOk) isServerMessage_Payload() {}
+
+func (*ServerMessage_InstanceList) isServerMessage_Payload() {}
+
+func (*ServerMessage_Error) isServerMessage_Payload() {}
 
 var File_v1_protocol_proto protoreflect.FileDescriptor
 
@@ -571,7 +1237,7 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\x11v1/protocol.proto\x12\n" +
 	"endless.v1\"2\n" +
 	"\x05Hello\x12)\n" +
-	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\"\xaf\x01\n" +
+	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\"\xe4\x01\n" +
 	"\aWelcome\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1b\n" +
 	"\tplayer_id\x18\x02 \x01(\rR\bplayerId\x12\x17\n" +
@@ -579,7 +1245,10 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\rinstance_seed\x18\x04 \x01(\x04R\finstanceSeed\x12\x1e\n" +
 	"\n" +
 	"multiplier\x18\x05 \x01(\x02R\n" +
-	"multiplier\"\x90\x01\n" +
+	"multiplier\x12\x1f\n" +
+	"\vinstance_id\x18\x06 \x01(\x04R\n" +
+	"instanceId\x12\x12\n" +
+	"\x04m100\x18\a \x01(\rR\x04m100\"\x90\x01\n" +
 	"\x06Reject\x126\n" +
 	"\x17server_protocol_version\x18\x01 \x01(\rR\x15serverProtocolVersion\x126\n" +
 	"\x17client_protocol_version\x18\x02 \x01(\rR\x15clientProtocolVersion\x12\x16\n" +
@@ -598,16 +1267,63 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"PlayerStub\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\rR\x02id\x12\x1f\n" +
 	"\vapplied_seq\x18\x02 \x01(\rR\n" +
-	"appliedSeq\"u\n" +
+	"appliedSeq\" \n" +
+	"\n" +
+	"OpenPortal\x12\x12\n" +
+	"\x04m100\x18\x01 \x01(\rR\x04m100\"/\n" +
+	"\fJoinInstance\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\x04R\n" +
+	"instanceId\"\x0f\n" +
+	"\rLeaveInstance\"\x0f\n" +
+	"\rListInstances\"\x99\x01\n" +
+	"\fInstanceInfo\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\x04R\n" +
+	"instanceId\x12\x12\n" +
+	"\x04m100\x18\x02 \x01(\rR\x04m100\x12\x12\n" +
+	"\x04seed\x18\x03 \x01(\x04R\x04seed\x12!\n" +
+	"\fplayer_count\x18\x04 \x01(\rR\vplayerCount\x12\x1d\n" +
+	"\n" +
+	"is_default\x18\x05 \x01(\bR\tisDefault\"W\n" +
+	"\fOpenPortalOk\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\x04R\n" +
+	"instanceId\x12\x12\n" +
+	"\x04m100\x18\x02 \x01(\rR\x04m100\x12\x12\n" +
+	"\x04seed\x18\x03 \x01(\x04R\x04seed\"Y\n" +
+	"\x0eJoinInstanceOk\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\x04R\n" +
+	"instanceId\x12\x12\n" +
+	"\x04m100\x18\x02 \x01(\rR\x04m100\x12\x12\n" +
+	"\x04seed\x18\x03 \x01(\x04R\x04seed\"F\n" +
+	"\fInstanceList\x126\n" +
+	"\tinstances\x18\x01 \x03(\v2\x18.endless.v1.InstanceInfoR\tinstances\"J\n" +
+	"\x05Error\x12)\n" +
+	"\x04code\x18\x01 \x01(\x0e2\x15.endless.v1.ErrorCodeR\x04code\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xf9\x02\n" +
 	"\rClientMessage\x12)\n" +
 	"\x05hello\x18\x01 \x01(\v2\x11.endless.v1.HelloH\x00R\x05hello\x12.\n" +
-	"\x05input\x18\x02 \x01(\v2\x16.endless.v1.InputFrameH\x00R\x05inputB\t\n" +
-	"\apayload\"\xad\x01\n" +
+	"\x05input\x18\x02 \x01(\v2\x16.endless.v1.InputFrameH\x00R\x05input\x129\n" +
+	"\vopen_portal\x18\x03 \x01(\v2\x16.endless.v1.OpenPortalH\x00R\n" +
+	"openPortal\x12?\n" +
+	"\rjoin_instance\x18\x04 \x01(\v2\x18.endless.v1.JoinInstanceH\x00R\fjoinInstance\x12B\n" +
+	"\x0elist_instances\x18\x05 \x01(\v2\x19.endless.v1.ListInstancesH\x00R\rlistInstances\x12B\n" +
+	"\x0eleave_instance\x18\x06 \x01(\v2\x19.endless.v1.LeaveInstanceH\x00R\rleaveInstanceB\t\n" +
+	"\apayload\"\xa3\x03\n" +
 	"\rServerMessage\x12/\n" +
 	"\awelcome\x18\x01 \x01(\v2\x13.endless.v1.WelcomeH\x00R\awelcome\x12,\n" +
 	"\x06reject\x18\x02 \x01(\v2\x12.endless.v1.RejectH\x00R\x06reject\x122\n" +
-	"\bsnapshot\x18\x03 \x01(\v2\x14.endless.v1.SnapshotH\x00R\bsnapshotB\t\n" +
-	"\apayloadBIZGgithub.com/Karyu42/endless-realm/server/internal/protocol/v1;protocolv1b\x06proto3"
+	"\bsnapshot\x18\x03 \x01(\v2\x14.endless.v1.SnapshotH\x00R\bsnapshot\x12@\n" +
+	"\x0eopen_portal_ok\x18\x04 \x01(\v2\x18.endless.v1.OpenPortalOkH\x00R\fopenPortalOk\x12F\n" +
+	"\x10join_instance_ok\x18\x05 \x01(\v2\x1a.endless.v1.JoinInstanceOkH\x00R\x0ejoinInstanceOk\x12?\n" +
+	"\rinstance_list\x18\x06 \x01(\v2\x18.endless.v1.InstanceListH\x00R\finstanceList\x12)\n" +
+	"\x05error\x18\a \x01(\v2\x11.endless.v1.ErrorH\x00R\x05errorB\t\n" +
+	"\apayload*\x9a\x01\n" +
+	"\tErrorCode\x12\x1a\n" +
+	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12INVALID_MULTIPLIER\x10\x01\x12\x16\n" +
+	"\x12INSTANCE_NOT_FOUND\x10\x02\x12\x17\n" +
+	"\x13ALREADY_IN_INSTANCE\x10\x03\x12\x11\n" +
+	"\rINSTANCE_FULL\x10\x04\x12\x15\n" +
+	"\x11OPEN_PORTAL_LIMIT\x10\x05BIZGgithub.com/Karyu42/endless-realm/server/internal/protocol/v1;protocolv1b\x06proto3"
 
 var (
 	file_v1_protocol_proto_rawDescOnce sync.Once
@@ -621,29 +1337,50 @@ func file_v1_protocol_proto_rawDescGZIP() []byte {
 	return file_v1_protocol_proto_rawDescData
 }
 
-var file_v1_protocol_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_v1_protocol_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_v1_protocol_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_v1_protocol_proto_goTypes = []any{
-	(*Hello)(nil),         // 0: endless.v1.Hello
-	(*Welcome)(nil),       // 1: endless.v1.Welcome
-	(*Reject)(nil),        // 2: endless.v1.Reject
-	(*InputFrame)(nil),    // 3: endless.v1.InputFrame
-	(*Snapshot)(nil),      // 4: endless.v1.Snapshot
-	(*PlayerStub)(nil),    // 5: endless.v1.PlayerStub
-	(*ClientMessage)(nil), // 6: endless.v1.ClientMessage
-	(*ServerMessage)(nil), // 7: endless.v1.ServerMessage
+	(ErrorCode)(0),         // 0: endless.v1.ErrorCode
+	(*Hello)(nil),          // 1: endless.v1.Hello
+	(*Welcome)(nil),        // 2: endless.v1.Welcome
+	(*Reject)(nil),         // 3: endless.v1.Reject
+	(*InputFrame)(nil),     // 4: endless.v1.InputFrame
+	(*Snapshot)(nil),       // 5: endless.v1.Snapshot
+	(*PlayerStub)(nil),     // 6: endless.v1.PlayerStub
+	(*OpenPortal)(nil),     // 7: endless.v1.OpenPortal
+	(*JoinInstance)(nil),   // 8: endless.v1.JoinInstance
+	(*LeaveInstance)(nil),  // 9: endless.v1.LeaveInstance
+	(*ListInstances)(nil),  // 10: endless.v1.ListInstances
+	(*InstanceInfo)(nil),   // 11: endless.v1.InstanceInfo
+	(*OpenPortalOk)(nil),   // 12: endless.v1.OpenPortalOk
+	(*JoinInstanceOk)(nil), // 13: endless.v1.JoinInstanceOk
+	(*InstanceList)(nil),   // 14: endless.v1.InstanceList
+	(*Error)(nil),          // 15: endless.v1.Error
+	(*ClientMessage)(nil),  // 16: endless.v1.ClientMessage
+	(*ServerMessage)(nil),  // 17: endless.v1.ServerMessage
 }
 var file_v1_protocol_proto_depIdxs = []int32{
-	5, // 0: endless.v1.Snapshot.players:type_name -> endless.v1.PlayerStub
-	0, // 1: endless.v1.ClientMessage.hello:type_name -> endless.v1.Hello
-	3, // 2: endless.v1.ClientMessage.input:type_name -> endless.v1.InputFrame
-	1, // 3: endless.v1.ServerMessage.welcome:type_name -> endless.v1.Welcome
-	2, // 4: endless.v1.ServerMessage.reject:type_name -> endless.v1.Reject
-	4, // 5: endless.v1.ServerMessage.snapshot:type_name -> endless.v1.Snapshot
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	6,  // 0: endless.v1.Snapshot.players:type_name -> endless.v1.PlayerStub
+	11, // 1: endless.v1.InstanceList.instances:type_name -> endless.v1.InstanceInfo
+	0,  // 2: endless.v1.Error.code:type_name -> endless.v1.ErrorCode
+	1,  // 3: endless.v1.ClientMessage.hello:type_name -> endless.v1.Hello
+	4,  // 4: endless.v1.ClientMessage.input:type_name -> endless.v1.InputFrame
+	7,  // 5: endless.v1.ClientMessage.open_portal:type_name -> endless.v1.OpenPortal
+	8,  // 6: endless.v1.ClientMessage.join_instance:type_name -> endless.v1.JoinInstance
+	10, // 7: endless.v1.ClientMessage.list_instances:type_name -> endless.v1.ListInstances
+	9,  // 8: endless.v1.ClientMessage.leave_instance:type_name -> endless.v1.LeaveInstance
+	2,  // 9: endless.v1.ServerMessage.welcome:type_name -> endless.v1.Welcome
+	3,  // 10: endless.v1.ServerMessage.reject:type_name -> endless.v1.Reject
+	5,  // 11: endless.v1.ServerMessage.snapshot:type_name -> endless.v1.Snapshot
+	12, // 12: endless.v1.ServerMessage.open_portal_ok:type_name -> endless.v1.OpenPortalOk
+	13, // 13: endless.v1.ServerMessage.join_instance_ok:type_name -> endless.v1.JoinInstanceOk
+	14, // 14: endless.v1.ServerMessage.instance_list:type_name -> endless.v1.InstanceList
+	15, // 15: endless.v1.ServerMessage.error:type_name -> endless.v1.Error
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_v1_protocol_proto_init() }
@@ -651,27 +1388,36 @@ func file_v1_protocol_proto_init() {
 	if File_v1_protocol_proto != nil {
 		return
 	}
-	file_v1_protocol_proto_msgTypes[6].OneofWrappers = []any{
+	file_v1_protocol_proto_msgTypes[15].OneofWrappers = []any{
 		(*ClientMessage_Hello)(nil),
 		(*ClientMessage_Input)(nil),
+		(*ClientMessage_OpenPortal)(nil),
+		(*ClientMessage_JoinInstance)(nil),
+		(*ClientMessage_ListInstances)(nil),
+		(*ClientMessage_LeaveInstance)(nil),
 	}
-	file_v1_protocol_proto_msgTypes[7].OneofWrappers = []any{
+	file_v1_protocol_proto_msgTypes[16].OneofWrappers = []any{
 		(*ServerMessage_Welcome)(nil),
 		(*ServerMessage_Reject)(nil),
 		(*ServerMessage_Snapshot)(nil),
+		(*ServerMessage_OpenPortalOk)(nil),
+		(*ServerMessage_JoinInstanceOk)(nil),
+		(*ServerMessage_InstanceList)(nil),
+		(*ServerMessage_Error)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_protocol_proto_rawDesc), len(file_v1_protocol_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   8,
+			NumEnums:      1,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_v1_protocol_proto_goTypes,
 		DependencyIndexes: file_v1_protocol_proto_depIdxs,
+		EnumInfos:         file_v1_protocol_proto_enumTypes,
 		MessageInfos:      file_v1_protocol_proto_msgTypes,
 	}.Build()
 	File_v1_protocol_proto = out.File

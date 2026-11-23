@@ -16,9 +16,10 @@ var _enemies: Node2D
 var _camera: Camera2D
 var _hint: Label
 var _hp: Label
-var _shot_views: Dictionary = {} # id -> Polygon2D
+var _shot_views: Dictionary = {} # projectile id -> Polygon2D
 var _pattern_views: Dictionary = {}
 var _enemy_views: Dictionary = {}
+var _hint_touch: bool = false
 
 
 func _ready() -> void:
@@ -48,9 +49,6 @@ func _ready() -> void:
 	add_child(_sticks)
 	_hint = Label.new()
 	_hint.name = "Hint"
-	_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · a Burrmite wanders the yard"
-	if _sticks.using_touch:
-		_hint.text = "Left stick moves · right stick aims and fires · a Burrmite wanders the yard"
 	_hint.add_theme_font_size_override("font_size", 16)
 	_hint.add_theme_color_override("font_color", Color(0.82, 0.9, 0.88))
 	_hp = Label.new()
@@ -69,6 +67,7 @@ func _ready() -> void:
 	margin.add_child(vbox)
 	layer.add_child(margin)
 	add_child(layer)
+	_refresh_hint()
 	queue_redraw()
 
 
@@ -91,6 +90,16 @@ func _process(_delta: float) -> void:
 	_update_enemy_views()
 	_update_shot_views()
 	_update_pattern_views()
+	if _hint_touch != _sticks.using_touch:
+		_refresh_hint()
+
+
+func _refresh_hint() -> void:
+	_hint_touch = _sticks.using_touch
+	if _hint_touch:
+		_hint.text = "Left stick moves · right stick aims and fires · a Burrmite wanders the yard"
+	else:
+		_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · a Burrmite wanders the yard"
 
 
 func _sample_input() -> void:
@@ -100,19 +109,9 @@ func _sample_input() -> void:
 		GameSession.aim = _sticks.aim
 		GameSession.fire_held = _sticks.fire_held
 		return
-	var raw_x := 0.0
-	var raw_y := 0.0
-	if Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT):
-		raw_x -= 1.0
-	if Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT):
-		raw_x += 1.0
-	if Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP):
-		raw_y -= 1.0
-	if Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN):
-		raw_y += 1.0
-	GameSession.move_x = raw_x
-	GameSession.move_y = raw_y
-	GameSession.fire_held = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	GameSession.move_x = Input.get_axis("move_left", "move_right")
+	GameSession.move_y = Input.get_axis("move_up", "move_down")
+	GameSession.fire_held = Input.is_action_pressed("fire")
 	var player_px := GameSession.interpolated_player_pixels()
 	var mouse := get_global_mouse_position()
 	GameSession.aim = atan2(mouse.y - player_px.y, mouse.x - player_px.x)

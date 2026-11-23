@@ -22,8 +22,10 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := bot.Run(ctx, cfg); err != nil {
+	res, err := bot.Run(ctx, cfg)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "er-bot: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Println(res.Summary())
 }

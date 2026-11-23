@@ -5,6 +5,8 @@ extends WorldSource
 ## no Node, SceneTree, Input, or rendering dependencies — and is deterministic
 ## (tick-based, PCG32 only).
 
+const READY_EPS: float = 1e-9
+
 var _config: SimConfig
 var _catalog: DataCatalog
 var _world_seed: int = 1
@@ -20,7 +22,9 @@ var _player_hp: int = 200
 var _player_flash_ticks: int = 0
 var _applied_seq: int = 0
 var _intent: InputIntent = InputIntent.new()
-var _fire_acc: float = 0.0
+var _next_ready: float = 0.0
+var _hold_since_volley: bool = false
+var _fire_blocked: bool = false
 var _projectiles: Array[SimProjectile] = []
 var _enemies: Array[EnemyState] = []
 var _pattern_bullets: Array[PatternBullet] = []
@@ -106,18 +110,21 @@ func step() -> void:
 	for e in _enemies:
 		e.prev_x = e.x
 		e.prev_y = e.y
-	_tick += 1
+	# Time index of this tick (first processed tick is 0, now = tick × 0.05).
+	# tick() / snapshot.tick stay "completed ticks" (1 after the first step).
+	var sim_tick: int = _tick
 	_applied_seq = _intent.seq
 	_aim = _intent.aim
 	if _player_flash_ticks > 0:
 		_player_flash_ticks -= 1
 	_apply_movement()
-	_apply_fire()
-	_step_enemies()
-	_apply_combat()
-	_cull_projectiles()
-	_cull_pattern_bullets()
+	_apply_fire(sim_tick)
+	_step_enemies(sim_tick)
+	_apply_combat(sim_tick)
+	_cull_projectiles(sim_tick)
+	_cull_pattern_bullets(sim_tick)
 	_cull_enemies()
+	_tick += 1
 
 
 func tick() -> int:
@@ -167,18 +174,34 @@ func enemy_count() -> int:
 	return _enemies.size()
 
 
-func fire_accumulator() -> float:
-	return _fire_acc / float(SimConstants.TICK_HZ)
+func next_ready() -> float:
+	return _next_ready
+
+
+## Hook for a later ability lock (Kindle Pulse, PR #19). A blocked tick breaks
+## the continuous hold and does not reset next_ready, so there is no catch-up.
+func is_fire_blocked() -> bool:
+	return _fire_blocked
+
+
+func set_fire_blocked(blocked: bool) -> void:
+	_fire_blocked = blocked
+
+
+## Tempo × (1 + tempoBonus) is read when a volley is scheduled, so a mid-hold
+## rate change keeps the pending next_ready and applies the new cd after it.
+func _current_fire_cooldown_s() -> float:
+	return _config.fire_cooldown_s()
 
 
 func _apply_movement() -> void:
 	var mx := _intent.move_x
 	var my := _intent.move_y
-	var len := sqrt(mx * mx + my * my)
-	if len > 1.0:
-		mx /= len
-		my /= len
-	elif len <= SimConstants.MOVE_EPS:
+	var move_len := sqrt(mx * mx + my * my)
+	if move_len > 1.0:
+		mx /= move_len
+		my /= move_len
+	elif move_len <= SimConstants.MOVE_EPS:
 		mx = 0.0
 		my = 0.0
 	var step_len: float = _config.move_speed_tiles_per_s * SimConstants.TICK_DT
@@ -190,23 +213,35 @@ func _apply_movement() -> void:
 		_py = clampf(_py, _bound_min_y + r, _bound_max_y - r)
 
 
-func _apply_fire() -> void:
-	# Content-spec timing: add Tempo each tick, fire each time the sum reaches
-	# TICK_HZ (equivalent to adding Tempo/TICK_HZ and firing at 1, but this
-	# stays exact for the designed rates 2.0 / 2.5 / 3.5). On release, cap at
-	# one stored shot so a tap cannot bank extras.
-	var hz: float = float(SimConstants.TICK_HZ)
-	if _intent.fire_held:
-		var tempo: float = _config.fire_rate_shots_per_s * (1.0 + _config.tempo_bonus)
-		_fire_acc += tempo
-		while _fire_acc >= hz:
-			_fire_acc -= hz
-			_spawn_projectile()
-	else:
-		_fire_acc = minf(_fire_acc, hz)
+func _apply_fire(sim_tick: int) -> void:
+	# content-v0.1.md §1: next_ready is float64 seconds (tick × 0.05), starts at 0.
+	# cd = 1 / (Tempo × (1 + tempoBonus)). One volley when fire_held and
+	# now ≥ next_ready − 1e-9. A continuous hold schedules the next ready
+	# time from the previous ready time (not the landing tick) so a fractional
+	# cd stays exact over the long run. A press after a release sets
+	# next_ready = now + cd. Release never resets next_ready.
+	var now: float = float(sim_tick) * SimConstants.TICK_DT
+	if is_fire_blocked():
+		_hold_since_volley = false
+		return
+	if not _intent.fire_held:
+		_hold_since_volley = false
+		return
+	# Rate is read per scheduled shot, not cached for the whole hold.
+	var cd: float = _current_fire_cooldown_s()
+	if cd <= 0.0:
+		return
+	if now >= _next_ready - READY_EPS:
+		var continuous: bool = _hold_since_volley
+		_spawn_projectile(sim_tick)
+		if continuous:
+			_next_ready += cd
+		else:
+			_next_ready = now + cd
+		_hold_since_volley = true
 
 
-func _spawn_projectile() -> void:
+func _spawn_projectile(sim_tick: int) -> void:
 	var dir := SimVec2.from_angle(_aim)
 	# If aim is somehow NaN, skip rather than inject a bad shot.
 	if is_nan(dir.x) or is_nan(dir.y):
@@ -218,7 +253,7 @@ func _spawn_projectile() -> void:
 	var shot := SimProjectile.new()
 	shot.id = _next_id
 	_next_id += 1
-	shot.spawn_tick = _tick
+	shot.spawn_tick = sim_tick
 	shot.origin_x = _px
 	shot.origin_y = _py
 	shot.dir_x = dir.x
@@ -230,14 +265,14 @@ func _spawn_projectile() -> void:
 	_projectiles.append(shot)
 
 
-func _step_enemies() -> void:
+func _step_enemies(sim_tick: int) -> void:
 	for e in _enemies:
 		if not e.alive:
 			continue
-		_step_one_enemy(e)
+		_step_one_enemy(e, sim_tick)
 
 
-func _step_one_enemy(e: EnemyState) -> void:
+func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 	var dx: float = _px - e.x
 	var dy: float = _py - e.y
 	var dist: float = sqrt(dx * dx + dy * dy)
@@ -272,12 +307,12 @@ func _step_one_enemy(e: EnemyState) -> void:
 				mx = (-dy / dist) * e.strafe_sign
 				my = (dx / dist) * e.strafe_sign
 		if e.fire_cooldown <= 0:
-			_emit_enemy_pattern(e)
+			_emit_enemy_pattern(e, sim_tick)
 			e.fire_cooldown = e.def.fire_interval_ticks
 	else:
 		e.wander_ticks -= 1
 		if e.wander_ticks <= 0:
-			var rng := PCG32.new(_mix_seed(_world_seed, e.id, _tick), 1)
+			var rng := PCG32.new(_mix_seed(_world_seed, e.id, sim_tick), 1)
 			e.wander_angle = (float(rng.uint32()) / 4294967296.0) * TAU
 			e.wander_ticks = e.def.strafe_switch_ticks
 		mx = cos(e.wander_angle)
@@ -291,7 +326,7 @@ func _step_one_enemy(e: EnemyState) -> void:
 		e.y = clampf(e.y, _bound_min_y + r, _bound_max_y - r)
 
 
-func _emit_enemy_pattern(e: EnemyState) -> void:
+func _emit_enemy_pattern(e: EnemyState, sim_tick: int) -> void:
 	if e.def.pattern_id == "":
 		return
 	if _catalog == null:
@@ -299,12 +334,12 @@ func _emit_enemy_pattern(e: EnemyState) -> void:
 	var def := _catalog.pattern(e.def.pattern_id)
 	if def == null:
 		return
-	var seed: int = _mix_seed(_world_seed, e.id, _tick + e.volley_index)
+	var seed: int = _mix_seed(_world_seed, e.id, sim_tick + e.volley_index)
 	var bullets := def.emit(seed, e.x, e.y, e.aim, e.volley_index)
 	for b in bullets:
 		b.id = _next_id
 		_next_id += 1
-		b.spawn_tick = _tick
+		b.spawn_tick = sim_tick
 		b.source_id = e.id
 		_pattern_bullets.append(b)
 	e.volley_index += 1
@@ -317,18 +352,18 @@ func _mix_seed(a: int, b: int, c: int) -> int:
 	return a * -7046029254386353131 + b * -4658895280553007687 + c * -7723592293110705685
 
 
-func _apply_combat() -> void:
-	_player_shots_vs_enemies()
-	_pattern_shots_vs_player()
+func _apply_combat(sim_tick: int) -> void:
+	_player_shots_vs_enemies(sim_tick)
+	_pattern_shots_vs_player(sim_tick)
 	_contact_vs_player()
 
 
-func _player_shots_vs_enemies() -> void:
+func _player_shots_vs_enemies(sim_tick: int) -> void:
 	for shot in _projectiles:
-		if not shot.is_alive_at(_tick):
+		if not shot.is_alive_at(sim_tick):
 			continue
-		var p0 := shot.position_at_time(float(_tick - 1))
-		var p1 := shot.position_at_time(float(_tick))
+		var p0 := shot.position_at_time(float(sim_tick - 1) if sim_tick > 0 else 0.0)
+		var p1 := shot.position_at_time(float(sim_tick))
 		for e in _enemies:
 			if not e.alive:
 				continue
@@ -344,14 +379,14 @@ func _player_shots_vs_enemies() -> void:
 				break
 
 
-func _pattern_shots_vs_player() -> void:
+func _pattern_shots_vs_player(sim_tick: int) -> void:
 	if _player_hp <= 0:
 		return
 	for b in _pattern_bullets:
-		if not b.is_alive_at(_tick):
+		if not b.is_alive_at(sim_tick):
 			continue
-		var p0 := b.position_at_time(float(_tick - 1))
-		var p1 := b.position_at_time(float(_tick))
+		var p0 := b.position_at_time(float(sim_tick - 1) if sim_tick > 0 else 0.0)
+		var p1 := b.position_at_time(float(sim_tick))
 		if SweepHit.moving_circles(
 			p0.x, p0.y, p1.x, p1.y, b.radius_tiles,
 			_prev_px, _prev_py, _px, _py, _config.player_radius_tiles
@@ -398,18 +433,18 @@ func _enemy_by_id(id: int) -> EnemyState:
 	return null
 
 
-func _cull_projectiles() -> void:
+func _cull_projectiles(sim_tick: int) -> void:
 	var live: Array[SimProjectile] = []
 	for shot in _projectiles:
-		if shot.is_alive_at(_tick):
+		if shot.is_alive_at(sim_tick):
 			live.append(shot)
 	_projectiles = live
 
 
-func _cull_pattern_bullets() -> void:
+func _cull_pattern_bullets(sim_tick: int) -> void:
 	var live: Array[PatternBullet] = []
 	for b in _pattern_bullets:
-		if b.is_alive_at(_tick):
+		if b.is_alive_at(sim_tick):
 			live.append(b)
 	_pattern_bullets = live
 

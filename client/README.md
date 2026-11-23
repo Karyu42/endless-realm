@@ -57,9 +57,12 @@ godot --headless --path client --import
 godot --headless --path client -s addons/gut/gut_cmdln.gd -gdir=res://tests -gexit
 ```
 
-The tests cover 8-dir movement and diagonal normalization, the fire-rate
-accumulator, projectile lifetime and range, tick stepping, official PCG32
-known vectors, golden pattern positions, swept hits, and Burrmite damage / death.
+The tests cover 8-dir movement and diagonal normalization, fire-on-press
+timing from `docs/design/content-v0.1.md` §1 (float64 `next_ready` in seconds,
+Driftrunner golden ticks 0/6/12/18/23/29, Thornguard 0/10/20, no tap-burst),
+projectile lifetime and range, tick stepping, the `NetClient` stub, official
+PCG32 known vectors, golden pattern positions, swept hits, and Burrmite
+damage / death.
 
 Shared fixtures live in [`fixtures/`](../fixtures/). From the repo root, Go and
 GDScript must agree:
