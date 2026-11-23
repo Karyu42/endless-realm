@@ -58,7 +58,7 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 
 **Focus timing:** Focus regen is applied at the **end of the tick**, after any spend on that tick. Same-tick regen therefore can't pay for a cast. A cast on tick t needs `Focus ≥ cost` from the Focus left at the end of tick t−1.
 
-**Join state on a hosted game:** solo play is unchanged. On a hosted game, the host stores ability state only under a **host-verified identity**. A character id the client merely claims is never a key.
+**Join state on a hosted game (spec target):** solo play is unchanged. The ready first join and the elapsed-time restore below are **planned** and not implemented yet; see "Current host code" at the end of this rule. On a hosted game, the host stores ability state only under a **host-verified identity**. A character id the client merely claims is never a key.
 - **Snapshot:** when a verified player disconnects, the host takes a snapshot of their current Focus and the ability cooldown remaining.
   - It is keyed by that player's verified identity.
   - It lives only as long as the host process; a host restart clears every snapshot.
@@ -69,8 +69,10 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 - **Phase 1 (now):** the rules above apply to players the host verifies itself: the listen-host player and local players. Their key is the host-issued token or character.
   - **Remote joins start conservative:** 0 Focus and the ability on full cooldown, every time.
 - **Phase 2 (after the handshake identity PR, #50):** remote joins switch to the same rules, keyed by the character id that the handshake has verified.
-- **Why the gate:** before #50, a remote client's character id is whatever it claims. Keying on it would let the client claim a fresh id to start ready, which would bring back the disconnect/reconnect cooldown reset. It could also claim another player's id and take their saved state.
-- **Replaces #46:** the host code from #46 starts every hosted join at 0 Focus with full cooldown, including the listen-host's own first join. This spec replaces that for verified players; for remote joins that behavior stays until #50.
+- **Current host code (main, from #46):**
+  - Every hosted join, including the listen-host player's own first join, starts conservative: 0 Focus and the ability on full cooldown.
+  - A host-verified rejoin restores the **exact** saved Focus and cooldown, with no elapsed-time adjustment.
+  - This spec replaces both behaviors for verified players once it's implemented. Remote joins keep the conservative start until #50.
 
 **Fire timing (fire on press, all weapons):** each weapon tracks `next_ready` as a float64 sim time in seconds (tick × 0.05), starting at 0. Let `cd = 1 / (Tempo × (1 + tempoBonus))`. On every tick where `fire_held` is true and `now ≥ next_ready − 1e-9`, one volley fires:
 - If fire has been held on every tick since the previous volley (one continuous hold), set `next_ready = next_ready + cd`. This keeps the long-run rate exact even though `cd` isn't a whole number of ticks.
