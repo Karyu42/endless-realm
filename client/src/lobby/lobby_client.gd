@@ -1,25 +1,25 @@
 class_name LobbyClient
 extends Node
-## WebSocket client for a player-hosted lobby. Also listens for LAN beacons.
+## WebSocket client for a player-hosted lobby, speaking proto/v1.
+## Also listens for LAN beacons.
+
+const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
 
 signal welcomed(player_id: int)
 signal rejected(reason: String)
-signal snapshot_received(msg: Dictionary)
+signal snapshot_received(tick: int)
 signal lobbies_changed
 
-var codec: ProtocolCodec = ProtocolCodec.new()
 var player_id: int = 0
 var last_reason: String = ""
-var last_welcome: Dictionary = {}
-var last_snapshot: Dictionary = {}
+var last_tick: int = 0
 var connected: bool = false
+var hello_sent: bool = false
 var lobbies: Array[Dictionary] = [] # decoded beacons plus "ip"
 
 var _ws: WebSocketPeer
 var _udp: PacketPeerUDP = PacketPeerUDP.new()
 var _udp_ready: bool = false
-var _played_offline: bool = false
-var _join_code: String = ""
 var _url: String = ""
 
 
@@ -31,10 +31,9 @@ func start_discovery() -> Error:
 	return OK
 
 
-func connect_to(url: String, played_offline: bool = false, join_code: String = "") -> Error:
+func connect_to(url: String, _played_offline: bool = false, _join_code: String = "") -> Error:
+	# played_offline / join_code are not sent at join (import happens later).
 	_url = url
-	_played_offline = played_offline
-	_join_code = join_code
 	_ws = WebSocketPeer.new()
 	var err: Error = _ws.connect_to_url(url)
 	if err != OK:
@@ -55,6 +54,8 @@ func connect_to_lobby(info: Dictionary, played_offline: bool = false) -> Error:
 
 func find_by_code(code: String) -> Dictionary:
 	var want := code.strip_edges().to_upper()
+	if want == "":
+		return {}
 	for lobby in lobbies:
 		if String(lobby.get("code", "")).to_upper() == want:
 			return lobby
@@ -64,7 +65,14 @@ func find_by_code(code: String) -> Dictionary:
 func send_intent(intent: InputIntent) -> void:
 	if _ws == null or _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		return
-	_ws.send(codec.encode(Handshake.input_payload(intent)), WebSocketPeer.WRITE_MODE_BINARY)
+	var msg = PB.ClientMessage.new()
+	var frame = msg.new_input()
+	frame.set_seq(intent.seq)
+	frame.set_move_x(intent.move_x)
+	frame.set_move_y(intent.move_y)
+	frame.set_aim(intent.aim)
+	frame.set_fire_held(intent.fire_held)
+	_ws.put_packet(msg.to_bytes())
 
 
 func _process(_delta: float) -> void:
@@ -82,31 +90,36 @@ func _poll_ws() -> void:
 	_ws.poll()
 	var state: int = _ws.get_ready_state()
 	if state == WebSocketPeer.STATE_OPEN:
-		if not connected:
-			_ws.send(
-				codec.encode(Handshake.hello_payload(_played_offline, _join_code)),
-				WebSocketPeer.WRITE_MODE_BINARY
-			)
+		if not hello_sent:
+			var msg = PB.ClientMessage.new()
+			msg.new_hello().set_protocol_version(SimConstants.PROTOCOL_VERSION)
+			_ws.put_packet(msg.to_bytes())
+			hello_sent = true
 			connected = true
 		while _ws.get_available_packet_count() > 0:
 			_on_packet(_ws.get_packet())
 	elif state == WebSocketPeer.STATE_CLOSED:
 		connected = false
+		hello_sent = false
 
 
 func _on_packet(buf: PackedByteArray) -> void:
-	var msg := codec.decode(buf)
-	var typ := String(msg.get("type", ""))
-	if typ == "welcome":
-		last_welcome = msg
-		player_id = int(msg.get("player_id", 0))
+	var msg = PB.ServerMessage.new()
+	if msg.from_bytes(buf) != PB.PB_ERR.NO_ERRORS:
+		return
+	if msg.has_welcome():
+		var w = msg.get_welcome()
+		player_id = w.get_player_id()
 		welcomed.emit(player_id)
-	elif typ == "reject":
-		last_reason = String(msg.get("reason", ""))
+	elif msg.has_reject():
+		last_reason = msg.get_reject().get_reason()
 		rejected.emit(last_reason)
-	elif typ == "snapshot":
-		last_snapshot = msg
-		snapshot_received.emit(msg)
+	elif msg.has_snapshot():
+		last_tick = msg.get_snapshot().get_tick()
+		snapshot_received.emit(last_tick)
+	elif msg.has_error():
+		last_reason = msg.get_error().get_reason()
+		rejected.emit(last_reason)
 
 
 func _poll_udp() -> void:
@@ -146,6 +159,7 @@ func stop() -> void:
 		_ws.close()
 		_ws = null
 	connected = false
+	hello_sent = false
 	if _udp_ready:
 		_udp.close()
 		_udp_ready = false

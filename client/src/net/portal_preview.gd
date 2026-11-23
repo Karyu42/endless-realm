@@ -1,7 +1,8 @@
 class_name PortalPreview
 extends RefCounted
-## Lobby-browser selection of open portal multipliers.
-## If more than 5 portals are open, show at least the 2 lowest and 2 highest.
+## Lobby-browser selection of open portal multipliers (vision §11.4).
+## Sorted by M ascending. N <= 5: show all. N > 5: chips at positions
+## 0, 1, floor((N-1)/2) (the median), N-2, N-1, plus a "+N-5 more" chip.
 
 
 static func select(multipliers: Array[float]) -> Array[float]:
@@ -10,20 +11,9 @@ static func select(multipliers: Array[float]) -> Array[float]:
 	var n: int = sorted.size()
 	if n <= 5:
 		return sorted
-	var picked: Array[float] = [sorted[0], sorted[1]]
-	# Fill up to 5 with the remaining value closest to 1.00, then the two highest.
-	var mid: Array[float] = []
-	for i in range(2, n - 2):
-		mid.append(sorted[i])
-	if not mid.is_empty():
-		var best: float = mid[0]
-		var best_d: float = absf(best - 1.0)
-		for i in range(1, mid.size()):
-			var d: float = absf(mid[i] - 1.0)
-			if d < best_d:
-				best = mid[i]
-				best_d = d
-		picked.append(best)
-	picked.append(sorted[n - 2])
-	picked.append(sorted[n - 1])
-	return picked
+	var mid: int = int(floor(float(n - 1) / 2.0))
+	return [sorted[0], sorted[1], sorted[mid], sorted[n - 2], sorted[n - 1]]
+
+
+static func overflow_count(n: int) -> int:
+	return maxi(0, n - 5)

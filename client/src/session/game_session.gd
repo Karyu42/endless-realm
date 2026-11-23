@@ -3,6 +3,7 @@ extends Node
 ## render interpolation. Gameplay nodes emit input and read state only.
 ## Solo, listen-host, and remote client all submit InputIntent through source.
 ## The sim itself is LocalSim (plain RefCounted game rules), not this node.
+## Listen-host networking uses the Server Engineer's LobbyHost (proto/v1).
 
 enum Mode { SOLO, HOST, CLIENT }
 
@@ -15,7 +16,9 @@ var mode: Mode = Mode.SOLO
 var lobby_host: LobbyHost
 var lobby_client: LobbyClient
 var lobby_settings: LobbySettings
-var played_offline: bool = true
+var beacon: LobbyBeaconBroadcaster
+## New characters default to not played-offline (QA #28).
+var played_offline: bool = false
 var local_player_id: int = 1
 
 ## Latest raw input, written by the arena / virtual sticks each display frame.
@@ -49,24 +52,37 @@ func start_solo() -> void:
 func start_host(settings: LobbySettings, bind_host: String = "*") -> Error:
 	_teardown_net()
 	lobby_settings = settings
-	var sim := _new_sim()
-	lobby_host = LobbyHost.new()
-	lobby_host.name = "LobbyHost"
-	add_child(lobby_host)
-	var err: Error = lobby_host.start(settings, sim, bind_host)
+	if settings.join_code == "":
+		settings.join_code = LobbySettings.generate_join_code()
+	var bind := bind_host
+	if bind == "*" or bind == "":
+		bind = "0.0.0.0"
+	lobby_host = LobbyHost.new(config)
+	lobby_host.port = settings.ws_port
+	lobby_host.bind_address = bind
+	lobby_host.max_players = settings.max_players
+	lobby_host.instance_seed = settings.instance_seed
+	lobby_host.multiplier_m100 = int(round(settings.display_multiplier * 100.0))
+	var err: Error = lobby_host.start()
 	if err != OK:
-		lobby_host.queue_free()
 		lobby_host = null
 		start_solo()
 		return err
+	settings.ws_port = lobby_host.port
+	# Local yard view until LobbyHost can register the host player and share a snapshot.
+	var sim := _new_sim()
 	mode = Mode.HOST
-	local_player_id = lobby_host.host_player_id
-	source = HostWorldSource.new(lobby_host)
+	local_player_id = 1
+	source = HostWorldSource.new(lobby_host, sim)
+	beacon = LobbyBeaconBroadcaster.new()
+	if beacon.start(settings, bind) != OK:
+		# Discovery is optional; the host still listens on WebSocket.
+		beacon = null
 	_reset_snapshots()
 	return OK
 
 
-func start_client(url: String, offline: bool = true, join_code: String = "") -> Error:
+func start_client(url: String, offline: bool = false, join_code: String = "") -> Error:
 	_teardown_net()
 	played_offline = offline
 	lobby_client = LobbyClient.new()
@@ -106,9 +122,11 @@ func _reset_snapshots() -> void:
 
 
 func _teardown_net() -> void:
+	if beacon != null:
+		beacon.stop()
+		beacon = null
 	if lobby_host != null:
 		lobby_host.stop()
-		lobby_host.queue_free()
 		lobby_host = null
 	if lobby_client != null:
 		lobby_client.stop()
@@ -117,6 +135,11 @@ func _teardown_net() -> void:
 
 
 func _process(delta: float) -> void:
+	if lobby_host != null:
+		lobby_host.service()
+		if beacon != null:
+			beacon.player_count = 1 + lobby_host.players.size()
+			beacon.poll(delta)
 	if source == null:
 		return
 	var dt: float = SimConstants.TICK_DT

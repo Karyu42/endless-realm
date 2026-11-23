@@ -90,7 +90,17 @@ placeholder_text = "Join code (blank = random)"
 [node name="AllowImportsCheck" type="CheckBox" parent="Margin/Cols/Right"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Allow offline imports"
+text = "Allow character imports"
+
+[node name="AllowOfflineImportsCheck" type="CheckBox" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Allow offline-flagged imports"
+
+[node name="BroadcastJoinCodeCheck" type="CheckBox" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Broadcast join code on LAN"
 
 [node name="HostButton" type="Button" parent="Margin/Cols/Right"]
 unique_name_in_owner = true

@@ -18,11 +18,15 @@ func _ready() -> void:
 	if args == null:
 		args = LobbyArgs.new()
 	var max_edit: LineEdit = %MaxPlayersEdit
-	max_edit.text = str(LobbySettings.default_max_for_listen())
+	max_edit.text = str(LobbyHost.DEFAULT_MAX_PLAYERS)
 	var allow_check: CheckBox = %AllowImportsCheck
 	allow_check.button_pressed = true
+	var offline_imports: CheckBox = %AllowOfflineImportsCheck
+	offline_imports.button_pressed = true
+	var broadcast_check: CheckBox = %BroadcastJoinCodeCheck
+	broadcast_check.button_pressed = false
 	var offline_check: CheckBox = %PlayedOfflineCheck
-	offline_check.button_pressed = GameSession.played_offline
+	offline_check.button_pressed = false
 	_client = LobbyClient.new()
 	add_child(_client)
 	_client.lobbies_changed.connect(_refresh_list)
@@ -34,7 +38,10 @@ func _ready() -> void:
 	%JoinIpButton.pressed.connect(_on_join_ip)
 	# stack.md: Android is join-only in v0.1 (desktop / --headless hosts).
 	if OS.has_feature("android"):
-		for n in [%HostTitle, %NameEdit, %MaxPlayersEdit, %HostCodeEdit, %AllowImportsCheck, %HostButton]:
+		for n in [
+			%HostTitle, %NameEdit, %MaxPlayersEdit, %HostCodeEdit,
+			%AllowImportsCheck, %AllowOfflineImportsCheck, %BroadcastJoinCodeCheck, %HostButton
+		]:
 			n.visible = false
 	_refresh_list()
 	if _pending_code != "":
@@ -52,12 +59,18 @@ func _refresh_list() -> void:
 
 func _format_lobby(info: Dictionary) -> String:
 	var preview: Array = info.get("preview", info.get("portals", []))
-	var portals := ", ".join(_fmt_mults(preview))
-	return "%s  %d/%d  code %s  portals [%s]  %s:%d" % [
+	var chips: PackedStringArray = _fmt_mults(preview)
+	var more: int = int(info.get("more", 0))
+	if more > 0:
+		chips.append("+%d more" % more)
+	var portals := ", ".join(chips)
+	var code := String(info.get("code", ""))
+	var code_bit := ("code %s  " % code) if code != "" else ""
+	return "%s  %d/%d  %sportals [%s]  %s:%d" % [
 		String(info.get("name", "?")),
 		int(info.get("players", 0)),
 		int(info.get("max", 0)),
-		String(info.get("code", "")),
+		code_bit,
 		portals,
 		String(info.get("ip", "")),
 		int(info.get("port", 0)),
@@ -83,9 +96,15 @@ func _on_host() -> void:
 	if settings.lobby_name == "":
 		settings.lobby_name = "Practice Lobby"
 	var host_max: LineEdit = %MaxPlayersEdit
-	settings.max_players = int(host_max.text)
+	if not settings.try_set_max_players(host_max.text):
+		%StatusLabel.text = "Max players must be an integer from 1 to 50."
+		return
 	var host_imports: CheckBox = %AllowImportsCheck
-	settings.allow_offline_imports = host_imports.button_pressed
+	settings.allow_imports = host_imports.button_pressed
+	var host_offline: CheckBox = %AllowOfflineImportsCheck
+	settings.allow_offline_imports = host_offline.button_pressed
+	var broadcast: CheckBox = %BroadcastJoinCodeCheck
+	settings.broadcast_join_code = broadcast.button_pressed
 	var host_code_edit: LineEdit = %HostCodeEdit
 	var code: String = host_code_edit.text.strip_edges().to_upper()
 	if code != "":

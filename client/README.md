@@ -18,23 +18,26 @@ in the desktop and Android builds. A Burrmite wanders the yard and fires
 `burr_spit`.
 
 There is no Godot MultiplayerAPI here and no RPCs for game state. Transport is
-`WebSocketPeer` / `TCPServer` only. Protocol v1 frames currently use an interim
-JSON `ProtocolCodec` (`src/net/protocol_codec.gd`) whose shapes match
-`proto/v1/protocol.proto` (Hello, Welcome, Reject, InputFrame, Snapshot).
-godobuf is not on main yet; replacing the codec is a follow-up. Snapshot
-replication and client prediction are stubbed (TODO).
+`WebSocketPeer` / `TCPServer` only. Protocol v1 frames use the godobuf codec
+in `src/net/proto/`. The listen-server core is the Server Engineer's
+`LobbyHost` (`src/net/host/`); this client owns the boot scene, lobby browser,
+settings, LAN beacon and portal preview. Snapshot replication and client
+prediction are stubbed (TODO).
 
 `GameSession` can run solo (`LocalSim` in-process), as a listen host, or as a
-remote client. The host's own player submits `InputIntent` on the same path as
-remotes. LAN discovery is a UDP beacon (magic `ERLB`) on port **18080**. The
-WebSocket listen port defaults to **8080**, path `/ws`.
+remote client. LAN discovery is a UDP beacon (magic `ERLB`) on port **18080**.
+The WebSocket listen port defaults to **8080**, path `/ws`. The join code is
+only included in the beacon when the host opts in.
 
 ## Host or join a lobby
 
 From the boot screen: **Play solo**, **Host**, join a listed LAN lobby, join by
-code, or join by `IP:port`. The host sets max players (1–50, default 50) and
-may allow or refuse `played_offline` imports. Android is join-only in v0.1
-(desktop or `--headless` hosts; a phone listen-host cap is a later follow-up).
+code, or join by `IP:port`. The host sets max players (1–50, default 50;
+values outside that range are rejected, not clamped). Import policy uses two
+settings (`allow_imports` / `allow_offline_imports`) with refusal codes
+`REJECTED_IMPORTS_OFF` and `REJECTED_OFFLINE_OFF`, applied when importing a
+character, not when joining. Android is join-only in v0.1 (desktop or
+`--headless -- --host`; a phone listen-host cap is a later follow-up).
 
 The same export can host headless:
 
@@ -46,8 +49,8 @@ godot --path client --headless -- --host --join-code=AB12CD --refuse-imports
 godot --path client -- --join-url=ws://127.0.0.1:8080/ws --played-offline
 ```
 
-`--headless` without `--join` / `--join-url` defaults to hosting. Discovery is
-LAN-only for now (no UPnP or listing service).
+`--headless` does not host unless `--host` is passed, so the CI smoke run is
+unchanged. Discovery is LAN-only for now (no UPnP or listing service).
 
 ## Run the practice yard
 

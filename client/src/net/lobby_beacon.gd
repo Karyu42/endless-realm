@@ -1,8 +1,9 @@
 class_name LobbyBeacon
 extends RefCounted
-## LAN discovery beacon (encode/decode only; sockets live in LobbyHost/Client).
-## UDP payload: magic ERLB + JSON (protocol version, name, counts, join code,
-## WebSocket port, open portal multipliers, import policy).
+## LAN discovery beacon (encode/decode only; sockets live in the broadcaster
+## and LobbyClient). UDP payload: magic ERLB + JSON (protocol version, name,
+## counts, optional join code, WebSocket port, open portal multipliers,
+## import policy stubs).
 
 const MAGIC := "ERLB"
 const DISCOVERY_PORT: int = 18080
@@ -19,6 +20,7 @@ static func encode(info: Dictionary) -> PackedByteArray:
 		"port": int(info.get("port", DEFAULT_WS_PORT)),
 		"path": String(info.get("path", "/ws")),
 		"portals": info.get("portals", []),
+		"allow_imports": bool(info.get("allow_imports", true)),
 		"allow_offline_imports": bool(info.get("allow_offline_imports", true)),
 	}
 	var out := PackedByteArray()
@@ -54,6 +56,8 @@ static func decode(buf: PackedByteArray) -> Dictionary:
 		"port": int(d.get("port", DEFAULT_WS_PORT)),
 		"path": String(d.get("path", "/ws")),
 		"portals": portals,
+		"allow_imports": bool(d.get("allow_imports", true)),
 		"allow_offline_imports": bool(d.get("allow_offline_imports", true)),
 		"preview": PortalPreview.select(portals),
+		"more": PortalPreview.overflow_count(portals.size()),
 	}

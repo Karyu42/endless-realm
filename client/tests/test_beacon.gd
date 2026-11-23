@@ -2,8 +2,8 @@ extends GutTest
 ## LAN beacon encode / decode.
 
 
-func test_round_trip_includes_preview() -> void:
-	var portals: Array[float] = [1.4, 0.5, 0.6, 0.9, 1.0, 1.5]
+func test_round_trip_includes_preview_and_overflow() -> void:
+	var portals: Array[float] = [0.50, 0.80, 1.00, 1.00, 1.20, 1.35, 1.50]
 	var buf := LobbyBeacon.encode({
 		"name": "Yard",
 		"players": 3,
@@ -12,6 +12,7 @@ func test_round_trip_includes_preview() -> void:
 		"port": 8080,
 		"path": "/ws",
 		"portals": portals,
+		"allow_imports": true,
 		"allow_offline_imports": false,
 	})
 	var info := LobbyBeacon.decode(buf)
@@ -21,12 +22,22 @@ func test_round_trip_includes_preview() -> void:
 	assert_eq(info["code"], "AB12CD")
 	assert_eq(info["port"], 8080)
 	assert_eq(info["path"], "/ws")
+	assert_true(info["allow_imports"])
 	assert_false(info["allow_offline_imports"])
-	assert_eq(info["portals"].size(), 6)
-	assert_eq(info["preview"], PortalPreview.select(portals))
-	assert_eq(info["preview"][0], 0.5)
-	assert_eq(info["preview"][1], 0.6)
-	assert_eq(info["preview"][info["preview"].size() - 1], 1.5)
+	assert_eq(info["portals"].size(), 7)
+	assert_eq(info["preview"], [0.50, 0.80, 1.00, 1.35, 1.50])
+	assert_eq(info["more"], 2)
+
+
+func test_settings_omit_join_code_unless_broadcast_is_on() -> void:
+	var settings := LobbySettings.new()
+	settings.join_code = "SECRET"
+	settings.broadcast_join_code = false
+	var hidden := LobbyBeacon.decode(LobbyBeacon.encode(settings.to_beacon(1)))
+	assert_eq(hidden["code"], "")
+	settings.broadcast_join_code = true
+	var shown := LobbyBeacon.decode(LobbyBeacon.encode(settings.to_beacon(1)))
+	assert_eq(shown["code"], "SECRET")
 
 
 func test_rejects_bad_magic_and_wrong_version() -> void:

@@ -1,32 +1,37 @@
 class_name HostWorldSource
 extends WorldSource
-## WorldSource that steps the shared LocalSim on the listen / headless host.
-## Host and remote intents both go through set_intent (same path).
+## Listen-host WorldSource. Network ticks run on the Server Engineer's
+## LobbyHost (service()). The local player's view is a LocalSim until a hook
+## exists to register the host player on LobbyHost and read its snapshot.
 
 var host: LobbyHost
+var sim: LocalSim
 
 
-func _init(p_host: LobbyHost) -> void:
+func _init(p_host: LobbyHost, p_sim: LocalSim) -> void:
 	host = p_host
+	sim = p_sim
 
 
 func submit_input(intent: InputIntent) -> void:
-	submit_player_input(host.host_player_id, intent)
+	if sim != null:
+		sim.submit_input(intent)
 
 
-func submit_player_input(player_id: int, intent: InputIntent) -> void:
-	host.set_intent(player_id, intent)
+func submit_player_input(_player_id: int, intent: InputIntent) -> void:
+	submit_input(intent)
 
 
 func step() -> void:
-	host.step_world()
+	if sim != null:
+		sim.step()
 
 
 func tick() -> int:
-	return host.sim.tick() if host != null and host.sim != null else 0
+	return sim.tick() if sim != null else 0
 
 
 func snapshot() -> WorldSnapshot:
-	if host == null or host.sim == null:
+	if sim == null:
 		return WorldSnapshot.new()
-	return host.sim.snapshot()
+	return sim.snapshot()
