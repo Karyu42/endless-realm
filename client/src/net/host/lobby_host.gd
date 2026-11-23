@@ -122,6 +122,26 @@ class HostInstance:
 		return portal_key == ""
 
 
+## Admission history outlives the running sim. A closed entrance id never
+## creates a replacement instance while its source portal still exists.
+class PortalRecord:
+	extends RefCounted
+	var source: HostInstance
+	var portal_id: int
+	var instance_id: int = 0
+	var instance: HostInstance
+	var admitted: Dictionary = {}  # lobby player id -> true; never shrinks
+	var sim_ids: Dictionary = {}  # lobby player id -> id inside this instance
+	## Opener ids as they were in the source world, and in the lobby.
+	var opener_source_id: int = 0
+	var opener_lobby_id: int = 0
+	var capacity: int
+	var created_tick: int
+	var empty_since_tick: int = -1
+	var cleared: bool = false
+	var closed: bool = false
+
+
 class HostPlayer:
 	extends RefCounted
 	## Lobby-wide player id (Welcome.player_id); the overworld sim uses it too.
@@ -202,6 +222,9 @@ var instances: Array[HostInstance] = []
 ## Load test only: spread joining remote players over this many dungeon
 ## instances (0 or 1 = everyone stays in the overworld).
 var loadtest_instances: int = 0
+const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
+const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
+var _portal_records: Dictionary = {}  # source instance / entrance -> PortalRecord
 var _next_instance_index: int = 1
 var _instance_by_portal: Dictionary = {}  # portal_key -> HostInstance
 var portal_rejections: int = 0
@@ -309,6 +332,7 @@ func stop() -> void:
 	players.clear()
 	instances.resize(1)
 	_instance_by_portal.clear()
+	_portal_records.clear()
 	# The lobby is closing: saved ability states do not outlive it.
 	_ability_stash.clear()
 	_ability_stash_order.clear()
@@ -406,6 +430,13 @@ func world_view(player_id: int) -> WorldSnapshot:
 	if p == null or not p.in_sim or p.instance == null or p.instance.sim.get_player(p.sim_id) == null:
 		return null
 	var v := copy_snapshot(p.instance.sim.world_view(p.sim_id))
+	# LocalSim scopes this already; explicitly retain only this viewer's
+	# current-instance live bags, never bags from a previous world.
+	var own: Array[GroundDrop] = []
+	for bag in v.ground_drops:
+		if bag.item != null and bag.item.state == ItemState.STATE_LIVE and bag.item.owner_player_id == p.sim_id:
+			own.append(bag)
+	v.ground_drops = own
 	v.player_id = p.id
 	if not p.instance.is_overworld():
 		return v  # stand-in bullets are an overworld load-test aid
@@ -885,6 +916,7 @@ func _drop_player(c: HostConn) -> void:
 ## transfers, then the stand-in bullets. Returns new player shots as
 ## [owner, host_spawn_tick, x, y, angle].
 func _step_sim() -> Array[PackedFloat64Array]:
+	_sync_portal_records()
 	for p in players:
 		var psim: LocalSim = p.instance.sim
 		var sp := psim.get_player(p.sim_id)
@@ -1017,9 +1049,44 @@ func _enter_refusal(p: HostPlayer, portal: PortalSnapshot) -> Array:
 	var sc := psim.scaling()
 	if sp == null or sc == null or sc.below_join_floor(sp.level, portal.content_level):
 		return [PB.ErrorCode.ERROR_CODE_UNSPECIFIED, "level is below this portal's join floor"]
-	var inst: HostInstance = _instance_by_portal.get(_portal_key(p.instance, portal.id))
-	if inst != null and not inst.admitted.has(p.id) and inst.admitted.size() >= inst.capacity:
-		return [PB.ErrorCode.INSTANCE_FULL, "portal instance is full"]
+	return _record_refusal(_record_for(p.instance, portal.id), p.id)
+
+
+## Packed scaling.json lifetime when present; otherwise vision §6.1's 120 s.
+func _entrance_lifetime_ticks(record: PortalRecord) -> int:
+	var sc := record.source.sim.scaling()
+	if sc != null and sc.portal_entrance_lifetime_ticks > 0:
+		return sc.portal_entrance_lifetime_ticks
+	return ENTRANCE_LIFETIME_TICKS
+
+
+func _record_for(source: HostInstance, portal_id: int) -> PortalRecord:
+	var key := _portal_key(source, portal_id)
+	if not _portal_records.has(key):
+		var record := PortalRecord.new()
+		record.source = source
+		record.portal_id = portal_id
+		record.capacity = _settings.max_players
+		record.created_tick = tick
+		_portal_records[key] = record
+	return _portal_records[key]
+
+
+func _sync_portal_records() -> void:
+	for inst in instances:
+		for portal in inst.sim.portals():
+			if portal.kind == PortalSnapshot.KIND_ENTER:
+				_record_for(inst, portal.id)
+
+
+func _record_refusal(record: PortalRecord, player_id: int) -> Array:
+	if record.closed:
+		return [PB.ErrorCode.INSTANCE_NOT_FOUND, "portal entrance is closed"]
+	if not record.admitted.has(player_id):
+		if record.admitted.size() >= record.capacity:
+			return [PB.ErrorCode.INSTANCE_FULL, "portal instance is full"]
+		if tick - record.created_tick >= _entrance_lifetime_ticks(record):
+			return [PB.ErrorCode.INSTANCE_NOT_FOUND, "portal entrance is closed"]
 	return [0, ""]
 
 
@@ -1056,20 +1123,42 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 	if not is_m100_allowed(xfer.m100) or not source.sim.m100_allowed(xfer.m100):
 		_reject_portal(p, PB.ErrorCode.MULTIPLIER_NOT_ALLOWED, "portal multiplier is not allowed in this lobby")
 		return
-	var key := _portal_key(source, xfer.portal_id)
-	var dest: HostInstance = _instance_by_portal.get(key)
-	if dest != null and not dest.admitted.has(p.id) and dest.admitted.size() >= dest.capacity:
-		_reject_portal(p, PB.ErrorCode.INSTANCE_FULL, "portal instance is full")
+	if source.sim.portal_by_id(xfer.portal_id) == null:
+		_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "portal entrance not found")
 		return
+	var key := _portal_key(source, xfer.portal_id)
+	var record := _record_for(source, xfer.portal_id)
+	var refusal := _record_refusal(record, p.id)
+	if String(refusal[1]) != "":
+		_reject_portal(p, int(refusal[0]), String(refusal[1]))
+		return
+	var dest: HostInstance = record.instance
 	if dest == null:
+		# A record with an assigned id is never restarted after closure.
+		if record.instance_id != 0:
+			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "portal instance is closed")
+			return
+		# The opener as they are in the source world (the sim that queued
+		# this transfer), never an id from the new instance.
+		xfer.opener_id = p.sim_id
+		record.opener_source_id = p.sim_id
+		record.opener_lobby_id = p.id
 		dest = _create_dungeon_instance(xfer)
 		if dest == null:
-			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "unknown dungeon")
+			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "dungeon unavailable or instance id space exhausted")
 			return
 		dest.portal_key = key
+		dest.capacity = record.capacity
+		dest.admitted = record.admitted
+		record.instance = dest
+		record.instance_id = dest.index
 		_instance_by_portal[key] = dest
-	dest.admitted[p.id] = true
-	_move_player(p, dest, dest.sim.alloc_player_id(), dest.arrival_x, dest.arrival_y)
+	record.admitted[p.id] = true
+	record.empty_since_tick = -1
+	# Re-entry keeps the player's id in this instance (and their bags there).
+	if not record.sim_ids.has(p.id):
+		record.sim_ids[p.id] = dest.sim.alloc_player_id()
+	_move_player(p, dest, int(record.sim_ids[p.id]), dest.arrival_x, dest.arrival_y)
 
 
 ## A new dungeon instance with its own LocalSim, seed and multiplier (locked
@@ -1078,6 +1167,10 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 func _create_dungeon_instance(xfer: PortalTransfer) -> HostInstance:
 	var def: DungeonDef = catalog.dungeon(xfer.dungeon_id) if catalog != null else null
 	if def == null:
+		return null
+	# Check the quotient before multiplication: no signed overflow can
+	# wrap the block start into another instance's entity range.
+	if _next_instance_index <= 0 or _next_instance_index >= LocalSim.MAX_ENTITY_ID / INSTANCE_ID_BLOCK:
 		return null
 	var inst := HostInstance.new()
 	inst.index = _next_instance_index
@@ -1090,8 +1183,11 @@ func _create_dungeon_instance(xfer: PortalTransfer) -> HostInstance:
 	inst.capacity = _settings.max_players
 	var dsim := LocalSim.new(_config, xfer.arrival_x, xfer.arrival_y, catalog)
 	dsim.remove_player(1)  # the built-in player; gone at the first step
-	dsim.set_id_floor(inst.index * INSTANCE_ID_BLOCK)
+	if not dsim.set_id_floor(inst.index * INSTANCE_ID_BLOCK):
+		return null
 	dsim.set_lobby_settings(_settings)
+	# opener_id is the opener's sim id in the SOURCE world, not the
+	# destination id allocated later. Preserve that creation provenance.
 	dsim.configure_dungeon(def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
 			xfer.opener_id, xfer.opener_lp)
 	inst.sim = dsim
@@ -1120,21 +1216,39 @@ func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: 
 	p.interact_forward = 0
 
 
-## Drops dungeon instances nobody is in. TODO(portal lifetime): entrance
-## lifetime, sealing and reserved re-entry instead of teardown when empty.
+## Instance lifetime follows vision §6.1: keep progress while empty,
+## then retire the entrance and sim together after the empty grace period.
 func _teardown_empty_instances() -> void:
-	for i in range(instances.size() - 1, 0, -1):
-		var inst := instances[i]
-		if inst.portal_key.begins_with("loadtest:"):
+	for record: PortalRecord in _portal_records.values():
+		var inst := record.instance
+		if inst == null:
 			continue
+		# TODO(#54): read boss_defeated() / dungeon_state() once they exist;
+		# cleared is recorded for deposits and later lifetime rules.
+		if inst.sim.has_method("boss_defeated"):
+			record.cleared = record.cleared or bool(inst.sim.call("boss_defeated"))
 		var used := false
 		for p in players:
 			if p.instance == inst:
 				used = true
 				break
-		if not used:
-			instances.remove_at(i)
-			_instance_by_portal.erase(inst.portal_key)
+		if used:
+			record.empty_since_tick = -1
+			continue
+		if record.empty_since_tick < 0:
+			record.empty_since_tick = tick
+		if tick - record.empty_since_tick < EMPTY_INSTANCE_CLOSE_TICKS:
+			continue
+		record.closed = true
+		record.instance = null
+		instances.erase(inst)
+		_instance_by_portal.erase(inst.portal_key)
+	# Records persist even when a sim is retired, while its source entrance
+	# remains. Never remove a tombstone simply because its instance is empty.
+	for key in _portal_records.keys():
+		var record: PortalRecord = _portal_records[key]
+		if record.closed and record.source.sim.portal_by_id(record.portal_id) == null:
+			_portal_records.erase(key)
 
 
 ## Load test only: a dungeon instance remote players are spread over.
@@ -1212,6 +1326,8 @@ func _encode_snapshot_for(bags: Array, inst: HostInstance = null, owner_id: int 
 		stub.set_id(p.id)
 		stub.set_applied_seq(p.seq)
 	for bag in bags:
+		if not inst.sim.ground_drops().has(bag):
+			continue
 		var b = s.add_bags()
 		b.set_id((bag as GroundDrop).id)
 		b.set_x(bag.x)
@@ -1231,6 +1347,9 @@ func _bags_by_owner() -> Dictionary:
 			if bag.item == null or bag.item.state != ItemState.STATE_LIVE:
 				continue
 			var owner: int = _lobby_id(inst, bag.item.owner_player_id)
+			var viewer := _find_player(owner)
+			if viewer == null or viewer.instance != inst or viewer.sim_id != bag.item.owner_player_id:
+				continue
 			if not out.has(owner):
 				out[owner] = []
 			out[owner].append(bag)

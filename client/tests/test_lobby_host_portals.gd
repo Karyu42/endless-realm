@@ -255,7 +255,41 @@ func test_inputs_route_to_players_instance() -> void:
 
 # --- teardown / ids ---------------------------------------------------------
 
-func test_empty_dungeon_is_torn_down_on_exit_and_leave() -> void:
+func _exit_here(id: int, seq: int) -> void:
+	var p := _host._find_player(id)
+	var exit := PortalSnapshot.new()
+	exit.id = p.instance.sim._alloc_id()
+	exit.x = p.x
+	exit.y = p.y
+	exit.kind = PortalSnapshot.KIND_EXIT
+	exit.dungeon_id = "hollowmere_vault"
+	p.instance.sim.add_portal(exit)
+	_press(id, seq, exit.id)
+	_host.run_tick()
+
+
+func _ticks(n: int) -> void:
+	for i in range(n):
+		_host.run_tick()
+
+
+func _overworld_bag(owner: int) -> GroundDrop:
+	var item := ItemState.new()
+	item.owner_player_id = owner
+	item.tier = 1
+	item.drop_id = "test-bag-%d" % owner
+	var bag := GroundDrop.new()
+	bag.id = _host.sim._alloc_id()
+	bag.item = item
+	bag.x = 20.0
+	bag.y = 20.0
+	bag.t_star = 1
+	bag.spawn_tick = _host.sim.tick()
+	_host.sim._ground_drops.append(bag)
+	return bag
+
+
+func test_exit_returns_to_overworld_and_instance_waits_while_empty() -> void:
 	_host = _new_host()
 	var portal := _open_portal()
 	var a := _join_near_portal(portal)
@@ -266,23 +300,265 @@ func test_empty_dungeon_is_torn_down_on_exit_and_leave() -> void:
 	assert_eq(_instance_of(b), inst)
 	_host.remove_local_player(b)
 	_host.run_tick()
-	assert_eq(_host.instances.size(), 2, "still occupied")
-	var pa := _host._find_player(a)
-	var exit := PortalSnapshot.new()
-	exit.id = inst.sim._alloc_id()
-	exit.x = pa.x
-	exit.y = pa.y
-	exit.kind = PortalSnapshot.KIND_EXIT
-	exit.dungeon_id = "hollowmere_vault"
-	inst.sim.add_portal(exit)
-	_press(a, 5, exit.id)
-	_host.run_tick()
+	_exit_here(a, 5)
 	assert_true(_instance_of(a).is_overworld())
-	assert_eq(pa.sim_id, a, "back under the lobby id")
-	assert_eq(_host.instances.size(), 1, "empty dungeon torn down")
-	assert_false(_host._instance_by_portal.has(inst.portal_key))
+	assert_eq(_host._find_player(a).sim_id, a, "back under the lobby id")
+	assert_eq(_host.instances.size(), 2, "empty instance is kept for now")
 	_host.run_tick()
 	assert_eq(_host.sim.player_ids(), [a] as Array[int])
+
+
+# --- bags per instance ------------------------------------------------------
+
+func test_bags_from_other_instances_are_not_shown() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	var bag := _overworld_bag(a)
+	assert_true(_host._bags_by_owner().has(a), "own overworld bag while there")
+	_enter(a, portal)
+	_host.run_tick()
+	var inst := _instance_of(a)
+	assert_false(_host._bags_by_owner().has(a), "overworld bag not sent to a viewer in a dungeon")
+	for d in _host.world_view(a).ground_drops:
+		assert_ne(d.id, bag.id)
+	var msg = PB.ServerMessage.new()
+	msg.from_bytes(_host._encode_snapshot_for([bag], inst, a))
+	assert_eq(msg.get_snapshot().get_bags().size(), 0, "snapshot drops bags of other instances")
+	_exit_here(a, 5)
+	_host.run_tick()
+	assert_eq(_host._bags_by_owner()[a].size(), 1, "shown again back in the overworld")
+
+
+# --- portal records and lifetimes -------------------------------------------
+
+func test_reentry_returns_to_same_instance_with_progress() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var sid := _host._find_player(a).sim_id
+	_host.run_tick()
+	inst.sim.defeat_all_enemies()
+	var alive_before := 0
+	for e in inst.sim.world_view(sid).enemies:
+		if e.alive:
+			alive_before += 1
+	var dtick := inst.sim.tick()
+	_exit_here(a, 5)
+	_ticks(20)
+	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_enter(a, portal, 6)
+	assert_eq(_instance_of(a), inst, "same instance, not a fresh one")
+	assert_eq(_host.instances.size(), 2)
+	assert_eq(_host._find_player(a).sim_id, sid, "same id inside the instance")
+	assert_gt(inst.sim.tick(), dtick, "kept stepping while empty")
+	var alive_after := 0
+	for e in inst.sim.world_view(sid).enemies:
+		if e.alive:
+			alive_after += 1
+	assert_eq(alive_after, alive_before, "defeated enemies stay defeated")
+
+
+func test_capacity_holds_after_instance_empties_and_closes() -> void:
+	_host = _new_host(2)
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	var b := _join_near_portal(portal)
+	_enter(a, portal)
+	_enter(b, portal)
+	_exit_here(a, 5)
+	_exit_here(b, 5)
+	var s := _host.settings()
+	s.max_players = 4
+	assert_eq(_host.apply_settings(s), OK)
+	var c := _join_near_portal(portal)
+	_enter(c, portal)
+	_host.run_tick()
+	assert_true(_instance_of(c).is_overworld())
+	assert_eq(_rejections.back()[1], PB.ErrorCode.INSTANCE_FULL, "empty instance frees no slot")
+	_ticks(LobbyHost.EMPTY_INSTANCE_CLOSE_TICKS)
+	assert_eq(_host.instances.size(), 1)
+	_host.sim.place_player(c, portal.x + 0.5, portal.y)
+	_enter(c, portal, 2)
+	_host.run_tick()
+	assert_true(_instance_of(c).is_overworld(), "teardown frees no slot either")
+	assert_eq(_host.instances.size(), 1)
+
+
+func test_empty_instance_closes_after_60s_not_before() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	_exit_here(a, 5)
+	_ticks(LobbyHost.EMPTY_INSTANCE_CLOSE_TICKS - 1)
+	assert_eq(_host.instances.size(), 2, "still open just before 60 s")
+	_host.run_tick()
+	assert_eq(_host.instances.size(), 1, "closed at 60 s empty")
+	assert_eq(LobbyHost.EMPTY_INSTANCE_CLOSE_TICKS, 60 * SimConstants.TICK_HZ)
+
+
+func test_closed_entrance_rejects_entry() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	_exit_here(a, 5)
+	_ticks(LobbyHost.EMPTY_INSTANCE_CLOSE_TICKS)
+	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_rejections = []
+	_enter(a, portal, 6)
+	_host.run_tick()
+	assert_true(_instance_of(a).is_overworld())
+	assert_eq(_host.instances.size(), 1)
+	assert_eq(_rejections.size(), 1)
+	assert_eq(_rejections[0][1], PB.ErrorCode.INSTANCE_NOT_FOUND)
+	assert_true(_host._resolve_bag(portal.id, a).is_empty(), "resolver refuses a closed entrance")
+
+
+func test_practice_entrance_never_yields_fresh_instance() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	var first_index := 0
+	_enter(a, portal)
+	first_index = _instance_of(a).index
+	_exit_here(a, 5)
+	_ticks(LobbyHost.EMPTY_INSTANCE_CLOSE_TICKS)
+	var c := _join_near_portal(portal)
+	# Even a transfer the sim already queued cannot restart it.
+	var xfer := PortalTransfer.new()
+	xfer.player_id = c
+	xfer.portal_id = portal.id
+	xfer.dungeon_id = "hollowmere_vault"
+	xfer.m100 = 100
+	_host._route_transfer(_host.instances[0], xfer)
+	assert_eq(_host.instances.size(), 1)
+	assert_true(_instance_of(c).is_overworld())
+	assert_eq(_host._next_instance_index, first_index + 1, "no new instance id was used")
+
+
+func test_entrance_closes_to_new_players_after_its_lifetime() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	_ticks(_host._entrance_lifetime_ticks(rec))
+	var c := _join_near_portal(portal)
+	_rejections = []
+	_enter(c, portal)
+	_host.run_tick()
+	assert_true(_instance_of(c).is_overworld())
+	assert_eq(_rejections[0][1], PB.ErrorCode.INSTANCE_NOT_FOUND)
+
+
+func test_opener_id_is_the_source_world_id() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	assert_eq(inst.sim._opener_id, a, "overworld id of the opener")
+	assert_ne(inst.sim._opener_id, _host._find_player(a).sim_id)
+	assert_eq(rec.opener_source_id, a)
+	assert_eq(rec.opener_lobby_id, a)
+
+
+func test_id_space_exhaustion_refuses_instance() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	assert_false(LocalSim.new(SimConfig.new()).set_id_floor(LocalSim.MAX_ENTITY_ID))
+	_host._next_instance_index = LocalSim.MAX_ENTITY_ID / LobbyHost.INSTANCE_ID_BLOCK
+	_enter(a, portal)
+	_host.run_tick()
+	assert_eq(_host.instances.size(), 1)
+	assert_true(_instance_of(a).is_overworld())
+	assert_eq(_rejections[0][1], PB.ErrorCode.INSTANCE_NOT_FOUND)
+	assert_string_contains(_rejections[0][2], "id space")
+
+
+# --- reject reasons ---------------------------------------------------------
+
+func test_unknown_dungeon_is_instance_not_found() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	var xfer := PortalTransfer.new()
+	xfer.player_id = a
+	xfer.portal_id = portal.id
+	xfer.dungeon_id = "no_such_dungeon"
+	xfer.m100 = 100
+	_host._route_transfer(_host.instances[0], xfer)
+	assert_eq(_host.instances.size(), 1)
+	assert_eq(_rejections[0][1], PB.ErrorCode.INSTANCE_NOT_FOUND)
+
+
+func test_join_floor_reject_is_reported() -> void:
+	_host = _new_host()
+	var yard := _open_portal()
+	var a := _join_near_portal(yard)
+	var high := PortalSnapshot.new()
+	high.id = _host.sim._alloc_id()
+	high.x = yard.x
+	high.y = yard.y
+	high.kind = PortalSnapshot.KIND_ENTER
+	high.dungeon_id = "hollowmere_vault"
+	high.m100 = 100
+	high.base_level = 10
+	high.content_level = 10
+	_host.sim.add_portal(high)
+	_enter(a, high)
+	_host.run_tick()
+	assert_true(_instance_of(a).is_overworld())
+	assert_eq(_rejections.size(), 1)
+	assert_eq(_rejections[0][0], a)
+	assert_string_contains(_rejections[0][2], "join floor")
+
+
+func test_remote_player_gets_error_message_on_reject() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var ws := WebSocketPeer.new()
+	assert_eq(ws.connect_to_url("ws://127.0.0.1:%d/ws" % _host.port), OK)
+	var pump := func(pred: Callable) -> bool:
+		for i in range(500):
+			_host.run_tick()
+			ws.poll()
+			if pred.call():
+				return true
+			OS.delay_msec(10)
+		return false
+	assert_true(pump.call(func() -> bool: return ws.get_ready_state() == WebSocketPeer.STATE_OPEN))
+	var hello = PB.ClientMessage.new()
+	hello.new_hello().set_protocol_version(SimConstants.PROTOCOL_VERSION)
+	ws.send(hello.to_bytes())
+	assert_true(pump.call(func() -> bool: return _host.players.size() == 1 and _host.players[0].in_sim))
+	var p: LobbyHost.HostPlayer = _host.players[0]
+	var portal := PortalSnapshot.new()
+	portal.id = _host.sim._alloc_id()
+	portal.x = p.x
+	portal.y = p.y
+	portal.kind = PortalSnapshot.KIND_ENTER
+	portal.dungeon_id = "hollowmere_vault"
+	portal.m100 = 150
+	portal.base_level = 1
+	portal.content_level = 1
+	_host.sim.add_portal(portal)
+	assert_true(_host._resolve_bag(portal.id, p.id).is_empty())
+	var code := [-1]
+	assert_true(pump.call(func() -> bool:
+		while ws.get_available_packet_count() > 0:
+			var m = PB.ServerMessage.new()
+			if m.from_bytes(ws.get_packet()) == PB.PB_ERR.NO_ERRORS and m.has_error():
+				code[0] = m.get_error().get_code()
+		return code[0] != -1), "remote gets an Error")
+	assert_eq(code[0], PB.ErrorCode.MULTIPLIER_NOT_ALLOWED)
+	ws.close()
 
 
 func test_ids_unique_across_instances() -> void:

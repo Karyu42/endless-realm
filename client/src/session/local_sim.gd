@@ -315,9 +315,12 @@ func _player_id_allowed(id: int) -> bool:
 
 ## Raises the entity allocator to `floor` so a host running several sims
 ## can give each a disjoint id range. Ids below it are never issued here.
-func set_id_floor(floor: int) -> void:
-	if floor > _next_id and floor < MAX_ENTITY_ID:
+func set_id_floor(floor: int) -> bool:
+	if floor <= 0 or floor >= MAX_ENTITY_ID:
+		return false
+	if floor > _next_id:
 		_next_id = floor
+	return true
 
 
 ## A fresh player id from the shared entity allocator. Hosts use this so
@@ -1112,6 +1115,11 @@ func take_pending_transfers() -> Array[PortalTransfer]:
 	var out: Array[PortalTransfer] = _pending_transfers.duplicate()
 	_pending_transfers.clear()
 	return out
+
+
+## Read-only copy of the live portal roster for host admission lifetimes.
+func portals() -> Array[PortalSnapshot]:
+	return _portals.duplicate()
 
 
 func portal_by_id(id: int) -> PortalSnapshot:
