@@ -295,8 +295,14 @@ type InputFrame struct {
 	// allowed for this player, or it is more than 2.0 tiles away, center to
 	// center, as measured by the host.
 	InteractTargetId uint64 `protobuf:"varint,6,opt,name=interact_target_id,json=interactTargetId,proto3" json:"interact_target_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Class ability press. false or unset means no ability. true is a press on
+	// this frame's seq; clients do not resend it on later frames. The host
+	// applies it at most once per seq and rejects seq 0. It is a silent no-op
+	// (no ErrorReply) when Focus or the cooldown does not allow the ability.
+	// One-shot: cleared after the tick it is applied in.
+	AbilityPressed bool `protobuf:"varint,7,opt,name=ability_pressed,json=abilityPressed,proto3" json:"ability_pressed,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *InputFrame) Reset() {
@@ -369,6 +375,13 @@ func (x *InputFrame) GetInteractTargetId() uint64 {
 		return x.InteractTargetId
 	}
 	return 0
+}
+
+func (x *InputFrame) GetAbilityPressed() bool {
+	if x != nil {
+		return x.AbilityPressed
+	}
+	return false
 }
 
 // Snapshot is a stub: tick plus the last applied input seq per connected player.
@@ -1265,7 +1278,7 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\x06Reject\x126\n" +
 	"\x17server_protocol_version\x18\x01 \x01(\rR\x15serverProtocolVersion\x126\n" +
 	"\x17client_protocol_version\x18\x02 \x01(\rR\x15clientProtocolVersion\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xa9\x01\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xd2\x01\n" +
 	"\n" +
 	"InputFrame\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\rR\x03seq\x12\x15\n" +
@@ -1273,7 +1286,8 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\x06move_y\x18\x03 \x01(\x02R\x05moveY\x12\x10\n" +
 	"\x03aim\x18\x04 \x01(\x02R\x03aim\x12\x1b\n" +
 	"\tfire_held\x18\x05 \x01(\bR\bfireHeld\x12,\n" +
-	"\x12interact_target_id\x18\x06 \x01(\x04R\x10interactTargetId\"P\n" +
+	"\x12interact_target_id\x18\x06 \x01(\x04R\x10interactTargetId\x12'\n" +
+	"\x0fability_pressed\x18\a \x01(\bR\x0eabilityPressed\"P\n" +
 	"\bSnapshot\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\rR\x04tick\x120\n" +
 	"\aplayers\x18\x02 \x03(\v2\x16.endless.v1.PlayerStubR\aplayers\"=\n" +

@@ -89,6 +89,9 @@ class HostPlayer:
 	## Interact presses received since the last tick: [seq, target_id] pairs,
 	## in arrival order. Bounded by the per-tick message budget.
 	var interacts: Array[PackedInt64Array] = []
+	## One-shot ability press from an accepted frame since the last tick.
+	## Cleared after the tick it is applied in.
+	var ability_pressed: bool = false
 	var hp: int = START_HP
 	var join_tick: int = 0
 	var x: float = 0.0
@@ -118,7 +121,12 @@ var max_players: int:
 	get:
 		return _unsafe_max_players if _unsafe_max_players > 0 else _settings.max_players
 	set(v):
-		_settings.max_players = v
+		# Same validation and settings_changed as apply_settings(); an invalid
+		# value is refused and the current cap is kept.
+		var s := _settings.duplicate_settings()
+		s.max_players = v
+		if apply_settings(s) != OK:
+			push_warning("LobbyHost.max_players refused: %s" % ", ".join(s.validate()))
 ## Microsecond clock for deadlines and timeouts. Tests inject a fake.
 var clock: Callable = Time.get_ticks_usec
 ## Validates interact presses (range, once per seq, known/allowed target).
@@ -144,6 +152,8 @@ var dropped_messages: int = 0
 var budget_disconnects: int = 0
 var handshake_timeouts: int = 0
 var suppressed_errors: int = 0
+## Ability presses handed to the sim (one per accepted pressed seq per tick).
+var ability_presses: int = 0
 
 var _settings := LobbySettings.new()
 var _unsafe_max_players: int = 0
@@ -252,8 +262,9 @@ func submit_local_input(player_id: int, intent: InputIntent) -> void:
 	if p == null or not p.is_local or intent == null:
 		return
 	var target = intent.get("interact_target_id")
+	var ability = intent.get("ability_pressed")
 	_queue_input(p, intent.seq, intent.move_x, intent.move_y, intent.aim, intent.fire_held,
-			int(target) if target != null else 0)
+			int(target) if target != null else 0, ability != null and bool(ability))
 
 
 func remove_local_player(player_id: int) -> void:
@@ -314,7 +325,10 @@ func world_view(player_id: int) -> WorldSnapshot:
 ## when a player imports, never at Hello. Returns an ImportResult constant.
 ## Blob format and signature are a stub for now:
 ## "ERC" + version byte (1) + flags byte (bit 0 = played offline) + payload.
-## TODO: real character format and signature verification.
+## Fails closed: a blob whose signature has not been verified is rejected
+## with REJECTED_BAD_SIGNATURE, after the flag and format checks. Today that is
+## every blob, because verification is not implemented yet.
+## TODO(host-lobby protocol PR): real character format and signature check.
 func import_character(blob: PackedByteArray, player_id: int) -> int:
 	var p := _find_player(player_id)
 	if p == null:
@@ -326,13 +340,21 @@ func import_character(blob: PackedByteArray, player_id: int) -> int:
 		return ImportResult.REJECTED_BAD_FORMAT
 	if blob[n] != IMPORT_FORMAT_VERSION:
 		return ImportResult.REJECTED_UNSUPPORTED_VERSION
-	# TODO: verify the signature; return REJECTED_BAD_SIGNATURE on failure.
 	if blob[n + 1] & IMPORT_FLAG_PLAYED_OFFLINE != 0 and not _settings.offline_allowed:
 		return ImportResult.REJECTED_OFFLINE_OFF
+	if not _signature_verified(blob):
+		return ImportResult.REJECTED_BAD_SIGNATURE
 	if not p.imported_character.is_empty():
 		return ImportResult.REJECTED_ALREADY_EXISTS
 	p.imported_character = blob
 	return ImportResult.IMPORT_RESULT_OK
+
+
+## True only when the blob's signature has actually been verified.
+## TODO(host-lobby protocol PR): implement. Until then nothing verifies, so
+## import_character never returns IMPORT_RESULT_OK.
+func _signature_verified(_blob: PackedByteArray) -> bool:
+	return false
 
 
 ## Builds a blob in the stub import format (for tests and the lobby UI).
@@ -569,7 +591,7 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 			return
 		var f = msg.get_input()
 		_queue_input(c.player, f.get_seq(), f.get_move_x(), f.get_move_y(), f.get_aim(),
-				f.get_fire_held(), f.get_interact_target_id())
+				f.get_fire_held(), f.get_interact_target_id(), f.get_ability_pressed())
 	elif c.player != null and (msg.has_open_portal() or msg.has_join_instance() \
 			or msg.has_list_instances() or msg.has_leave_instance()):
 		# Portals are not part of this load-test host yet.
@@ -578,7 +600,8 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 
 ## Shared by remote InputFrames and submit_local_input: applied once per seq,
 ## interact presses queued for the validator on the next tick.
-func _queue_input(p: HostPlayer, seq: int, mx: float, my: float, aim: float, fire: bool, target: int) -> void:
+func _queue_input(p: HostPlayer, seq: int, mx: float, my: float, aim: float, fire: bool, target: int,
+		ability: bool = false) -> void:
 	if not Seq.seq_is_next(seq, p.seq):
 		return  # stale or duplicate, including across the uint32 wrap
 	p.seq = seq
@@ -589,6 +612,9 @@ func _queue_input(p: HostPlayer, seq: int, mx: float, my: float, aim: float, fir
 	if target != 0:
 		# Each press is evaluated, even if later frames arrive in the same tick.
 		p.interacts.append(PackedInt64Array([seq, target]))
+	if ability:
+		# Not resent by clients; a later frame in the same tick keeps it.
+		p.ability_pressed = true
 	_inputs_this_tick += 1
 
 
@@ -631,7 +657,14 @@ func _step_sim() -> Array[PackedFloat64Array]:
 	var shots: Array[PackedFloat64Array] = []
 	for i in range(n):
 		var p := players[i]
-		p.sim.submit_input(InputIntent.from_raw(p.seq, p.move_x, p.move_y, p.aim, p.fire_held))
+		var intent := InputIntent.from_raw(p.seq, p.move_x, p.move_y, p.aim, p.fire_held)
+		if p.ability_pressed:
+			ability_presses += 1
+			# Field name matches InputIntent.ability_pressed (class abilities).
+			if "ability_pressed" in intent:
+				intent.set("ability_pressed", true)
+			p.ability_pressed = false  # one-shot
+		p.sim.submit_input(intent)
 		p.sim.step()
 		var snap := p.sim.snapshot()
 		p.last_snap = snap
@@ -772,6 +805,7 @@ func stats() -> Dictionary:
 		"budget_disconnects": budget_disconnects,
 		"handshake_timeouts": handshake_timeouts,
 		"suppressed_errors": suppressed_errors,
+		"ability_presses": ability_presses,
 	}
 
 

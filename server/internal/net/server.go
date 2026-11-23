@@ -254,6 +254,8 @@ func (s *Server) handleClient(id uint64, cm *protocolv1.ClientMessage) (*protoco
 			MoveY:    float64(in.GetMoveY()),
 			Aim:      float64(in.GetAim()),
 			FireHeld: in.GetFireHeld(),
+			// One-shot ability press for this seq.
+			AbilityPressed: in.GetAbilityPressed(),
 		})
 		return nil, nil
 	case *protocolv1.ClientMessage_OpenPortal:
