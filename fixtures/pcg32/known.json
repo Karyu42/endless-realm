@@ -1,5 +1,5 @@
 {
-  "description": "First outputs of PCG-XSH-RR 64/32 after official pcg32_srandom. Values are exact uint32.",
+  "description": "First outputs of PCG-XSH-RR 64/32 after official pcg32_srandom. Values are exact uint32. initstate and initseq are u64 strings: decimal or 0x hex. GDScript stores the signed bit pattern of that u64 (values >= 2^63 are not passed through int()).",
   "cases": [
     {
       "initstate": "42",
@@ -43,6 +43,50 @@
         2877529636,
         578745658,
         3477750088
+      ]
+    },
+    {
+      "initstate": "42",
+      "initseq": "54",
+      "values": [
+        2707161783,
+        2068313097,
+        3122475824,
+        2211639955,
+        3215226955,
+        3421331566,
+        3217466285,
+        2167406445,
+        3860803674,
+        4181216144,
+        853247742,
+        499135993,
+        3984091174,
+        941769757,
+        731976663,
+        475758987
+      ]
+    },
+    {
+      "initstate": "0x8000000000000001",
+      "initseq": "0xffffffffffffffff",
+      "values": [
+        131064,
+        1868301426,
+        2537081811,
+        307600933,
+        943343167,
+        2214132593,
+        767298262,
+        3916674058,
+        1205251538,
+        3021231907,
+        2682613052,
+        2570774047,
+        2173839160,
+        1975881785,
+        3683008824,
+        3548467091
       ]
     }
   ]

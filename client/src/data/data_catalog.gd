@@ -40,6 +40,11 @@ var scaling: SimScaling = SimScaling.new()
 var loot: LootTables = LootTables.new()
 
 
+## Merge an extra { "patterns": [...] } file, used for fixtures-only defs.
+func load_patterns_file(path: String) -> void:
+	_load_patterns(path)
+
+
 func pattern(id: String) -> PatternDef:
 	return patterns.get(id, null) as PatternDef
 

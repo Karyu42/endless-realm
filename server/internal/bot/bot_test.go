@@ -510,3 +510,21 @@ func TestSnapTrackerFollowsAppliedSeqAcrossWrap(t *testing.T) {
 		t.Fatalf("soakOK should fail when applied_seq is more than slack behind")
 	}
 }
+
+func TestSeqNeverAcceptZero(t *testing.T) {
+	for _, last := range []uint32{0, 1, 0x80000000, 0xFFFFFFFF} {
+		if seqNewer(0, last) || seqIsNext(0, last) {
+			t.Fatalf("seq 0 must not be accepted")
+		}
+	}
+	s := newSnapTracker(42)
+	s.lastApplied = 0xFFFFFFFF
+	s.note(&protocolv1.Snapshot{Tick: 1, Players: []*protocolv1.PlayerStub{{Id: 42, AppliedSeq: 0}}})
+	if s.lastApplied != 0xFFFFFFFF {
+		t.Fatalf("last applied seq changed on 0")
+	}
+	s.note(&protocolv1.Snapshot{Tick: 2, Players: []*protocolv1.PlayerStub{{Id: 42, AppliedSeq: 1}}})
+	if s.lastApplied != 1 {
+		t.Fatalf("nonzero wrap should still be accepted")
+	}
+}

@@ -64,3 +64,55 @@ static func _mul64(a: int, b: int) -> int:
 	var lo: int = a0 * b0
 	var mid: int = a0 * b1 + a1 * b0
 	return lo + _shl64(mid & MASK32, 32)
+
+
+## Parse a fixture u64 written as decimal or 0x hex. Returns the signed
+## bit pattern of that u64 so values >= 2^63 stay exact (int("...") clamps).
+static func parse_u64(text: String) -> int:
+	var s := text.strip_edges()
+	if s.begins_with("0x") or s.begins_with("0X"):
+		return _parse_u64_digits(s.substr(2), 16)
+	return _parse_u64_digits(s, 10)
+
+
+# Floor((2^64-1) / 10) and Floor((2^64-1) / 16); both fit in signed int64.
+const U64_MAX_DIV_10: int = 1844674407370955161
+const U64_MAX_DIV_16: int = 0x0FFFFFFFFFFFFFFF
+
+
+## Unsigned 64-bit greater-than on signed int bit patterns.
+static func _u64_gt(a: int, b: int) -> bool:
+	if (a < 0) != (b < 0):
+		return a < 0
+	return a > b
+
+
+static func _parse_u64_digits(s: String, base: int) -> int:
+	if s.is_empty():
+		push_error("PCG32.parse_u64: empty value")
+		return 0
+	var acc: int = 0
+	var max_acc: int = U64_MAX_DIV_10 if base == 10 else U64_MAX_DIV_16
+	for i in s.length():
+		var c: int = s.unicode_at(i)
+		var d: int = -1
+		if c >= 48 and c <= 57:
+			d = c - 48
+		elif base == 16 and c >= 97 and c <= 102:
+			d = c - 97 + 10
+		elif base == 16 and c >= 65 and c <= 70:
+			d = c - 65 + 10
+		if d < 0 or d >= base:
+			push_error("PCG32.parse_u64: bad digit in %s" % s)
+			return 0
+		# Reject values above 2^64-1 instead of wrapping to a silent 0.
+		if _u64_gt(acc, max_acc):
+			push_error("PCG32.parse_u64: value exceeds 2^64-1")
+			return 0
+		acc = _mul64(acc, base)
+		# -1 is the signed bit pattern of 2^64-1; -1 - d is 2^64-1 - d.
+		if _u64_gt(acc, -1 - d):
+			push_error("PCG32.parse_u64: value exceeds 2^64-1")
+			return 0
+		acc = _add64(acc, d)
+	return acc

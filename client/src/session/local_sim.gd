@@ -6,6 +6,8 @@ extends WorldSource
 ## (tick-based, PCG32 only).
 
 const READY_EPS: float = 1e-9
+## content-v0.1 §2.3: nearest player in aggro range, re-picked every 1 s.
+const TARGET_REPICK_TICKS: int = 20
 
 var _config: SimConfig
 var _catalog: DataCatalog
@@ -52,6 +54,9 @@ var _instance_m100: int = 100
 var _in_portal: bool = false
 var _practice_yard: bool = false
 var _last_interact_seq: int = 0
+## Extra players for target picking (id -> {x, y, hp}). The authority
+## player remains _player_id / _px / _py.
+var _other_players: Dictionary = {}
 
 
 func _init(config: SimConfig = null, start_x: float = 0.0, start_y: float = 0.0, catalog: DataCatalog = null) -> void:
@@ -319,6 +324,92 @@ func _spawn_projectile(sim_tick: int) -> void:
 	_projectiles.append(shot)
 
 
+
+func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
+	if id == _player_id:
+		_px = x
+		_py = y
+		if hp >= 0:
+			_player_hp = hp
+		return
+	var entry: Dictionary = _other_players.get(id, {"x": 0.0, "y": 0.0, "hp": _config.player_max_hp})
+	entry["x"] = x
+	entry["y"] = y
+	if hp >= 0:
+		entry["hp"] = hp
+	_other_players[id] = entry
+
+
+func enemy_target_id(enemy_id: int) -> int:
+	var e := _enemy_by_id(enemy_id)
+	return e.target_id if e != null else 0
+
+
+func _player_pos(id: int) -> Vector2:
+	if id == _player_id:
+		return Vector2(_px, _py)
+	var entry: Variant = _other_players.get(id, null)
+	if entry is Dictionary:
+		return Vector2(float(entry["x"]), float(entry["y"]))
+	return Vector2(_px, _py)
+
+
+func _player_hp_of(id: int) -> int:
+	if id == _player_id:
+		return _player_hp
+	var entry: Variant = _other_players.get(id, null)
+	if entry is Dictionary:
+		return int(entry["hp"])
+	return 0
+
+
+func _player_is_living(id: int) -> bool:
+	if id == _player_id:
+		return _player_hp > 0
+	if not _other_players.has(id):
+		return false
+	return int(_other_players[id]["hp"]) > 0
+
+
+func _foreach_living_player_ids() -> Array[int]:
+	var ids: Array[int] = []
+	if _player_hp > 0:
+		ids.append(_player_id)
+	var other_ids: Array = _other_players.keys()
+	other_ids.sort()
+	for id in other_ids:
+		if int(_other_players[id]["hp"]) > 0:
+			ids.append(int(id))
+	return ids
+
+
+func _nearest_player_in_aggro(e: EnemyState) -> int:
+	var best_id: int = 0
+	var best_d2: float = -1.0
+	for pid in _foreach_living_player_ids():
+		var pos := _player_pos(pid)
+		var dx: float = pos.x - e.x
+		var dy: float = pos.y - e.y
+		var d2: float = dx * dx + dy * dy
+		var r: float = e.def.aggro_radius if e.def != null else 0.0
+		if d2 > r * r:
+			continue
+		if best_id == 0 or d2 < best_d2 - 1e-12 or (abs(d2 - best_d2) <= 1e-12 and pid < best_id):
+			best_id = pid
+			best_d2 = d2
+	return best_id
+
+
+func _target_is_valid(e: EnemyState) -> bool:
+	if e.target_id == 0 or not _player_is_living(e.target_id) or e.def == null:
+		return false
+	var pos := _player_pos(e.target_id)
+	var dx: float = pos.x - e.x
+	var dy: float = pos.y - e.y
+	var r: float = e.def.aggro_radius
+	return dx * dx + dy * dy <= r * r
+
+
 func _step_enemies(sim_tick: int) -> void:
 	for e in _enemies:
 		if not e.alive:
@@ -327,21 +418,39 @@ func _step_enemies(sim_tick: int) -> void:
 
 
 func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
-	var dx: float = _px - e.x
-	var dy: float = _py - e.y
-	var dist: float = sqrt(dx * dx + dy * dy)
 	var home_dx: float = e.x - e.home_x
 	var home_dy: float = e.y - e.home_y
 	var home_dist: float = sqrt(home_dx * home_dx + home_dy * home_dy)
+	var nearest_id: int = _nearest_player_in_aggro(e)
 	var was_aggro: bool = e.aggro
 	if e.aggro:
-		if home_dist > e.def.leash:
+		if home_dist > e.def.leash or nearest_id == 0:
+			# Leashed, or nobody alive in aggro range: idle. Do not aim
+			# at the authority player when that player is far or dead.
 			e.aggro = false
-	elif dist <= e.def.aggro_radius and home_dist <= e.def.leash:
+			e.target_id = 0
+	elif nearest_id != 0 and home_dist <= e.def.leash:
 		e.aggro = true
 	# content-v0.1 §2.3: first attack comes fire_interval after aggro (and re-aggro).
+	# The target is the nearest living player in aggro range, re-picked every 1 s.
 	if e.aggro and not was_aggro:
 		e.fire_cooldown = e.def.fire_interval_ticks
+		e.target_id = nearest_id
+		e.target_repick_tick = sim_tick + TARGET_REPICK_TICKS
+	elif e.aggro:
+		if (not _target_is_valid(e)) or sim_tick >= e.target_repick_tick:
+			e.target_id = nearest_id
+			e.target_repick_tick = sim_tick + TARGET_REPICK_TICKS
+	# Aim only at the current target. Never fall back to the host player.
+	var aim_x: float = e.x
+	var aim_y: float = e.y
+	if e.target_id != 0:
+		var tpos := _player_pos(e.target_id)
+		aim_x = tpos.x
+		aim_y = tpos.y
+	var dx: float = aim_x - e.x
+	var dy: float = aim_y - e.y
+	var dist: float = sqrt(dx * dx + dy * dy)
 	if e.contact_cooldown > 0:
 		e.contact_cooldown -= 1
 	var mx: float = 0.0
