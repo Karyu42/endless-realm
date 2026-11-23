@@ -45,6 +45,33 @@ func test_packed_driftcap_stats_match_content_spec() -> void:
 	assert_almost_eq(p.angle_offset_cycle_deg[1], 22.5, 0.0)
 	assert_eq(PatternDef.lifetime_ticks(5.0, 4.0), 25)
 	assert_almost_eq(PatternDef.size_radius("M"), 0.25, 0.0)
+	assert_eq(e.deaggro_range(), 12.0, "packed default is aggro 8 + 4")
+
+
+func test_packed_driftcap_default_deaggro_is_twelve_and_it_never_moves() -> void:
+	# Packed Driftcap omits deaggro_radius, so the range is aggro + 4 = 12.
+	# It stays aggroed at 10 tiles, drops at 13, and never moves.
+	var e := _catalog().enemy("driftcap_spore")
+	assert_not_null(e)
+	assert_eq(e.deaggro_range(), 12.0)
+	assert_true(e.is_rooted())
+	var sim := _sim_at(5.0, 0.0)
+	var pid: int = sim.player_ids()[0]
+	var eid: int = sim.spawn_enemy("driftcap_spore", 0.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), pid)
+	var start_x: float = sim.snapshot().enemies[0].x
+	var start_y: float = sim.snapshot().enemies[0].y
+	sim.place_player(pid, 10.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), pid, "still aggroed at 10 tiles")
+	assert_almost_eq(sim.snapshot().enemies[0].x, start_x, 1e-12)
+	assert_almost_eq(sim.snapshot().enemies[0].y, start_y, 1e-12)
+	sim.place_player(pid, 13.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 0, "drops at 13 tiles")
+	assert_almost_eq(sim.snapshot().enemies[0].x, start_x, 1e-12, "never moves")
+	assert_almost_eq(sim.snapshot().enemies[0].y, start_y, 1e-12)
 
 
 func test_driftcap_stays_rooted_and_fires_first_ring_after_two_seconds() -> void:
