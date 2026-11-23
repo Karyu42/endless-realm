@@ -10,8 +10,12 @@ extends Resource
 @export var projectile_range_tiles: float = 7.0
 ## 0 means ceil(range / speed * TICK_HZ), per the content-spec rule.
 @export var projectile_lifetime_ticks_override: int = 0
-@export var player_radius_tiles: float = 0.35
+@export var player_radius_tiles: float = 0.30
 @export var projectile_radius_tiles: float = 0.15
+@export var player_max_hp: int = 200
+@export var player_projectile_damage: int = 10
+@export var player_flash_ticks: int = 4
+@export var contact_cooldown_ticks: int = 10
 
 
 func projectile_lifetime_ticks() -> int:

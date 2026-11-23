@@ -1,0 +1,73 @@
+{
+  "cases": [
+    {
+      "name": "burr_spit_aim_0",
+      "pattern_id": "burr_spit",
+      "seed": "0",
+      "spawn_tick": 0,
+      "origin": [
+        8.0,
+        8.0
+      ],
+      "aim_rad": 0.0,
+      "volley_index": 0,
+      "ticks": [
+        0,
+        5,
+        10,
+        19,
+        20
+      ],
+      "expected": {
+        "0": [
+          {
+            "x": 8.0,
+            "y": 8.0
+          }
+        ],
+        "5": [
+          {
+            "x": 9.5,
+            "y": 8.0
+          }
+        ],
+        "10": [
+          {
+            "x": 11.0,
+            "y": 8.0
+          }
+        ],
+        "19": [
+          {
+            "x": 13.7,
+            "y": 8.0
+          }
+        ],
+        "20": []
+      }
+    },
+    {
+      "name": "burr_spit_aim_half_pi",
+      "pattern_id": "burr_spit",
+      "seed": "0",
+      "spawn_tick": 0,
+      "origin": [
+        8.0,
+        8.0
+      ],
+      "aim_rad": 1.5707963267948966,
+      "volley_index": 0,
+      "ticks": [
+        10
+      ],
+      "expected": {
+        "10": [
+          {
+            "x": 8.0,
+            "y": 11.0
+          }
+        ]
+      }
+    }
+  ]
+}

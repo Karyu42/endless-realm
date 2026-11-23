@@ -1,23 +1,35 @@
 class_name LocalSim
 extends WorldSource
-## In-process 20 Hz authority used for the offline slice. Sim lives in plain
-## RefCounted classes, not Nodes.
+## In-process 20 Hz authority used for the offline slice and, later, a
+## player-hosted lobby. Every game rule lives in plain RefCounted classes —
+## no Node, SceneTree, Input, or rendering dependencies — and is deterministic
+## (tick-based, PCG32 only).
 
 const READY_EPS: float = 1e-9
 
 var _config: SimConfig
+var _catalog: DataCatalog
+var _world_seed: int = 1
 var _tick: int = 0
 var _player_id: int = 1
 var _next_id: int = 2
 var _px: float = 0.0
 var _py: float = 0.0
+var _prev_px: float = 0.0
+var _prev_py: float = 0.0
 var _aim: float = 0.0
+var _player_hp: int = 200
+var _player_flash_ticks: int = 0
 var _applied_seq: int = 0
 var _intent: InputIntent = InputIntent.new()
 var _next_ready: float = 0.0
 var _hold_since_volley: bool = false
 var _fire_blocked: bool = false
 var _projectiles: Array[SimProjectile] = []
+var _enemies: Array[EnemyState] = []
+var _pattern_bullets: Array[PatternBullet] = []
+var _hit_p0: SimVec2 = SimVec2.new()
+var _hit_p1: SimVec2 = SimVec2.new()
 var _has_bounds: bool = false
 var _bound_min_x: float = 0.0
 var _bound_min_y: float = 0.0
@@ -25,10 +37,14 @@ var _bound_max_x: float = 0.0
 var _bound_max_y: float = 0.0
 
 
-func _init(config: SimConfig = null, start_x: float = 0.0, start_y: float = 0.0) -> void:
+func _init(config: SimConfig = null, start_x: float = 0.0, start_y: float = 0.0, catalog: DataCatalog = null) -> void:
 	_config = config if config != null else SimConfig.new()
+	_catalog = catalog
 	_px = start_x
 	_py = start_y
+	_prev_px = start_x
+	_prev_py = start_y
+	_player_hp = _config.player_max_hp
 
 
 func set_bounds(min_x: float, min_y: float, max_x: float, max_y: float) -> void:
@@ -43,6 +59,14 @@ func clear_bounds() -> void:
 	_has_bounds = false
 
 
+func set_catalog(catalog: DataCatalog) -> void:
+	_catalog = catalog
+
+
+func set_world_seed(seed: int) -> void:
+	_world_seed = seed
+
+
 func config() -> SimConfig:
 	return _config
 
@@ -51,15 +75,57 @@ func submit_input(intent: InputIntent) -> void:
 	_intent = intent
 
 
+func spawn_enemy(def_id: String, x: float, y: float) -> int:
+	if _catalog == null:
+		push_warning("LocalSim.spawn_enemy: no DataCatalog")
+		return 0
+	var def := _catalog.enemy(def_id)
+	if def == null:
+		push_warning("LocalSim.spawn_enemy: unknown id %s" % def_id)
+		return 0
+	return spawn_enemy_from_def(def, x, y)
+
+
+func spawn_enemy_from_def(def: EnemyDef, x: float, y: float) -> int:
+	if def == null:
+		return 0
+	var e := EnemyState.new()
+	e.id = _next_id
+	_next_id += 1
+	e.def = def
+	e.x = x
+	e.y = y
+	e.prev_x = x
+	e.prev_y = y
+	e.home_x = x
+	e.home_y = y
+	e.hp = def.base_hp
+	e.strafe_ticks = def.strafe_switch_ticks
+	e.fire_cooldown = 0
+	_enemies.append(e)
+	return e.id
+
+
 func step() -> void:
+	_prev_px = _px
+	_prev_py = _py
+	for e in _enemies:
+		e.prev_x = e.x
+		e.prev_y = e.y
 	# Time index of this tick (first processed tick is 0, now = tick × 0.05).
 	# tick() / snapshot.tick stay "completed ticks" (1 after the first step).
 	var sim_tick: int = _tick
 	_applied_seq = _intent.seq
 	_aim = _intent.aim
+	if _player_flash_ticks > 0:
+		_player_flash_ticks -= 1
 	_apply_movement()
 	_apply_fire(sim_tick)
+	_step_enemies(sim_tick)
+	_apply_combat(sim_tick)
 	_cull_projectiles(sim_tick)
+	_cull_pattern_bullets(sim_tick)
+	_cull_enemies()
 	_tick += 1
 
 
@@ -74,13 +140,40 @@ func snapshot() -> WorldSnapshot:
 	snap.player_x = _px
 	snap.player_y = _py
 	snap.player_aim = _aim
+	snap.player_hp = _player_hp
+	snap.player_max_hp = _config.player_max_hp
+	snap.player_flash_ticks = _player_flash_ticks
 	snap.applied_seq = _applied_seq
 	snap.projectiles = _projectiles.duplicate()
+	snap.pattern_bullets = _pattern_bullets.duplicate()
+	var enemy_snaps: Array[EnemySnapshot] = []
+	for e in _enemies:
+		if not e.alive:
+			continue
+		var es := EnemySnapshot.new()
+		es.id = e.id
+		es.def_id = e.def.id if e.def != null else ""
+		es.x = e.x
+		es.y = e.y
+		es.aim = e.aim
+		es.hp = e.hp
+		es.max_hp = e.max_hp()
+		es.radius = e.radius()
+		enemy_snaps.append(es)
+	snap.enemies = enemy_snaps
 	return snap
 
 
 func projectile_count() -> int:
 	return _projectiles.size()
+
+
+func pattern_bullet_count() -> int:
+	return _pattern_bullets.size()
+
+
+func enemy_count() -> int:
+	return _enemies.size()
 
 
 func next_ready() -> float:
@@ -174,9 +267,200 @@ func _spawn_projectile(sim_tick: int) -> void:
 	_projectiles.append(shot)
 
 
+func _step_enemies(sim_tick: int) -> void:
+	for e in _enemies:
+		if not e.alive:
+			continue
+		_step_one_enemy(e, sim_tick)
+
+
+func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
+	var dx: float = _px - e.x
+	var dy: float = _py - e.y
+	var dist: float = sqrt(dx * dx + dy * dy)
+	var home_dx: float = e.x - e.home_x
+	var home_dy: float = e.y - e.home_y
+	var home_dist: float = sqrt(home_dx * home_dx + home_dy * home_dy)
+	var was_aggro: bool = e.aggro
+	if e.aggro:
+		if home_dist > e.def.leash:
+			e.aggro = false
+	elif dist <= e.def.aggro_radius and home_dist <= e.def.leash:
+		e.aggro = true
+	# content-v0.1 §2.3: first attack comes fire_interval after aggro (and re-aggro).
+	if e.aggro and not was_aggro:
+		e.fire_cooldown = e.def.fire_interval_ticks
+	if e.contact_cooldown > 0:
+		e.contact_cooldown -= 1
+	var mx: float = 0.0
+	var my: float = 0.0
+	var speed: float = e.def.wander_speed
+	if e.aggro:
+		speed = e.def.move_speed
+		if dist > SimConstants.MOVE_EPS:
+			e.aim = atan2(dy, dx)
+		if dist > e.def.hover_radius and dist > SimConstants.MOVE_EPS:
+			mx = dx / dist
+			my = dy / dist
+		else:
+			e.strafe_ticks -= 1
+			if e.strafe_ticks <= 0:
+				e.strafe_sign *= -1.0
+				e.strafe_ticks = e.def.strafe_switch_ticks
+			if dist > SimConstants.MOVE_EPS:
+				mx = (-dy / dist) * e.strafe_sign
+				my = (dx / dist) * e.strafe_sign
+		if e.fire_cooldown <= 0:
+			_emit_enemy_pattern(e, sim_tick)
+			e.fire_cooldown = e.def.fire_interval_ticks
+	else:
+		e.wander_ticks -= 1
+		if e.wander_ticks <= 0:
+			var rng := PCG32.new(_mix_seed(_world_seed, e.id, sim_tick), 1)
+			e.wander_angle = (float(rng.uint32()) / 4294967296.0) * TAU
+			e.wander_ticks = e.def.strafe_switch_ticks
+		mx = cos(e.wander_angle)
+		my = sin(e.wander_angle)
+	if e.fire_cooldown > 0:
+		e.fire_cooldown -= 1
+	var step: float = speed * SimConstants.TICK_DT
+	e.x += mx * step
+	e.y += my * step
+	if _has_bounds:
+		var r: float = e.radius()
+		e.x = clampf(e.x, _bound_min_x + r, _bound_max_x - r)
+		e.y = clampf(e.y, _bound_min_y + r, _bound_max_y - r)
+
+
+func _emit_enemy_pattern(e: EnemyState, sim_tick: int) -> void:
+	if e.def.pattern_id == "":
+		return
+	if _catalog == null:
+		return
+	var def := _catalog.pattern(e.def.pattern_id)
+	if def == null:
+		return
+	var seed: int = _mix_seed(_world_seed, e.id, sim_tick + e.volley_index)
+	var bullets := def.emit(seed, e.x, e.y, e.aim, e.volley_index)
+	for b in bullets:
+		b.id = _next_id
+		_next_id += 1
+		b.spawn_tick = sim_tick
+		b.source_id = e.id
+		_pattern_bullets.append(b)
+	e.volley_index += 1
+
+
+func _mix_seed(a: int, b: int, c: int) -> int:
+	# SplitMix-style mix; wraps at 2^64 the same way on a later headless host.
+	# Constants are the signed form of 0x9E3779B97F4A7C15, 0xBF58476D1CE4E5B9,
+	# and 0x94D049BB133111EB (Godot rejects those hex literals as > int64 max).
+	return a * -7046029254386353131 + b * -4658895280553007687 + c * -7723592293110705685
+
+
+func _apply_combat(sim_tick: int) -> void:
+	_player_shots_vs_enemies(sim_tick)
+	_pattern_shots_vs_player(sim_tick)
+	_contact_vs_player()
+
+
+func _player_shots_vs_enemies(sim_tick: int) -> void:
+	for shot in _projectiles:
+		if not shot.is_alive_at(sim_tick):
+			continue
+		shot.write_position_at_time(float(sim_tick - 1) if sim_tick > 0 else 0.0, _hit_p0)
+		shot.write_position_at_time(float(sim_tick), _hit_p1)
+		for e in _enemies:
+			if not e.alive:
+				continue
+			if SweepHit.moving_circles(
+				_hit_p0.x, _hit_p0.y, _hit_p1.x, _hit_p1.y, shot.radius_tiles,
+				e.prev_x, e.prev_y, e.x, e.y, e.radius()
+			):
+				e.hp -= _config.player_projectile_damage
+				shot.consumed = true
+				if e.hp <= 0:
+					e.hp = 0
+					e.alive = false
+				break
+
+
+func _pattern_shots_vs_player(sim_tick: int) -> void:
+	if _player_hp <= 0:
+		return
+	for b in _pattern_bullets:
+		if not b.is_alive_at(sim_tick):
+			continue
+		b.write_position_at_time(float(sim_tick - 1) if sim_tick > 0 else 0.0, _hit_p0)
+		b.write_position_at_time(float(sim_tick), _hit_p1)
+		if SweepHit.moving_circles(
+			_hit_p0.x, _hit_p0.y, _hit_p1.x, _hit_p1.y, b.radius_tiles,
+			_prev_px, _prev_py, _px, _py, _config.player_radius_tiles
+		):
+			var dmg: int = 0
+			var src := _enemy_by_id(b.source_id)
+			if src != null and src.def != null:
+				dmg = src.def.damage_for(b.damage_key)
+			_hurt_player(dmg)
+			b.consumed = true
+			if _player_hp <= 0:
+				return
+
+
+func _contact_vs_player() -> void:
+	if _player_hp <= 0:
+		return
+	for e in _enemies:
+		if not e.alive or e.contact_cooldown > 0:
+			continue
+		if SweepHit.moving_circles(
+			_prev_px, _prev_py, _px, _py, _config.player_radius_tiles,
+			e.prev_x, e.prev_y, e.x, e.y, e.radius()
+		):
+			_hurt_player(e.def.contact_damage if e.def != null else 0)
+			e.contact_cooldown = _config.contact_cooldown_ticks
+			if _player_hp <= 0:
+				return
+
+
+func _hurt_player(amount: int) -> void:
+	if amount <= 0 or _player_hp <= 0:
+		return
+	_player_hp -= amount
+	if _player_hp < 0:
+		_player_hp = 0
+	_player_flash_ticks = _config.player_flash_ticks
+
+
+func _enemy_by_id(id: int) -> EnemyState:
+	for e in _enemies:
+		if e.id == id:
+			return e
+	return null
+
+
 func _cull_projectiles(sim_tick: int) -> void:
-	var live: Array[SimProjectile] = []
+	var write: int = 0
 	for shot in _projectiles:
 		if shot.is_alive_at(sim_tick):
-			live.append(shot)
-	_projectiles = live
+			_projectiles[write] = shot
+			write += 1
+	_projectiles.resize(write)
+
+
+func _cull_pattern_bullets(sim_tick: int) -> void:
+	var write: int = 0
+	for b in _pattern_bullets:
+		if b.is_alive_at(sim_tick):
+			_pattern_bullets[write] = b
+			write += 1
+	_pattern_bullets.resize(write)
+
+
+func _cull_enemies() -> void:
+	var write: int = 0
+	for e in _enemies:
+		if e.alive:
+			_enemies[write] = e
+			write += 1
+	_enemies.resize(write)

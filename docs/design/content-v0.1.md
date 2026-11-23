@@ -2,7 +2,7 @@
 
 Status: draft for review · Owner: Game Design · Audience: Gameplay Engineer, QA · Depends on: [`vision.md`](vision.md) (PR #1)
 
-This spec turns `vision.md` into numbers the engineer can put straight into `data/`. `vision.md` stays the source of truth for every formula. This doc only adds base values, patterns and the few rules `vision.md` leaves open. Where the two overlap, it cites a vision section instead of restating the rule. If they ever disagree, `vision.md` wins and this doc gets a fix. Engine, netcode and persistence follow [`docs/tech/stack.md`](../tech/stack.md): Godot 4.7.2 client, Go server, Postgres, 20 Hz ticks.
+This spec turns `vision.md` into numbers the engineer can put straight into `data/`. `vision.md` stays the source of truth for every formula. This doc only adds base values, patterns and the few rules `vision.md` leaves open. Where the two overlap, it cites a vision section instead of restating the rule. If they ever disagree, `vision.md` wins and this doc gets a fix. Engine, netcode and persistence follow [`docs/tech/stack.md`](../tech/stack.md): Godot 4.7.2 client, the Godot game as the lobby host (listen server or `--headless`, vision §11 and the PR #14 amendment), host-local saves, 20 Hz ticks.
 
 All names and content are original. All numbers are starting values that Design can tune after playtests (vision §10, tuning ownership).
 
@@ -30,20 +30,20 @@ All names and content are original. All numbers are starting values that Design 
 | `D` factor, XP crediting (tenths of XP, under-level cap at `Le + 10`, over-level penalty) | vision §3.3, §3.4 |
 | Effective tier `T_eff = min(T, T*(E) + 3)` | vision §4.1 |
 | Personal loot and normal-kill eligibility (damaged it, or within 10 tiles when it died) | vision §4.2 |
-| Party cap of **8**, per-player HP scaling, the **boss-arena seal** (rule 6a: seals on first boss damage, n snapshotted then, no entry while sealed, no rescaling, reset when no living player is inside), boss eligibility and non-idle input, instance lifetimes, re-entry after death | vision §6.1 |
+| Player cap (the lobby's max players), the **boss-arena seal** (rule 6a: seals on first boss damage, no entry while sealed, reset when no living player is inside), boss eligibility and non-idle input, instance lifetimes, re-entry after death | vision §6.1 |
+| Group scaling by peak players in range (`n_peak`): encounter groups, range, start/end events, the `s100(n)` curve to 50 players, and mid-encounter HP rises | vision §3.5 |
 | Ground-item expiry (personal drops tombstoned `EXPIRED` 60 s after they drop, or when the instance closes), Wilds included | vision §8.2 |
 | Incident windows and fault refunds | vision §7.3 |
 | Pending loot and banking, Standard death order, hardcore separation, disconnect linger | vision §7 |
 | Season track and Sparks (no Prism in v0.1) | vision §9 |
 
-All examples below use these rules. With the vision §6.1 scaling, an 8-player party gives normal enemies ×5.2 HP and the boss ×6.25.
+All examples below use these rules. With the vision §3.5 scaling, a peak of 8 players gives normal enemies ×5.2 HP and the boss ×6.25 (unchanged from the earlier 8-player rule; the curve is in vision §3.5).
 
 ### 0.3 Rules this spec adds
 These fill gaps in `vision.md` and don't change any of its formulas:
-- **When n is counted:** dungeon enemies spawn when their room activates (§3.1), so the vision §6.1 "n at spawn" is n at room activation. Boss adds use the boss's n, which is snapshotted at the seal (vision §6.1 rule 6a).
-- **Wilds enemies don't scale with n.** The Wilds aren't an instance and have open-world respawns instead.
+- **When n is counted:** n is the encounter's `n_peak` (vision §3.5). Dungeon enemies spawn at the room's `n_peak` at activation, and later waves and boss adds spawn at the group's current `n_peak`. Wilds enemies scale too, per enemy or pack, from aggro to death, leash or de-aggro.
 - **Scaled HP rounding:** max HP is computed in exact integer math and rounded half-up once, at spawn (or at the seal for the boss):
-  `HP = (baseHP × m100(E) × s100(n) + 5000) div 10000`, where `m100(E) = 100 + 5 × (E − 1)` and `s100(n) = 100 + 60 × (n − 1)` for normal enemies, or `100 + 75 × (n − 1)` for the boss. In the Wilds, `s100 = 100`. Phase thresholds compare current HP against `max HP × threshold` in the same integer math. Example: Tallow Warden at E=10, n=8 → `(5500 × 145 × 625 + 5000) div 10000 = 49,844`.
+  `HP = (baseHP × m100(E) × s100(n) + 5000) div 10000`, where `m100(E) = 100 + 5 × (E − 1)` and `s100(n)` is the vision §3.5 curve (`100 + 60 × (n − 1)` for normal enemies and `100 + 75 × (n − 1)` for the boss up to n = 8, then +30 and +38 per extra player). When `n_peak` rises, max HP is recomputed and current HP keeps its fraction (vision §3.5). Phase thresholds compare current HP against `max HP × threshold` in the same integer math. Example: Tallow Warden at E=10, n=8 → `(5500 × 145 × 625 + 5000) div 10000 = 49,844`.
 - **Fire on press (all weapons):** the first shot fires on the tick fire is pressed, if the weapon is off cooldown. The cooldown is `1 / (Tempo × (1 + tempoBonus))` seconds, counted from that shot, and it keeps running after release. Tapping can therefore never beat the fire rate. The exact rule is in §1.
 - **Vault Sigil binding:** a Sigil is bound to the character who bought it (§3.5). This is consistent with vision §5 "not tradeable" and doesn't change it. If the buyer is **Fallen** (hardcore) or **deleted**, every Sigil bound to them, in inventory or in the stash, is tombstoned in the same transaction. The tombstone reason is `CONSUMED`, so there is no refund and no unusable leftovers. Vision §8.2 defines a tombstone as only `state`, `reason` and timestamp, and this spec adds **no item field**. As a content-level extension, the cause (`owner_fallen` or `owner_deleted`) is recorded as reason metadata in the audit entry of the transaction that tombstones the Sigils, not on the item row.
   - **Incident revert:** if a hardcore death is reverted inside an incident window (vision §7.3), the Sigils tombstoned in that death's transaction are un-tombstoned and restored to their owner with the same `item_uid` and location, as part of the same audited revert. Deleting a character is never reverted by an incident window. A pointer to this rule goes into vision §5 the next time `vision.md` is edited.
@@ -152,7 +152,7 @@ Per-ring results (the range across the three classes, from the band's low to hig
 
 Because `g(T*) ≈ m(E)` and Ward is normalized, these times stay nearly flat at every level (vision §4.1).
 
-With vision §6.1 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS, so the fight is about 80 s.
+With vision §3.5 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS, so the fight is about 80 s.
 
 ### 1.5 Controls assumption
 - **Desktop:** WASD to move, mouse to aim, hold the left button to fire, Space or the right button for the ability, E to interact or loot, 1–8 for inventory slots, Enter for chat.
@@ -248,7 +248,7 @@ With vision §6.1 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 
 ## 3. Dungeon: the Hollowmere Vault
 
-Base level 10. B, E and M are as in vision §6. Party cap, scaling, lifetimes and re-entry are as in vision §6.1.
+Base level 10. B, E and M are as in vision §6. Player cap, lifetimes and re-entry are as in vision §6.1; scaling is vision §3.5.
 
 ### 3.1 Layout
 The vault is a linear crypt of sunken candle halls: 6 rooms joined by 3-tile-wide corridors. The layout is hand-authored, not procedural, in v0.1.
@@ -258,13 +258,13 @@ The vault is a linear crypt of sunken candle halls: 6 rooms joined by 3-tile-wid
      12×12            18×14           16×16              20×12               18×18                 21×21, 4 pillars
 ```
 
-- **Room activation:** a room's enemies spawn and wake when the first player enters it, and that is when n is counted (§0.3). Doors never lock in rooms 1–5, and players can retreat.
+- **Room activation:** a room's enemies spawn and wake when the first player enters it. That starts the room's encounter and its `n_peak` (vision §3.5), which keeps rising if more players arrive. Doors never lock in rooms 1–5, and players can retreat.
 - **Room 6** seals, lifts and resets as in vision §6.1 rule 6a. The client shows a "the doors are sealed" cue on the seal tick.
 - **Clear rule:** room 6's door opens once rooms 2–5 are all cleared (every enemy dead). This stops players skipping straight to the boss.
 - **Exit:** when the boss dies, the exit portal to the Hearth spawns in the center of room 6, together with the loot bags. The bags expire after 60 s (vision §8.2), so the client shows a countdown on each one.
 
 ### 3.2 Vault enemies
-These enemies spawn at the instance's level E and use the normal-enemy `n` scaling from vision §6.1.
+These enemies spawn at the instance's level E and use the normal-enemy `n_peak` scaling from vision §3.5.
 
 | Enemy | baseHP | baseWard | Contact | Projectile | Move | Radius |
 |---|---|---|---|---|---|---|
@@ -340,7 +340,7 @@ There are two ways in.
 **A. Found portal (Wilds, free, M = 1.00).**
 - An elite (in v0.1, the Mirebell Matron) has a 10% chance to leave a Vault portal when it dies (vision §6). With 2 Matrons alive and a 4 min respawn plus about 25 s solo kill time, that works out to about one free portal every 20 min per world.
 - It is M = 1.00 with no deposit and no opener. B is the higher of 10 and the Matron's level, so E is 16–20.
-- Lifetimes, the join floor and the party cap are as in vision §6.1.
+- Lifetimes, the join floor and the player cap are as in vision §6.1.
 
 **B. Opened portal (Hearth portal board, chosen M).**
 - Opening uses one **Vault Sigil** and, when M > 1.00, the Riftstone deposit. They are taken in one transaction with the instance's creation (vision §6).
@@ -430,11 +430,11 @@ The only bonus rolls in v0.1 are the vision §6 extra boss rolls for M > 1. A pl
 
 ## 5. Data format
 
-JSON under `data/`, with a JSON Schema next to each file, as `docs/tech/stack.md` recommends. Both the Go server and the Godot client load the same files. Times are stored in **ticks**, angles in **degrees**, and distances in **tiles**. Formulas stay in code and read their coefficients from `scaling.json`.
+JSON under `data/`, with a JSON Schema next to each file, as `docs/tech/stack.md` recommends. Both the Godot host and the Godot client (one shared sim) load the same files, as does the Go reference harness while it exists. Times are stored in **ticks**, angles in **degrees**, and distances in **tiles**. Formulas stay in code and read their coefficients from `scaling.json`.
 
 ```
 data/
-  scaling.json          # coefficients for vision formulas: m, g, XP, D, party scaling (0.6 / 0.75, cap 8), sync +5, Riftstone 4/5
+  scaling.json          # coefficients for vision formulas: m, g, XP, D, group HP scaling (vision §3.5: normal k/t 60/30, boss 75/38, kink 8, n_max 50), sync +5, Riftstone 4/5
   classes.json          # stats, weapon_id, ability_id
   weapons.json
   abilities.json
