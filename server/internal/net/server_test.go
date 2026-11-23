@@ -129,6 +129,12 @@ func TestHandshakeWelcome(t *testing.T) {
 	if int(math.Round(float64(w.GetMultiplier())*100)) != 125 {
 		t.Fatalf("multiplier %g, want 1.25", w.GetMultiplier())
 	}
+	if w.GetM100() != 125 {
+		t.Fatalf("m100 %d, want 125", w.GetM100())
+	}
+	if w.GetInstanceId() != instance.DefaultInstanceID {
+		t.Fatalf("instance_id %d, want default %d", w.GetInstanceId(), instance.DefaultInstanceID)
+	}
 	if w.GetPlayerId() == 0 {
 		t.Fatal("player id should be non-zero")
 	}

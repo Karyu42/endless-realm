@@ -73,12 +73,15 @@ func TestParseAndFloatRejectVisionCases(t *testing.T) {
 }
 
 func TestParseMultiplierBareIntegerHint(t *testing.T) {
-	_, err := ParseMultiplier("2")
-	if err == nil {
-		t.Fatal("want error for bare 2")
-	}
-	if want := "integers under 10 are decimals"; !strings.Contains(err.Error(), want) {
-		t.Fatalf("error %q, want substring %q", err, want)
+	want := "integers under 10 are decimals, 10 and above are hundredths"
+	for _, s := range []string{"2", "45", "107", "151"} {
+		_, err := ParseMultiplier(s)
+		if err == nil {
+			t.Fatalf("ParseMultiplier(%q): want error", s)
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("ParseMultiplier(%q) error %q, want substring %q", s, err, want)
+		}
 	}
 }
 

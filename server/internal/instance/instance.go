@@ -30,6 +30,12 @@ const (
 	MultiplierStep  = 0.05
 	ProtocolVersion = 1
 
+	// DefaultInstanceID is the process-default instance the bot/smoke path
+	// and a new session start in. Portal instances use later ids.
+	DefaultInstanceID = uint64(1)
+	// MaxParty is the vision §6.1 cap for a portal instance (not the default).
+	MaxParty = 8
+
 	// MaxCatchUpTicks is the most Steps Run will take after falling behind.
 	// Further overdue ticks are skipped so a long stall does not replay
 	// thousands of back-to-back frames; deadlines stay start+n*period.
@@ -103,6 +109,15 @@ func ValidateM100(m100 int) error {
 	return nil
 }
 
+// ValidateM100U32 is ValidateM100 for a wire uint32, so values above MaxInt
+// (or above MaxM100) are rejected without overflowing a 32-bit int.
+func ValidateM100U32(m100 uint32) error {
+	if m100 > uint32(MaxM100) {
+		return fmt.Errorf("level multiplier %d hundredths is outside [%d, %d]", m100, MinM100, MaxM100)
+	}
+	return ValidateM100(int(m100))
+}
+
 // MultiplierFromFloat accepts m only when it is a whole number of
 // hundredths within hundredthsEps, then validates the v0.1 range and
 // 0.05-step grid. Off-hundredth values such as 1.053 are rejected, not
@@ -150,16 +165,17 @@ func ParseMultiplier(s string) (int, error) {
 	if int64(int(n)) != n {
 		return 0, fmt.Errorf("level multiplier %q overflows", s)
 	}
+	const intHint = "integers under 10 are decimals, 10 and above are hundredths"
 	if n >= 0 && n < 10 {
 		m100, err := MultiplierFromFloat(float64(n))
 		if err != nil {
-			return 0, fmt.Errorf("level multiplier %q is taken as %d.00 (integers under 10 are decimals, 10 and above are hundredths): %w", s, n, err)
+			return 0, fmt.Errorf("level multiplier %q is taken as %d.00 (%s): %w", s, n, intHint, err)
 		}
 		return m100, nil
 	}
 	m100 := int(n)
 	if err := ValidateM100(m100); err != nil {
-		return 0, fmt.Errorf("level multiplier %q: %w", s, err)
+		return 0, fmt.Errorf("level multiplier %q is taken as %d hundredths (%s): %w", s, m100, intHint, err)
 	}
 	return m100, nil
 }
@@ -181,6 +197,19 @@ func (i *Instance) MultiplierHundredths() int {
 // Multiplier is M100 / 100, for display and the Welcome float field.
 func (i *Instance) Multiplier() float64 {
 	return float64(i.m100) / 100.0
+}
+
+// Clock is the clock this instance ticks on. The hub uses it for new rooms.
+func (i *Instance) Clock() clock.Clock {
+	return i.clk
+}
+
+// RemovePlayer drops queued input and applied seq for a player who left.
+func (i *Instance) RemovePlayer(id uint32) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	delete(i.inputs, id)
+	delete(i.applied, id)
 }
 
 func (i *Instance) Tick() uint32 {

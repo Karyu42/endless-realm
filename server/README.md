@@ -18,7 +18,7 @@ Authoritative Go game server (protocol v1). Stack: [`docs/tech/stack.md`](../doc
     ├── internal/clock/         # injectable clock (real + fake)
     ├── internal/config/        # --listen, --seed, --multiplier / ER_* env
     ├── internal/instance/      # one in-process room, locked multiplier, 20 Hz tick
-    ├── internal/net/           # /healthz and /ws
+    ├── internal/net/           # /healthz, /metrics, and /ws
     └── internal/protocol/v1/   # generated Go (committed)
 ```
 
@@ -41,6 +41,7 @@ From the repository root (Go **1.27.4** is pinned in `server/go.mod` and `tools/
 make test
 make run
 # health: http://localhost:8080/healthz
+# metrics: http://localhost:8080/metrics  (er_skipped_ticks, er_instances)
 # connect: ws://localhost:8080/ws
 ```
 
@@ -88,7 +89,19 @@ Without Docker, start the server with `make run` and run the smoke command above
 | `-duration` | Soak length, Go duration syntax (e.g. `10m`). If set, the bot exits 0 after this elapses once every client has received a snapshot, ticks have advanced, and `applied_seq` has caught up. If omitted, the bot exits 0 after the first snapshot (smoke). `-h` lists this flag (soak detects it that way). |
 | `-stall-timeout` | During a soak, fail if no new snapshot arrives for this long (default `5s`). A 600 ms server pause must not fail the bot. |
 
-The bot exits non-zero on dial failure, handshake failure (`Reject` or missing `Welcome`), seed/multiplier mismatch, if no snapshot arrives within 10s, if snapshots stall for `-stall-timeout` during a soak, or if ticks / `applied_seq` do not advance. One failing client cancels the others. `ER_MULTIPLIER=1.0` and `ER_SEED=1` in compose are the values smoke checks.
+The bot exits non-zero on dial failure, handshake failure (`Reject` or missing `Welcome`), seed/multiplier mismatch, if no snapshot arrives within 10s, if snapshots stall for `-stall-timeout` during a soak, or if ticks / `applied_seq` do not advance. One failing client cancels the others. `ER_MULTIPLIER=1.0` and `ER_SEED=1` in compose are the values smoke checks. On exit 0 it prints one line to stdout, e.g. `bot ok: clients=1 snapshots=3 duration=120ms`.
+
+## Portal API (protocol v1, additive)
+
+After the Hello/Welcome handshake, a client may open, list and join instances over the same WebSocket. The handshake version stays **1**; new oneof members are ignored by the existing bot, which remains on the process-default instance (`instance_id = 1`).
+
+- `OpenPortal { uint32 m100 }` — m100 is whole hundredths on the wire (never a float). The server accepts `50 ≤ m100 ≤ 150` and `m100 % 5 == 0`, otherwise it replies with `Error { code = INVALID_MULTIPLIER }` and creates nothing. On success it returns `OpenPortalOk { instance_id, m100, seed }`, locks M, and moves the opener into the new instance.
+- `JoinInstance { instance_id }` / `LeaveInstance` — join a listed instance, or return to the default instance. A session is in at most one instance; opening or joining a second portal is `ALREADY_IN_INSTANCE`. A player may only have one open portal (`OPEN_PORTAL_LIMIT`). There is no API to change a locked multiplier.
+- `ListInstances` — default instance plus open portals (`is_default`, `m100`, `seed`, `player_count`). Portal instances cap at 8 players (`INSTANCE_FULL`).
+
+Welcome also carries `instance_id` and `m100` (the display `float multiplier` remains for older clients).
+
+See the PR description for design gaps (auth, Vault Sigil, deposit, join floor, lifetimes, cooldown) that are specified in `docs/design/vision.md` §6 but not implemented here.
 
 ## Client connection (including Android)
 
