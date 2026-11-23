@@ -53,9 +53,6 @@ var _practice_yard: bool = false
 ## Per-player ability state (id -> PlayerAbilityState). Kept next to
 ## SimPlayerState so class abilities stay keyed by player id.
 var _ability_by_player: Dictionary = {}
-## Extra players for Kindle Pulse tests (id -> {x, y, hp, max_hp}) that are
-## not full sim players.
-var _allies: Dictionary = {}
 ## Test / later dungeon walls: tile (tx, ty) -> true is blocking for Slipstep.
 var _blocking_tiles: Dictionary = {}
 
@@ -1021,6 +1018,8 @@ func _gear_hp(p: SimPlayerState) -> int:
 
 
 func _current_max_hp(p: SimPlayerState) -> int:
+	if p.max_hp_override >= 0:
+		return p.max_hp_override
 	return _scaling.scaled_hp(_base_hp(p), _player_le(p), _gear_hp(p))
 
 
@@ -1196,24 +1195,21 @@ func ability_rng_uint32(player_id: int) -> int:
 
 
 func place_ally(id: int, x: float, y: float, hp: int, max_hp: int) -> void:
+	# Test hook: allies are full sim players so Kindle Pulse and targeting
+	# share one roster.
+	place_player(id, x, y, hp)
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
-	if p != null:
-		p.x = x
-		p.y = y
-		p.hp = hp
-		_ability_of(id)
+	if p == null:
 		return
-	_allies[id] = {"x": x, "y": y, "hp": hp, "max_hp": max_hp}
+	if max_hp >= 0:
+		p.max_hp_override = max_hp
+		p.hp = mini(max_hp, hp) if hp >= 0 else mini(max_hp, p.hp)
 	_ability_of(id)
 
 
 func ally_hp(id: int) -> int:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
-	if p != null:
-		return p.hp
-	if not _allies.has(id):
-		return 0
-	return int(_allies[id]["hp"])
+	return p.hp if p != null else 0
 
 
 func set_blocking_tile(tx: int, ty: int, blocked: bool = true) -> void:
@@ -1280,7 +1276,6 @@ func _apply_kindle_pulse(player_id: int, st: PlayerAbilityState) -> void:
 	if caster != null:
 		_heal_target(player_id, origin.x, origin.y, _current_max_hp(caster), true, st)
 	var radius: float = st.ability_def.heal_radius_tiles if st.ability_def != null else 0.0
-	# Full sim players in range (shared world) plus any place_ally() test dummies.
 	for id in _sorted_ids:
 		if int(id) == player_id:
 			continue
@@ -1295,21 +1290,6 @@ func _apply_kindle_pulse(player_id: int, st: PlayerAbilityState) -> void:
 		_heal_target(int(id), other.x, other.y, _current_max_hp(other), false, st)
 		if ally_hp(int(id)) > before:
 			healed_ally = true
-	for id in _allies.keys():
-		var entry: Dictionary = _allies[id]
-		var ax: float = float(entry["x"])
-		var ay: float = float(entry["y"])
-		var hp: int = int(entry["hp"])
-		if hp <= 0:
-			continue
-		var dx: float = ax - origin.x
-		var dy: float = ay - origin.y
-		if dx * dx + dy * dy > radius * radius:
-			continue
-		var before: int = hp
-		_heal_target(int(id), ax, ay, int(entry["max_hp"]), false, st)
-		if ally_hp(int(id)) > before:
-			healed_ally = true
 	if healed_ally:
 		st.ally_ability_heals += 1
 
@@ -1322,14 +1302,9 @@ func _heal_target(id: int, _x: float, _y: float, max_hp: int, is_self: bool, st:
 	if heal <= 0:
 		return
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
-	if p != null:
-		p.hp = mini(_current_max_hp(p), p.hp + heal)
+	if p == null:
 		return
-	if not _allies.has(id):
-		return
-	var cap: int = int(_allies[id]["max_hp"])
-	var hp: int = int(_allies[id]["hp"])
-	_allies[id]["hp"] = mini(cap, hp + heal)
+	p.hp = mini(_current_max_hp(p), p.hp + heal)
 
 
 func _apply_slipstep(player_id: int, st: PlayerAbilityState) -> void:
