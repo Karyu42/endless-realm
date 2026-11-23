@@ -6,6 +6,7 @@ var _client: LobbyClient
 var _pending_code: String = ""
 var _setup_error: String = ""
 var _ui: LobbyUiSettings
+var _join_client: LobbyClient
 
 
 func setup(p_args: LobbyArgs, error_text: String = "") -> void:
@@ -65,7 +66,9 @@ func _ready() -> void:
 	_on_invite_toggled(invite_check.button_pressed)
 	_refresh_list()
 	_refresh_validate()
-	if _setup_error != "":
+	if GameSession.join_error_text != "":
+		%StatusLabel.text = GameSession.take_join_error()
+	elif _setup_error != "":
 		%StatusLabel.text = _setup_error
 	if _pending_code != "":
 		# Wait a couple of beacons for a matching LAN host.
@@ -108,6 +111,8 @@ func _apply_touch_layout() -> void:
 		if n is BaseButton or n is LineEdit or n is Label:
 			n.add_theme_font_size_override("font_size", font)
 
+	if _ui != null and _ui.is_valid():
+		_ui.apply_message_label(%StatusLabel, get_viewport_rect().size.x)
 
 func _on_invite_toggled(on: bool) -> void:
 	%BroadcastJoinCodeCheck.visible = not on and not OS.has_feature("android")
@@ -243,7 +248,7 @@ func _on_join_ip() -> void:
 	if err != OK:
 		%StatusLabel.text = "Could not reach %s" % url
 		return
-	_go_arena()
+	_await_join()
 
 
 func _join_info(info: Dictionary) -> void:
@@ -262,7 +267,39 @@ func _join_info(info: Dictionary) -> void:
 	if err != OK:
 		%StatusLabel.text = "Could not join %s" % url
 		return
+	_await_join()
+
+
+
+func _await_join() -> void:
+	_disconnect_join_signals()
+	var lc: LobbyClient = GameSession.lobby_client
+	if lc == null:
+		return
+	_join_client = lc
+	lc.welcomed.connect(_on_join_welcomed)
+	lc.join_error_received.connect(_on_join_refused)
+
+
+func _disconnect_join_signals() -> void:
+	if _join_client != null and is_instance_valid(_join_client):
+		if _join_client.welcomed.is_connected(_on_join_welcomed):
+			_join_client.welcomed.disconnect(_on_join_welcomed)
+		if _join_client.join_error_received.is_connected(_on_join_refused):
+			_join_client.join_error_received.disconnect(_on_join_refused)
+	_join_client = null
+
+
+func _on_join_welcomed(_pid: int) -> void:
+	_disconnect_join_signals()
 	_go_arena()
+
+
+func _on_join_refused(_code: int, _reason: String) -> void:
+	_disconnect_join_signals()
+	var text: String = GameSession.join_error_text
+	if text != "":
+		%StatusLabel.text = text
 
 
 func _go_arena() -> void:

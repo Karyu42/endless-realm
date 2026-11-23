@@ -6,6 +6,8 @@ extends GutTest
 var _ui: LobbyUiSettings
 var _host: LobbyHost
 
+const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
+
 
 func before_each() -> void:
 	_ui = LobbyUiSettings.load_default()
@@ -16,6 +18,7 @@ func after_each() -> void:
 		_host.stop()
 		_host = null
 	GameSession.clear_portal_error()
+	GameSession.clear_join_error()
 	GameSession.interact_pressed = false
 	GameSession.interact_target_id = 0
 
@@ -27,6 +30,9 @@ func test_pack_loads_without_fallbacks() -> void:
 	assert_false(_ui.text("imports_ok").is_empty())
 	assert_false(_ui.text("name_placeholder").is_empty())
 	assert_false(_ui.text("imports_allowed_check").is_empty())
+	assert_false(_ui.text("lobby_full").is_empty())
+	assert_ne(_ui.text("lobby_full"), _ui.error_message(PB.ErrorCode.INSTANCE_FULL))
+	assert_gt(_ui.message_max_width_mm, 0.0)
 
 
 func test_missing_pack_is_invalid() -> void:
@@ -314,8 +320,6 @@ func test_drop_restore_drop_drop_restore_keeps_ability_state() -> void:
 	assert_almost_eq(_host.sim.focus(id), focus, 1e-6)
 
 
-const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
-
 
 func test_error_messages_cover_each_portal_code() -> void:
 	var codes: PackedInt32Array = ErrorCodes.packed()
@@ -374,23 +378,35 @@ func test_portal_rejected_for_the_local_player_applies_the_message() -> void:
 	assert_eq(GameSession.portal_error_text, _ui.error_message(PB.ErrorCode.INSTANCE_NOT_FOUND))
 
 
+func _welcome(client: LobbyClient, pid: int = 7) -> void:
+	var msg = PB.ServerMessage.new()
+	msg.new_welcome().set_player_id(pid)
+	client._on_packet(msg.to_bytes())
+
+
 func test_lobby_client_error_reply_emits_each_code_and_is_not_a_join_reject() -> void:
 	for code in ErrorCodes.packed():
 		var client := LobbyClient.new()
 		var got_code: Array = [-1]
+		var join_code: Array = [-1]
 		var rejected: Array = [false]
 		client.error_received.connect(func(c: int, _reason: String) -> void:
 			got_code[0] = c
 		)
+		client.join_error_received.connect(func(c: int, _reason: String) -> void:
+			join_code[0] = c
+		)
 		client.rejected.connect(func(_reason: String) -> void:
 			rejected[0] = true
 		)
+		_welcome(client)
 		var msg = PB.ServerMessage.new()
 		var err = msg.new_error()
 		err.set_code(code)
 		err.set_reason("host reason must not become a join reject")
 		client._on_packet(msg.to_bytes())
 		assert_eq(got_code[0], code)
+		assert_eq(join_code[0], -1, "mid-session ErrorReply must not emit join_error_received")
 		assert_eq(client.last_error_code, code)
 		assert_false(rejected[0], "ErrorReply must not emit rejected")
 		client.free()
@@ -407,9 +423,85 @@ func test_lobby_client_join_reject_still_emits_rejected() -> void:
 	client.error_received.connect(func(_c: int, _r: String) -> void:
 		errors[0] += 1
 	)
+	client.join_error_received.connect(func(_c: int, _r: String) -> void:
+		errors[0] += 1
+	)
 	var msg = PB.ServerMessage.new()
 	msg.new_reject().set_reason("full lobby")
 	client._on_packet(msg.to_bytes())
 	assert_true(rejected[0])
 	assert_eq(errors[0], 0)
 	client.free()
+
+func test_hello_time_instance_full_uses_lobby_full_not_portal_copy() -> void:
+	var client := LobbyClient.new()
+	var portal_codes: Array = []
+	var join_codes: Array = []
+	var rejected: Array = [false]
+	client.error_received.connect(func(c: int, _reason: String) -> void:
+		portal_codes.append(c)
+	)
+	client.join_error_received.connect(func(c: int, _reason: String) -> void:
+		join_codes.append(c)
+	)
+	client.rejected.connect(func(_reason: String) -> void:
+		rejected[0] = true
+	)
+	assert_eq(client.player_id, 0)
+	var msg = PB.ServerMessage.new()
+	var err = msg.new_error()
+	err.set_code(PB.ErrorCode.INSTANCE_FULL)
+	err.set_reason("lobby is full")
+	client._on_packet(msg.to_bytes())
+	assert_eq(join_codes, [PB.ErrorCode.INSTANCE_FULL])
+	assert_eq(portal_codes, [])
+	assert_false(rejected[0])
+	var text: String = GameSession.apply_join_error(PB.ErrorCode.INSTANCE_FULL)
+	assert_eq(text, _ui.text("lobby_full"))
+	assert_eq(GameSession.join_error_text, _ui.text("lobby_full"))
+	assert_ne(text, _ui.error_message(PB.ErrorCode.INSTANCE_FULL))
+	assert_eq(GameSession.portal_error_text, "")
+	assert_false(text.contains("area is full"))
+	client.free()
+
+
+func test_mid_session_instance_full_still_uses_portal_copy() -> void:
+	var client := LobbyClient.new()
+	_welcome(client)
+	GameSession._on_client_portal_error(PB.ErrorCode.INSTANCE_FULL, "lobby is full")
+	assert_eq(GameSession.portal_error_text, _ui.error_message(PB.ErrorCode.INSTANCE_FULL))
+	assert_eq(GameSession.join_error_text, "")
+	assert_ne(GameSession.portal_error_text, _ui.text("lobby_full"))
+	client.free()
+
+
+func test_hello_time_unspecified_is_left_alone() -> void:
+	var text: String = GameSession.apply_join_error(PB.ErrorCode.ERROR_CODE_UNSPECIFIED)
+	assert_eq(text, "")
+	assert_eq(GameSession.join_error_text, "")
+	assert_eq(GameSession.portal_error_text, "")
+
+
+func test_message_label_wraps_on_a_narrow_android_width() -> void:
+	var viewport_w := 360.0
+	var w: int = _ui.message_max_width_px(viewport_w)
+	assert_gt(w, 0)
+	assert_lte(w, int(viewport_w))
+	assert_lte(w, _ui.px_from_mm(_ui.message_max_width_mm))
+	var label := Label.new()
+	label.add_theme_font_size_override("font_size", 18)
+	add_child_autofree(label)
+	assert_eq(_ui.apply_message_label(label, viewport_w), w)
+	assert_eq(label.autowrap_mode, TextServer.AUTOWRAP_WORD_SMART)
+	assert_eq(int(label.custom_minimum_size.x), w)
+	label.text = "%s  ·  E to enter Hollowmere Vault  ·  E1  ×1.00" % _ui.error_message(PB.ErrorCode.INSTANCE_FULL)
+	await get_tree().process_frame
+	var wrapped: Vector2 = label.get_minimum_size()
+	assert_lte(wrapped.x, float(w) + 1.0)
+	var one := Label.new()
+	one.add_theme_font_size_override("font_size", 18)
+	one.text = "A"
+	add_child_autofree(one)
+	await get_tree().process_frame
+	assert_gt(wrapped.y, one.get_minimum_size().y, "long prompt must wrap to more than one line")
+

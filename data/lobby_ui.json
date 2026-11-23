@@ -6,7 +6,8 @@
     "font_size": 16,
     "status_font_size": 14,
     "stack_narrow_px": 720,
-    "assume_dpi": 96
+    "assume_dpi": 96,
+    "message_max_width_mm": 72.0
   },
   "strings": {
     "imports_ok": "Imports OK",
@@ -38,7 +39,8 @@
     "m100_min_placeholder": "Min M (m100)",
     "m100_max_placeholder": "Max M (m100)",
     "imports_allowed_check": "Imports allowed",
-    "offline_imports_check": "Offline-flagged imports allowed"
+    "offline_imports_check": "Offline-flagged imports allowed",
+    "lobby_full": "This lobby is full."
   },
   "import_messages": {
     "IMPORT_RESULT_OK": "Character imported.",

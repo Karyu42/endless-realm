@@ -16,7 +16,8 @@
         "font_size",
         "status_font_size",
         "stack_narrow_px",
-        "assume_dpi"
+        "assume_dpi",
+        "message_max_width_mm"
       ],
       "properties": {
         "min_target_mm": { "type": "number", "exclusiveMinimum": 0 },
@@ -25,7 +26,8 @@
         "font_size": { "type": "integer", "minimum": 1 },
         "status_font_size": { "type": "integer", "minimum": 1 },
         "stack_narrow_px": { "type": "integer", "minimum": 1 },
-        "assume_dpi": { "type": "integer", "minimum": 1 }
+        "assume_dpi": { "type": "integer", "minimum": 1 },
+        "message_max_width_mm": { "type": "number", "exclusiveMinimum": 0 }
       }
     },
     "strings": {
@@ -61,7 +63,8 @@
         "m100_min_placeholder",
         "m100_max_placeholder",
         "imports_allowed_check",
-        "offline_imports_check"
+        "offline_imports_check",
+        "lobby_full"
       ],
       "properties": {
         "imports_ok": { "type": "string", "minLength": 1 },
@@ -93,7 +96,8 @@
         "m100_min_placeholder": { "type": "string", "minLength": 1 },
         "m100_max_placeholder": { "type": "string", "minLength": 1 },
         "imports_allowed_check": { "type": "string", "minLength": 1 },
-        "offline_imports_check": { "type": "string", "minLength": 1 }
+        "offline_imports_check": { "type": "string", "minLength": 1 },
+        "lobby_full": { "type": "string", "minLength": 1 }
       }
     },
     "import_messages": {
