@@ -12,124 +12,160 @@
       "type": "array",
       "minItems": 1,
       "items": {
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "rank",
-          "base",
-          "move_speed",
-          "radius",
-          "aggro_radius",
-          "ai"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1
-          },
-          "rank": {
-            "type": "string",
-            "enum": [
-              "normal",
-              "elite",
-              "boss"
-            ]
-          },
-          "base": {
+        "allOf": [
+          {
             "type": "object",
             "required": [
-              "hp",
-              "ward",
-              "contact",
-              "damage"
+              "id",
+              "name",
+              "rank",
+              "base",
+              "move_speed",
+              "radius",
+              "aggro_radius",
+              "ai"
             ],
             "additionalProperties": false,
             "properties": {
-              "hp": {
-                "type": "integer",
-                "minimum": 1
+              "id": {
+                "type": "string",
+                "minLength": 1
               },
-              "ward": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rank": {
+                "type": "string",
+                "enum": [
+                  "normal",
+                  "elite",
+                  "boss"
+                ]
+              },
+              "base": {
+                "type": "object",
+                "required": [
+                  "hp",
+                  "ward",
+                  "contact",
+                  "damage"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "hp": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "ward": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "contact": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "damage": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              },
+              "move_speed": {
                 "type": "number",
                 "minimum": 0
               },
-              "contact": {
-                "type": "integer",
+              "wander_speed": {
+                "type": "number",
                 "minimum": 0
               },
-              "damage": {
+              "radius": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "aggro_radius": {
+                "type": "number",
+                "minimum": 0
+              },
+              "deaggro_radius": {
+                "type": "number",
+                "minimum": 0
+              },
+              "no_leash": {
+                "type": "boolean"
+              },
+              "hover_radius": {
+                "type": "number",
+                "minimum": 0
+              },
+              "leash": {
+                "type": "number",
+                "minimum": 0
+              },
+              "strafe_switch_ticks": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "ai": {
                 "type": "object",
-                "additionalProperties": {
-                  "type": "integer",
-                  "minimum": 0
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "chase_hover",
+                      "rooted"
+                    ]
+                  },
+                  "pattern": {
+                    "type": "string"
+                  },
+                  "fire_interval_ticks": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
                 }
               }
             }
           },
-          "move_speed": {
-            "type": "number",
-            "minimum": 0
-          },
-          "wander_speed": {
-            "type": "number",
-            "minimum": 0
-          },
-          "radius": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "aggro_radius": {
-            "type": "number",
-            "minimum": 0
-          },
-          "deaggro_radius": {
-            "type": "number",
-            "minimum": 0
-          },
-          "no_leash": {
-            "type": "boolean"
-          },
-          "hover_radius": {
-            "type": "number",
-            "minimum": 0
-          },
-          "leash": {
-            "type": "number",
-            "minimum": 0
-          },
-          "strafe_switch_ticks": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "ai": {
-            "type": "object",
-            "required": [
-              "type"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "chase_hover"
-                ]
+          {
+            "if": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "const": "driftcap_spore"
+                }
               },
-              "pattern": {
-                "type": "string"
-              },
-              "fire_interval_ticks": {
-                "type": "integer",
-                "minimum": 1
+              "required": [
+                "id"
+              ]
+            },
+            "then": {
+              "required": [
+                "move_speed",
+                "radius",
+                "aggro_radius",
+                "ai"
+              ],
+              "properties": {
+                "ai": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "pattern",
+                    "fire_interval_ticks"
+                  ]
+                }
               }
             }
           }
-        }
+        ]
       }
     }
   }

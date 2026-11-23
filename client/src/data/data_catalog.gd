@@ -179,6 +179,26 @@ func unknown_reference_ids() -> PackedStringArray:
 			if not seen.has(def.ability_id):
 				ids.append(def.ability_id)
 				seen[def.ability_id] = true
+	for eid in enemies.keys():
+		var edef: EnemyDef = enemies[eid] as EnemyDef
+		if edef == null:
+			continue
+		if edef.pattern_id != "" and not patterns.has(edef.pattern_id):
+			if not seen.has(edef.pattern_id):
+				ids.append(edef.pattern_id)
+				seen[edef.pattern_id] = true
+		for mid in edef.missing_pack_ids():
+			if not seen.has(mid):
+				ids.append(mid)
+				seen[mid] = true
+	for pid in patterns.keys():
+		var pdef: PatternDef = patterns[pid] as PatternDef
+		if pdef == null:
+			continue
+		for mid in pdef.missing_pack_ids():
+			if not seen.has(mid):
+				ids.append(mid)
+				seen[mid] = true
 	for aid in abilities.keys():
 		var adef: AbilityDef = abilities[aid] as AbilityDef
 		if adef == null:

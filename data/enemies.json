@@ -24,6 +24,28 @@
         "pattern": "burr_spit",
         "fire_interval_ticks": 30
       }
+    },
+    {
+      "id": "driftcap_spore",
+      "name": "Driftcap Spore",
+      "rank": "normal",
+      "base": {
+        "hp": 90,
+        "ward": 2,
+        "contact": 0,
+        "damage": {
+          "ring": 12
+        }
+      },
+      "move_speed": 0,
+      "radius": 0.5,
+      "aggro_radius": 8.0,
+      "leash": 16.0,
+      "ai": {
+        "type": "rooted",
+        "pattern": "spore_ring",
+        "fire_interval_ticks": 40
+      }
     }
   ]
 }

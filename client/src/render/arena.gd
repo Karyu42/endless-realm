@@ -5,8 +5,10 @@ const ARENA_TILES: float = 32.0
 const PLAYER_COLOR := Color(0.91, 0.76, 0.48)
 const FLASH_COLOR := Color(1.0, 0.55, 0.45)
 const ENEMY_COLOR := Color(0.78, 0.42, 0.38)
+const DRIFTCAP_COLOR := Color(0.42, 0.62, 0.36)
 const SHOT_COLOR := Color(0.48, 0.82, 0.78)
 const PATTERN_COLOR := Color(0.92, 0.62, 0.28)
+const SPORE_COLOR := Color(0.45, 0.82, 0.52)
 const BAG_BROWN := Color(0.55, 0.38, 0.22)
 const BAG_TEAL := Color(0.28, 0.72, 0.70)
 const BAG_GOLD := Color(0.92, 0.74, 0.28)
@@ -163,9 +165,9 @@ func _process(_delta: float) -> void:
 func _refresh_hint() -> void:
 	_hint_touch = _sticks.using_touch
 	if _hint_touch:
-		_hint.text = "Left stick moves · right stick aims and fires · ability button above the right stick · Loot when a bag is in range · a Burrmite wanders the yard"
+		_hint.text = "Left stick moves · right stick aims and fires · ability button above the right stick · Loot when a bag is in range · a Burrmite wanders the yard · a Driftcap Spore sits nearby"
 	else:
-		_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · Space or right-click for ability · E to loot · 1–8 equip · a Burrmite wanders the yard"
+		_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · Space or right-click for ability · E to loot · 1–8 equip · a Burrmite wanders the yard · a Driftcap Spore sits nearby"
 
 
 func _sample_input() -> void:
@@ -220,6 +222,28 @@ func _enemy_shape(radius_px: float) -> PackedVector2Array:
 	])
 
 
+func _circle_shape(radius_px: float, sides: int = 10) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for i in range(sides):
+		var a: float = TAU * float(i) / float(sides)
+		pts.append(Vector2(cos(a) * radius_px, sin(a) * radius_px))
+	return pts
+
+
+func _cap_shape(radius_px: float) -> PackedVector2Array:
+	# Wide mushroom cap, distinct from the Burrmite silhouette.
+	return PackedVector2Array([
+		Vector2(radius_px * 1.15, 0.15 * radius_px),
+		Vector2(radius_px * 0.85, 0.55 * radius_px),
+		Vector2(0.0, 0.45 * radius_px),
+		Vector2(-radius_px * 0.85, 0.55 * radius_px),
+		Vector2(-radius_px * 1.15, 0.15 * radius_px),
+		Vector2(-radius_px * 0.7, -0.45 * radius_px),
+		Vector2(0.0, -0.70 * radius_px),
+		Vector2(radius_px * 0.7, -0.45 * radius_px),
+	])
+
+
 func _acquire_view(
 	parent: Node2D,
 	pool: Dictionary,
@@ -249,6 +273,10 @@ func _acquire_view(
 	view.color = color
 	if kind == "enemy":
 		view.polygon = _enemy_shape(radius_px)
+	elif kind == "driftcap":
+		view.polygon = _cap_shape(radius_px)
+	elif kind == "spore":
+		view.polygon = _circle_shape(radius_px)
 	else:
 		view.polygon = _diamond(radius_px)
 	view.set_meta("r", radius_px)
@@ -301,7 +329,10 @@ func _update_pattern_views() -> void:
 	for id in live.keys():
 		var b: PatternBullet = live[id]
 		var r: float = b.radius_tiles * SimConstants.TILE_PX
-		var view := _acquire_view(_patterns, _pattern_views, _pattern_free, id, PATTERN_COLOR, r, "diamond")
+		var is_spore: bool = b.pattern_id == "spore_ring"
+		var color: Color = SPORE_COLOR if is_spore else PATTERN_COLOR
+		var kind: String = "spore" if is_spore else "diamond"
+		var view := _acquire_view(_patterns, _pattern_views, _pattern_free, id, color, r, kind)
 		view.position = b.pixel_position_at_time(time)
 
 
@@ -319,7 +350,10 @@ func _update_enemy_views() -> void:
 	for id in live.keys():
 		var e: EnemySnapshot = live[id]
 		var r: float = e.radius * SimConstants.TILE_PX
-		var view := _acquire_view(_enemies, _enemy_views, _enemy_free, id, ENEMY_COLOR, r, "enemy")
+		var is_cap: bool = e.def_id == "driftcap_spore"
+		var color: Color = DRIFTCAP_COLOR if is_cap else ENEMY_COLOR
+		var kind: String = "driftcap" if is_cap else "enemy"
+		var view := _acquire_view(_enemies, _enemy_views, _enemy_free, id, color, r, kind)
 		var x: float = e.x
 		var y: float = e.y
 		if prev_by_id.has(id):
@@ -327,8 +361,10 @@ func _update_enemy_views() -> void:
 			x = lerpf(p.x, e.x, alpha)
 			y = lerpf(p.y, e.y, alpha)
 		view.position = Vector2(x * SimConstants.TILE_PX, y * SimConstants.TILE_PX)
-		view.rotation = e.aim
-		view.color = FLASH_COLOR if e.flash_ticks > 0 else ENEMY_COLOR
+		# Rooted Driftcaps do not rotate with aim; Burrmites still do.
+		if not is_cap:
+			view.rotation = e.aim
+		view.color = FLASH_COLOR if e.flash_ticks > 0 else color
 
 func _on_loot_pressed() -> void:
 	GameSession.interact_pressed = true
@@ -431,7 +467,11 @@ func _ensure_shot_outline(view: Polygon2D, parent: Node2D, radius_px: float) -> 
 		outline.show_behind_parent = true
 		outline.color = SHOT_OUTLINE if parent == _shots else PATTERN_OUTLINE
 		view.add_child(outline)
-	outline.polygon = _diamond(radius_px + 1.5)
+	var kind := String(view.get_meta("kind", "diamond"))
+	if kind == "spore":
+		outline.polygon = _circle_shape(radius_px + 1.5)
+	else:
+		outline.polygon = _diamond(radius_px + 1.5)
 
 
 func _update_combat_floaters() -> void:

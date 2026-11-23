@@ -13,6 +13,7 @@ var range_tiles: float = 0.0
 var lifetime_ticks: int = 0
 var radius_tiles: float = 0.15
 var damage_key: String = ""
+var pattern_id: String = ""
 var source_id: int = 0
 var consumed: bool = false
 
