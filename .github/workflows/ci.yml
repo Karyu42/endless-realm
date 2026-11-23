@@ -3,6 +3,8 @@
 # Job names below are stable on purpose: they become required status checks on main.
 #   data-validate, proto-codegen-check, server-build-test, client-tests,
 #   fixtures-parity, integration-smoke, export-builds (linux|windows|android)
+# godot-host-smoke is NOT required yet: it becomes required after 10 clean runs on
+# main (docs/qa/test-plan.md).
 #
 # Every job first checks that its inputs exist. If one is missing it prints
 # "skipped: <path> not present yet" (as a notice and in the job summary) and passes.
@@ -249,6 +251,54 @@ jobs:
       - name: make fixtures-parity (Go and GDScript against the same golden fixtures)
         if: steps.target.outputs.present == 'true'
         run: make fixtures-parity GODOT="$GODOT"
+
+  godot-host-smoke:
+    # Not a required check yet (docs/qa/test-plan.md): required after 10 clean runs on main.
+    name: godot-host-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: inputs
+        uses: ./.github/actions/check-inputs
+        with:
+          paths: |
+            client/project.godot
+            client/src/net/host/host_main.gd
+            server/go.mod
+            server/cmd/bot
+            tools/loadtest/godot_host_loadtest.py
+      - if: steps.inputs.outputs.present == 'true'
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - if: steps.inputs.outputs.present == 'true'
+        uses: ./.github/actions/setup-godot
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          editor-sha512: ${{ env.GODOT_EDITOR_SHA512 }}
+      - name: godot --headless --import
+        if: steps.inputs.outputs.present == 'true'
+        run: godot --headless --path client --import
+      - name: Host load smoke (5 clients, 10 s)
+        if: steps.inputs.outputs.present == 'true'
+        run: >-
+          python3 tools/loadtest/godot_host_loadtest.py --godot godot
+          --clients 5 --duration 10 --max-skipped-ticks 0 --max-p99-ms 40
+      - name: Job summary
+        if: always() && steps.inputs.outputs.present == 'true'
+        run: |
+          if [ -f loadtest-results/results.md ]; then
+            { echo "### godot-host-smoke"; echo; cat loadtest-results/results.md; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload loadtest-results
+        if: always() && steps.inputs.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: godot-host-smoke-results
+          path: loadtest-results/
+          if-no-files-found: warn
 
   integration-smoke:
     name: integration-smoke

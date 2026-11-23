@@ -1,0 +1,61 @@
+{
+  "tier_rows": {
+    "normal": [
+      { "offset": -1, "w": 25 },
+      { "offset": 0, "w": 65 },
+      { "offset": 1, "w": 9 },
+      { "offset": 2, "w": 1 }
+    ],
+    "boss": [
+      { "offset": 0, "w": 50 },
+      { "offset": 1, "w": 40 },
+      { "offset": 2, "w": 10 }
+    ]
+  },
+  "slot_weights": { "weapon": 40, "armor": 35, "charm": 25 },
+  "weapon_class_weights": { "own": 70, "other_each": 15 },
+  "charm_lines": [
+    { "id": "hp", "w": 30, "scale": "g", "coef": 20 },
+    { "id": "ward", "w": 30, "scale": "g", "coef": 3 },
+    { "id": "focus_regen", "w": 20, "flat": 1 },
+    { "id": "stride", "w": 10, "pct_min": 2, "pct_max": 10 },
+    { "id": "tempo", "w": 10, "pct_min": 2, "pct_max": 10 }
+  ],
+  "armor": {
+    "id": "wardweave",
+    "name": "Wardweave",
+    "hp_coef": 30,
+    "ward_coef": 4
+  },
+  "charm": {
+    "id": "ember_charm",
+    "name": "Ember Charm"
+  },
+  "weapons": {
+    "thornguard": { "id": "bramble_scattergun", "name": "Bramble Scattergun", "base_damage": 12 },
+    "gleamwright": { "id": "lumen_rod", "name": "Lumen Rod", "base_damage": 30 },
+    "driftrunner": { "id": "gale_sling", "name": "Gale Sling", "base_damage": 14 }
+  },
+  "class_order": ["thornguard", "gleamwright", "driftrunner"],
+  "tables": {
+    "wilds_normal": { "item_chance": 0.04, "rolls": 1, "row": "normal" },
+    "vault_normal": { "item_chance": 0.04, "rolls": 1, "row": "normal" },
+    "matron": { "item_chance": 0.04, "rolls": 1, "row": "normal", "found_portal_chance": 0.10 },
+    "tallow_warden": {
+      "item_chance": 1.0,
+      "rolls": 2,
+      "row": "boss",
+      "m_extra_step": 25,
+      "riftstone": { "yield_coef": 4, "deposit_coef": 5 }
+    }
+  },
+  "rank_tables": {
+    "normal": "wilds_normal",
+    "elite": "matron",
+    "boss": "tallow_warden"
+  },
+  "eligibility_range_tiles": 10.0,
+  "ground_expiry_ticks": 1200,
+  "inventory_slots": 8,
+  "glint_kill_boss_mult": 30
+}

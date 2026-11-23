@@ -15,3 +15,35 @@ func test_packed_data_loads_burrmite() -> void:
 	assert_eq(spit.damage_key, "spit")
 	assert_eq(spit.size, "S")
 	assert_almost_eq(PatternDef.size_radius(spit.size), 0.15, 0.0)
+
+
+func test_packed_data_loads_loot_and_scaling() -> void:
+	assert_true(FileAccess.file_exists("res://data/loot.json"))
+	assert_true(FileAccess.file_exists("res://data/scaling.json"))
+	assert_true(FileAccess.file_exists("res://data/classes.json"))
+	var catalog := DataCatalog.load_default()
+	assert_not_null(catalog.loot)
+	assert_eq(catalog.loot.item_chance_pct("normal"), 4)
+	assert_eq(catalog.scaling.xp_to_next(10), 308)
+	assert_not_null(catalog.class_def("thornguard"))
+	assert_eq(catalog.class_def("thornguard").base_hp, 200)
+
+
+func test_packed_data_has_no_unknown_ids() -> void:
+	var catalog := DataCatalog.load_default()
+	assert_eq(catalog.unknown_reference_ids().size(), 0)
+	assert_eq(catalog.scaling.interact_prompt_range_tiles, 1.5)
+	assert_eq(catalog.scaling.interact_accept_range_tiles, 2.0)
+	assert_eq(catalog.scaling.practice_yard_content_level, 1)
+	assert_eq(catalog.loot.charm_id, "ember_charm")
+	assert_eq(catalog.loot.charm_name, "Ember Charm")
+	assert_eq(catalog.loot.charm_hp_coef(), 20.0)
+
+
+func test_unknown_loot_ids_are_reported() -> void:
+	var catalog := DataCatalog.load_default()
+	catalog.loot.rank_tables["boss"] = "no_such_table"
+	var ids := catalog.unknown_reference_ids()
+	assert_true("no_such_table" in ids)
+	catalog.report_unknown_ids()
+	assert_push_error("DataCatalog: unknown id no_such_table")

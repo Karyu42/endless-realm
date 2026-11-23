@@ -67,9 +67,11 @@ make loadtest-godot LOADTEST_CLIENTS=100 LOADTEST_DURATION=60
 python3 tools/loadtest/godot_host_loadtest.py --clients 50 --emitters 40 --duration 30
 ```
 
-Results land in `loadtest-results/results.{json,md}` (git-ignored).
-The script exits nonzero if the bot fails, any ticks are skipped, or tick
-p99 exceeds 40 ms. Override the fail gates explicitly with
+Results land in `loadtest-results/results.{json,md}` (git-ignored), with the
+raw host and bot output in `loadtest-results/{host,bot}-<clients>.log`.
+The script exits nonzero if the host never prints `HOST_READY` (it exits first,
+or `--ready-timeout`, default 60 s, passes), the bot fails, any ticks are
+skipped, or tick p99 exceeds 40 ms. Override the fail gates explicitly with
 `--max-skipped-ticks` / `--max-p99-ms` (Make: `LOADTEST_MAX_SKIPPED_TICKS` /
 `LOADTEST_MAX_P99_MS`).
 

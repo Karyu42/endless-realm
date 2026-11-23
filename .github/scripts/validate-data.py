@@ -124,5 +124,73 @@ if enemies_path.exists() and patterns_path.exists():
             if key not in used_keys:
                 print(f"::warning::{eid}: unused damage_key {key!r} in base.damage")
 
+# --- content-v0.1 §5: loot weight sums ---
+loot_path = root / "loot.json"
+if loot_path.exists():
+    loot = json.loads(loot_path.read_text(encoding="utf-8"))
+
+    def sum_ok(name, values, expect=100):
+        total = sum(int(v) for v in values)
+        if total != expect:
+            err(f"{name} weights sum to {total}, expected {expect}")
+
+    for row_name, row in (loot.get("tier_rows") or {}).items():
+        if isinstance(row, list):
+            sum_ok(f"loot.json tier_rows.{row_name}", [e.get("w", 0) for e in row if isinstance(e, dict)])
+    sw = loot.get("slot_weights") or {}
+    if sw:
+        sum_ok("loot.json slot_weights", [sw.get("weapon", 0), sw.get("armor", 0), sw.get("charm", 0)])
+    ww = loot.get("weapon_class_weights") or {}
+    if ww:
+        # own + 2 × other_each (three classes)
+        total = int(ww.get("own", 0)) + 2 * int(ww.get("other_each", 0))
+        if total != 100:
+            err(f"loot.json weapon_class_weights own + 2×other_each = {total}, expected 100")
+    lines = loot.get("charm_lines") or []
+    if lines:
+        sum_ok("loot.json charm_lines", [e.get("w", 0) for e in lines if isinstance(e, dict)])
+
+# --- loot / class id cross-references ---
+classes_path = root / "classes.json"
+loot_path = root / "loot.json"
+if loot_path.exists():
+    loot = json.loads(loot_path.read_text(encoding="utf-8"))
+    tables = loot.get("tables") or {}
+    tier_rows = loot.get("tier_rows") or {}
+    for rank, tid in (loot.get("rank_tables") or {}).items():
+        if tid not in tables:
+            err(f"loot.json rank_tables.{rank}: unknown id {tid!r} (not in tables)")
+    for tid, tab in tables.items():
+        if isinstance(tab, dict):
+            row = tab.get("row")
+            if row not in tier_rows:
+                err(f"loot.json tables.{tid}.row: unknown id {row!r} (not in tier_rows)")
+    class_ids = set()
+    if classes_path.exists():
+        classes_doc = json.loads(classes_path.read_text(encoding="utf-8"))
+        for c in classes_doc.get("classes") or []:
+            if isinstance(c, dict) and c.get("id"):
+                class_ids.add(str(c["id"]))
+    weapons = loot.get("weapons") or {}
+    weapon_ids = set()
+    for cid, w in weapons.items():
+        if class_ids and cid not in class_ids:
+            err(f"loot.json weapons.{cid}: unknown id {cid!r} (not in classes.json)")
+        if isinstance(w, dict) and w.get("id"):
+            weapon_ids.add(str(w["id"]))
+    for cid in loot.get("class_order") or []:
+        if class_ids and cid not in class_ids:
+            err(f"loot.json class_order: unknown id {cid!r} (not in classes.json)")
+    if classes_path.exists():
+        for c in classes_doc.get("classes") or []:
+            if not isinstance(c, dict):
+                continue
+            wid = c.get("weapon_id")
+            if wid and wid not in weapon_ids:
+                err(
+                    f"classes.json {c.get('id')}.weapon_id: unknown id {wid!r} "
+                    f"(not in loot.json weapons.*.id)"
+                )
+
 print(f"data-validate: {len(data_files)} data files, {len(schemas)} schemas, {errors} errors")
 sys.exit(1 if errors else 0)

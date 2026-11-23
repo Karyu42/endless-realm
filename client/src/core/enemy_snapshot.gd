@@ -10,6 +10,7 @@ var aim: float = 0.0
 var hp: int = 0
 var max_hp: int = 0
 var radius: float = 0.35
+var content_level: int = 1
 
 
 func to_pixels() -> Vector2:
