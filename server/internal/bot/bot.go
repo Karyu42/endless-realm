@@ -236,6 +236,9 @@ func runOne(ctx context.Context, cfg Config, wantM100, idx int) (uint64, error) 
 				return 0, fmt.Errorf("no new snapshot for %s (last tick %d)", forAgo, track.tick())
 			}
 			seq++
+			if seq == 0 {
+				seq = 1
+			}
 			if err := writeMsg(ctx, conn, inputFor(cfg.Input, idx, seq)); err != nil {
 				return 0, fmt.Errorf("soak input: %w", err)
 			}
@@ -245,7 +248,7 @@ func runOne(ctx context.Context, cfg Config, wantM100, idx int) (uint64, error) 
 
 type snapTracker struct {
 	mu          sync.Mutex
-	playerID    uint32
+	playerID    uint64
 	lastTick    uint32
 	lastApplied uint32
 	lastAt      time.Time
@@ -254,7 +257,7 @@ type snapTracker struct {
 	snapshots   uint64
 }
 
-func newSnapTracker(playerID uint32) *snapTracker {
+func newSnapTracker(playerID uint64) *snapTracker {
 	return &snapTracker{playerID: playerID}
 }
 
@@ -291,7 +294,7 @@ func (s *snapTracker) note(snap *protocolv1.Snapshot) {
 	s.gotFirst = true
 	s.snapshots++
 	for _, p := range snap.GetPlayers() {
-		if p.GetId() == s.playerID && p.GetAppliedSeq() > s.lastApplied {
+		if p.GetId() == s.playerID && seqIsNext(p.GetAppliedSeq(), s.lastApplied) {
 			s.lastApplied = p.GetAppliedSeq()
 		}
 	}
@@ -362,7 +365,7 @@ func (s *snapTracker) soakOK(firstTick, lastSeq uint32) error {
 	if s.lastApplied == 0 {
 		return fmt.Errorf("applied_seq never appeared in a snapshot")
 	}
-	if lastSeq > appliedSeqSlack && s.lastApplied+appliedSeqSlack < lastSeq {
+	if lastSeq != 0 && seqNewer(lastSeq, s.lastApplied) && lastSeq-s.lastApplied > appliedSeqSlack {
 		return fmt.Errorf("applied_seq=%d did not catch up to sent seq=%d", s.lastApplied, lastSeq)
 	}
 	return nil

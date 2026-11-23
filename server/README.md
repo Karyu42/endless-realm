@@ -94,9 +94,9 @@ The bot exits non-zero on dial failure, handshake failure (`Reject` or missing `
 
 ## Portal API (protocol v1, additive)
 
-The handshake version stays **1**. New Welcome fields (`instance_id`, `m100`) and new oneof members (`OpenPortal`, `JoinInstance`, `LeaveInstance`, `ListInstances`, and the matching server replies plus `Error` / `ErrorCode`) are additive so the existing bot keeps working.
+The handshake version stays **1**. New Welcome fields (`instance`, `m100`) and new oneof members (`OpenPortal`, `JoinInstance`, `LeaveInstance`, `ListInstances`, and the matching server replies plus `ErrorReply` / `ErrorCode`) are additive so the existing bot keeps working.
 
-The Go process is a **test harness** (smoke, soak, `/metrics`). It keeps the process-default instance (`instance_id = 1`) for that path. It validates `OpenPortal { uint32 m100 }` (`50 ≤ m100 ≤ 150` and `m100 % 5 == 0`) and rejects anything else with `Error { code = INVALID_MULTIPLIER }` without creating a portal. Mapping uses a sentinel (`errors.Is(ErrInvalidMultiplier)`), not substring matching. Valid portal commands are not executed here: portal runtime (open/join/leave/list, party cap, instance lifetime) will be implemented in the Godot host.
+The Go process is a **test harness** (smoke, soak, `/metrics`). It keeps the process-default instance (`instance = 1`) for that path. It validates `OpenPortal { uint32 m100 }` (`50 ≤ m100 ≤ 150` and `m100 % 5 == 0`) and rejects anything else with `ErrorReply { code = INVALID_MULTIPLIER }` without creating a portal. Mapping uses a sentinel (`errors.Is(ErrInvalidMultiplier)`), not substring matching. Valid portal commands are not executed here: portal runtime (open/join/leave/list, party cap, instance lifetime) will be implemented in the Godot host.
 
 `ListInstances` (when implemented by the host) must not include instance seeds. Seeds are only sent on `Welcome` / `OpenPortalOk` / `JoinInstanceOk` for the caller's own instance. The lobby cap is `1–50` players, default `50` (`--max-players` / `ER_MAX_PLAYERS`).
 

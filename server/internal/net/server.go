@@ -30,7 +30,7 @@ var errPortalRuntime = fmt.Errorf("portal runtime is not implemented on the Go t
 type Server struct {
 	inst    *instance.Instance
 	http    *http.Server
-	nextID  atomic.Uint32
+	nextID  atomic.Uint64
 	writeTO time.Duration
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -243,7 +243,7 @@ func (s *Server) session(ctx context.Context, conn *websocket.Conn) error {
 	return err
 }
 
-func (s *Server) handleClient(id uint32, cm *protocolv1.ClientMessage) (*protocolv1.ServerMessage, error) {
+func (s *Server) handleClient(id uint64, cm *protocolv1.ClientMessage) (*protocolv1.ServerMessage, error) {
 	switch p := cm.Payload.(type) {
 	case *protocolv1.ClientMessage_Input:
 		in := p.Input
@@ -293,7 +293,7 @@ func (s *Server) readHello(ctx context.Context, conn *websocket.Conn) (*protocol
 	return hello, nil
 }
 
-func (s *Server) writeWelcome(ctx context.Context, conn *websocket.Conn) (uint32, error) {
+func (s *Server) writeWelcome(ctx context.Context, conn *websocket.Conn) (uint64, error) {
 	id := s.nextID.Add(1) - 1
 	welcome := &protocolv1.ServerMessage{
 		Payload: &protocolv1.ServerMessage_Welcome{Welcome: &protocolv1.Welcome{
@@ -302,7 +302,7 @@ func (s *Server) writeWelcome(ctx context.Context, conn *websocket.Conn) (uint32
 			TickHz:          instance.TickRate,
 			InstanceSeed:    s.inst.Seed(),
 			Multiplier:      float32(s.inst.Multiplier()),
-			InstanceId:      instance.DefaultInstanceID,
+			Instance:        instance.DefaultInstanceID,
 			M100:            uint32(s.inst.MultiplierHundredths()),
 		}},
 	}
@@ -338,7 +338,7 @@ func errorMsg(err error) *protocolv1.ServerMessage {
 		code = protocolv1.ErrorCode_INVALID_MULTIPLIER
 	}
 	return &protocolv1.ServerMessage{
-		Payload: &protocolv1.ServerMessage_Error{Error: &protocolv1.Error{Code: code, Reason: reason}},
+		Payload: &protocolv1.ServerMessage_Error{Error: &protocolv1.ErrorReply{Code: code, Reason: reason}},
 	}
 }
 

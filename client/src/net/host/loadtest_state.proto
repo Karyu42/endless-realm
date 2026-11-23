@@ -9,7 +9,7 @@ syntax = "proto3";
 package endless.loadtest;
 
 message PlayerState {
-  uint32 id = 1;
+  uint64 id = 1;
   uint32 applied_seq = 2;
   float x = 3;
   float y = 4;
@@ -19,7 +19,7 @@ message PlayerState {
 
 // Closed-form enemy pattern: clients rebuild every bullet from these fields.
 message PatternSpawn {
-  uint32 emitter_id = 1;
+  uint64 emitter_id = 1;
   uint32 pattern_id = 2;
   uint64 seed = 3;
   uint32 spawn_tick = 4;
@@ -29,7 +29,7 @@ message PatternSpawn {
 
 // Closed-form player shot.
 message ShotSpawn {
-  uint32 owner = 1;
+  uint64 owner = 1;
   uint32 spawn_tick = 2;
   float x = 3;
   float y = 4;
