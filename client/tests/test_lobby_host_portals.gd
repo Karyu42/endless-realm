@@ -1682,6 +1682,102 @@ func test_rejoin_refuses_a_stash_id_the_host_never_issued() -> void:
 	assert_eq(back.id, b)
 
 
+# --- dungeon configuration from host data ---------------------------------------
+
+func _assert_configured(inst: LobbyHost.HostInstance, grants: bool) -> void:
+	var def: DungeonDef = _host.catalog.dungeon(inst.dungeon_id)
+	assert_not_null(def)
+	assert_same(inst.sim._dungeon, def, "configured from the host's own dungeon data")
+	assert_eq(inst.sim.instance_m100(), inst.m100)
+	assert_eq(inst.sim.instance_base_level(), inst.created_from.base_level)
+	assert_eq(inst.sim.grants_persistent(), grants)
+	assert_eq(inst.grants_persistent, grants)
+	assert_false(inst.sim.boss_defeated())
+	assert_false(inst.sim.arena_sealed())
+
+
+func test_hosted_vault_instance_is_configured_from_host_data() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	portal.grants_persistent = false  # a packed claim; host data decides
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	assert_false(inst.is_overworld())
+	_assert_configured(inst, true)
+
+
+## Host data saying false wins over a packed true (fails closed).
+func test_host_data_without_grants_wins_over_packed_claim() -> void:
+	_host = _new_host()
+	var def: DungeonDef = _host.catalog.dungeon("hollowmere_vault")
+	var saved := def.grants_persistent
+	def.grants_persistent = false
+	var portal := _open_portal()
+	portal.grants_persistent = true
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	def.grants_persistent = saved
+	_assert_configured(_instance_of(a), false)
+
+
+func test_practice_reset_configures_the_rebuilt_sim() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	_assert_configured(inst, false)
+	var old := inst.sim
+	var p := _host._find_player(a)
+	var w: EnemyState = null
+	inst.sim.place_player(p.sim_id, 40.0, 6.0)
+	_ticks(2)
+	for e in inst.sim._enemies:
+		if e.is_boss():
+			w = e
+	assert_not_null(w)
+	inst.sim.hurt_enemy(w.id, 1, p.sim_id)
+	assert_true(inst.sim.arena_sealed())
+	_exit_here(a, 5)
+	_enter_persistent(a, portal, 6)
+	assert_same(_instance_of(a), inst)
+	assert_ne(inst.sim, old, "rebuilt")
+	_assert_configured(inst, false)
+
+
+## Host placement into a sealed arena must land outside the door, and must
+## not raise the encounter's n_peak. Relies on LocalSim's sealed-arena
+## placement guard; pending until that guard is on this branch.
+func test_host_placement_into_sealed_arena_lands_outside() -> void:
+	_host = _new_host()
+	if not LocalSim.new(SimConfig.new()).has_method("_should_relocate_sealed_placement"):
+		pending("needs LocalSim sealed-arena placement guard")
+		return
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var pa := _host._find_player(a)
+	inst.sim.place_player(pa.sim_id, 40.0, 6.0)
+	_ticks(2)
+	var w: EnemyState = null
+	for e in inst.sim._enemies:
+		if e.is_boss():
+			w = e
+	inst.sim.hurt_enemy(w.id, 1, pa.sim_id)
+	assert_true(inst.sim.arena_sealed())
+	var peak := inst.sim.boss_n_peak()
+	var b := _join_near_portal(portal)
+	var pb := _host._find_player(b)
+	var bid := inst.sim.alloc_player_id()
+	assert_true(_host._move_player(pb, inst, bid, 40.0, 6.0, true))
+	inst.sim.get_player(pa.sim_id).hp = 9999
+	_ticks(3)
+	assert_lt(inst.sim.get_player(bid).x, 34.0, "placed outside the sealed door")
+	assert_eq(inst.sim.boss_n_peak(), peak, "n_peak unchanged")
+
+
 func test_rule_7_activity_tracks_received_input_frames_through_the_host() -> void:
 	_host = _new_host()
 	# A normal entrance (not the packed practice door) grants persistent rewards
