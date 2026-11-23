@@ -15,7 +15,7 @@ Legend: **[v0.1]** is in the first playable slice. **[Later]** is a later-phase 
 1. **[v0.1]** Spawn in **the Hearth**, a safe hub with a vendor, a stash and a portal board.
 2. Step into **the Wilds**, a shared open zone in rings. Enemy level rises from the edge (level 1) toward the center (top ring = base level 20 in v0.1).
 3. Dodge bullet patterns, kill enemies, and earn XP, Glint and gear drops.
-4. Find or open a **portal** to a dungeon instance (v0.1 has one dungeon, **the Hollowmere Vault**, with one boss, **the Tallow Warden**). The opener sets the level multiplier (§5).
+4. Find or open a **portal** to a dungeon instance (v0.1 has one dungeon, **the Hollowmere Vault**, with one boss, **the Tallow Warden**). The opener sets the level multiplier (§6).
 5. Clear the dungeon for boss loot and Riftstone, then go back to the Hearth.
 6. Salvage, tier up and buy gear. Push to a higher level, ring or multiplier and repeat.
 
@@ -31,7 +31,7 @@ Each class has one weapon type and one ability that uses **Focus**. Movement spe
 | **Gleamwright** | Mid-range support | Lumen Rod: piercing bolt, range 7 | *Kindle Pulse*: heals allies within 4 tiles for 25% max HP (60) | 140 | 6 | 5.0 | 2.5 |
 | **Driftrunner** | Long-range skirmisher | Gale Sling: fast twin bolts, range 9 | *Slipstep*: blink 4 tiles with 0.3 s of no damage (30) | 120 | 4 | 6.0 | 3.5 |
 
-All three have 100 Focus with 5/s regen. **[Later]** More classes, class unlocks and gear restricted to one class.
+All three have 100 Focus with 5/s regen. Stride and Tempo are fixed per class. All gear together can add at most +10% to each (D6). **[Later]** More classes, class unlocks and gear restricted to one class.
 
 Why: three classes cover tank, support and ranged DPS, which is the minimum for co-op to matter. Keeping it to three also keeps art and balance work small.
 
@@ -94,7 +94,8 @@ Each slot has a tier T ≥ 0 (T0 to T∞). Slots: weapon, armor, charm (v0.1).
 g(T) = 1 + 0.25 × T
 weaponDamage = classWeaponBase × g(T)      (Thornguard 12/pellet, Gleamwright 30, Driftrunner 14/bolt)
 armor HP     = 30 × g(T),  armor Ward = 4 × g(T)
-charm        = one of: +Focus regen (fixed +1/s), +HP (20 × g(T)), +Ward (3 × g(T))
+charm        = one of: +Focus regen (fixed +1/s), +HP (20 × g(T)), +Ward (3 × g(T)), +Stride 2–10%, +Tempo 2–10%
+               (total Stride/Tempo bonus from all gear capped at +10% each, D6)
 ```
 
 The **on-level tier** is `T* = floor(E / 5)`, so `g(T*) ≈ m(E)`. Gear of tier T* keeps time-to-kill constant against on-level enemies.
@@ -124,21 +125,21 @@ The minimum tier is 0. Item drop chance per kill is 4% for normal enemies and 10
 
 | Currency (placeholder) | Sources | Sinks |
 |---|---|---|
-| **Glint** (common) | Every kill: `ceil(m(E))`, boss ×30; selling gear: `10 × g(T)` | Vendor gear (`40 × g(T)` for tiers up to `T*(Lp) − 2`); tier-up fee; stash pages (500 × 2ⁿ); respawn fee (§7 Q3) |
+| **Glint** (common) | Every kill: `ceil(m(E))`, boss ×30; selling gear: `10 × g(T)` | Vendor gear (`40 × g(T)` for tiers up to `T*(Lp) − 2`); tier-up fee; stash pages (500 × 2ⁿ); respawn fee (§7) |
 | **Echo Dust** (crafting) | Salvaging gear: `5 × g(T)` | Tier-up T→T+1: `20 × g(T+1)` Dust + `100 × g(T+1)` Glint (about 4 salvages per step) |
 | **Riftstone** (portal) | Dungeon boss: `3 × M²` per eligible player (§6) | Opening a portal with M > 1: `ceil(5 × M²)`; **[Later]** character slots, extra multiplier unlocks |
 
 All sinks scale with `g` or `m` at the same slope as the sources, so inflation stays flat at any level. Vendor gear is always 2 tiers behind on-level, so drops and tier-ups stay the main way to progress.
 
-**[Later]** A cosmetic-only premium currency (placeholder **Prism**). It never converts into, or buys, anything that affects power, and it can't be traded for Glint, Echo Dust or Riftstone.
+Glint, Echo Dust and Riftstone can be traded between players (§8). Hardcore characters have separate wallets (§7). The cosmetic-only currency **Prism** is earnable through the seasonal track and never tradeable (§9).
 
 ## 6. Portal level multiplier
 
-Whoever opens a portal (a dungeon instance, or **[Later]** a whole server instance) sets **M**.
+Whoever opens a portal (a dungeon instance; a whole server instance or shard is **[Later]**, D5) sets **M**.
 
 - **Base level B:** the dungeon's base level (Hollowmere Vault: 10) or the opener's level, whichever is **higher**. The vault stays relevant forever.
 - **Content level:** `E = max(1, round(B × M))`.
-- **Range:** v0.1 allows M ∈ [0.50, 1.50] in steps of 0.05, default 1.00. Values above 1.5 are **[Later]**, unlocked by clearing at your current max.
+- **Range:** v0.1 allows M ∈ [0.50, 1.50] in steps of 0.05, default 1.00. Values above 1.5 are **[Later]**: +0.25 per clear at your current max, with a **hard cap of 3.0** (D2).
 - **What M scales:** enemy level E (so HP, damage and Ward through `m(E)`), kill XP through `killXP(E)`, drop tier through `T*(E)`, Glint through `m(E)`, and Riftstone through `3 × M²`. Bullet patterns and speeds do **not** change. **[Later]** Pattern density modifiers at high M.
 - **Rewards:** above 1.00, the boss gets +1 extra item roll per 0.25 above 1.00 (two extra at 1.50). Riftstone grows as M², so risk is paid super-linearly. Below 1.00 there are no extra rolls and Riftstone drops off sharply (0.25 × base at M=0.5), so low-M portals are for helping friends, not farming.
 
@@ -151,12 +152,105 @@ Whoever opens a portal (a dungeon instance, or **[Later]** a whole server instan
 6. **Rate limits:** one open portal per player, a 60 s cooldown on opening, and the instance closes 10 min after it empties.
 7. **Cost gate:** M > 1 costs Riftstone up front (§5), so spam-opening high M portals is not free.
 
-## 7. Open questions for Karyu
+## 7. Death modes [v0.1]
 
-1. **Death model:** permadeath, soft death or a hybrid? *Recommendation:* soft death for v0.1. Respawn in the Hearth, lose the unbanked loot from that run, and pay a Glint respawn fee of `20 × m(L)`. Permadeath could come back later as an opt-in hardcore mode with its own leaderboard.
-2. **Multiplier ceiling:** keep v0.1 at 0.5–1.5? *Recommendation:* yes. Raise the ceiling only after playtesting, unlocked by clearing (for example +0.25 per clear at your max, hard cap 3.0).
-3. **Player trading:** allow trading gear and currencies between players? *Recommendation:* not in v0.1, so that real-money markets don't form. Later, allow trading gear only, with no currency trading.
-4. **Cosmetic monetization:** should Prism cosmetics also be earnable in game? *Recommendation:* yes, a small seasonal earnable track. That stays true to "everything farmable" while paid cosmetics remain a shortcut.
-5. **Server-instance multiplier:** can a server owner set M for a whole shard? *Recommendation:* later phase. Keep v0.1 to portal-level M, so there is one rule set to balance and test.
-6. **Stat identity growth:** should Tempo and Stride grow with level at all? *Recommendation:* no. Keep them fixed per class, and let gear charms give at most +10%, so dodge skill stays the core at every level.
-7. **Overgear clamp:** is `T* + 3` too strict for players who like to "twink" old content? *Recommendation:* keep it for v0.1 and loosen it only if playtesters complain.
+Each character is created as **Standard** or **Hardcore**. The mode is fixed for the character's whole life.
+
+**Standard (soft death):** you respawn in the Hearth. You lose the *unbanked loot*: items and currency picked up since you last stood in the Hearth. You also pay a respawn fee of `20 × m(L)` Glint, which can take you to 0 but not below. Your level, XP and equipped gear are kept.
+
+**Hardcore (permadeath):**
+- **Separate realm:** hardcore characters have their own Glint, Echo Dust and Riftstone wallets, their own stash and their own trading pool. They can trade, party and share portals **only with other hardcore characters**. Nothing moves between hardcore and standard, in either direction.
+- **On death:** the character is **Fallen**. Equipped gear, inventory and unbanked loot are destroyed. The account's hardcore stash and hardcore wallets survive. The Fallen character stays as a read-only memorial with its name, class, level, cause of death and date.
+- **Disconnect rule:** after a disconnect, the character stays in the world for 5 s and can die in that time. This stops players dodging death by pulling the plug. Server-side crashes or outages (an incident flag) do not kill.
+- **Leaderboard:** there are boards for all time and for each season. Ranking is by level, then total XP, then the earliest time the level was reached, with filters per class. Alive and Fallen characters are both listed, with a status badge.
+- **Reward:** hardcore earns no power bonus. Leaderboard ranks and milestones (level 20/50/100 reached in hardcore) give cosmetic titles and portal trails only.
+
+Why: keeping the hardcore economy fully separate is the only way its scarcity stays meaningful. If gear could flow in from standard, permadeath would cost nothing.
+
+## 8. Player trading [v0.1]
+
+Full trading is allowed: items **and** currencies (Glint, Echo Dust, Riftstone) can be traded between players in the same mode (§7). **Prism and purchased cosmetics are never tradeable** (§9).
+
+### 8.1 Trade flow
+1. Trading happens only in the Hearth, face to face. Each side offers up to 8 item slots plus any amount of the three currencies.
+2. Both sides press **Lock**. Any change to either offer unlocks both.
+3. A 3-second review countdown runs, then both sides press **Confirm**.
+4. The server commits the trade, or rejects it as a whole.
+
+### 8.2 Anti-dupe (server-authoritative)
+- **Unique item IDs:** the server mints every item at creation (drop, vendor or craft) with a UUIDv7 `item_uid`. The client never creates or names items. The database enforces `UNIQUE(item_uid)` across all inventories, stashes and mail.
+- **Atomic trades:** one database transaction at `SERIALIZABLE` isolation, with row locks on both inventories and wallets. It checks ownership and amounts, then moves items by `item_uid`. Any failure rolls back the whole trade, with no partial transfers.
+- **Double-entry ledger:** each currency movement is a pair of ledger rows (debit and credit) that sum to zero. A wallet balance is derived from the ledger, or checked against it at least every hour.
+- **Idempotency:** each trade carries a `trade_id` (UUIDv7) generated by the server when the trade window opens. Replaying a commit with the same `trade_id` does nothing.
+- **Dupe tripwire:** if an `item_uid` is seen in two places, or a ledger doesn't balance to zero, the affected items and wallets are frozen at once. If any ledger is unbalanced, trading is paused server-wide (kill switch) until a human clears it.
+
+### 8.3 Append-only trade log
+Each committed or rejected trade writes one immutable row: `trade_id`, UTC timestamps (open/lock/confirm/commit), both account and character IDs, mode, item_uids with tier, currency amounts, the normalized trade value (below), the result, and salted hashes of IP and device. The table is insert-only, with no UPDATE or DELETE grants. Corrections are written as new compensating rows.
+
+### 8.4 Trade value and limits
+**Normalized trade value (NTV):** the value given away, in Glint-equivalents at the giver's level.
+
+```
+itemValue(T) = 40 × g(T)            (vendor price)
+NTV = (Glint + 2 × EchoDust + 25 × m(L) × Riftstone + Σ itemValue) / m(L)
+```
+
+Dividing by `m(L)` keeps the limits meaningful at every level. 1 NTV is about one on-level kill's worth of Glint.
+
+| Rule | Value |
+|---|---|
+| **Account-age gate:** can trade at all only after | account age ≥ 72 h **and** ≥ 5 h played **and** a character at level ≥ 10 |
+| **New-account daily cap** (account age < 14 days, or < 20 h played) | ≤ 1,500 NTV given away per UTC day, and ≤ 20 trades per day |
+| Established accounts | no hard cap; anomaly flags only |
+| **Re-trade hold:** items and currency received in a trade | cannot be traded on again for 1 h |
+| Cooldown between trades (per character) | 5 s |
+| Trade fee (Glint sink and RMT friction) | 2% of Glint transferred, paid by the sender (§11 Q2) |
+
+### 8.5 Anomaly flags
+The system raises flags into a review queue. v0.1 has no automatic bans.
+
+| Flag | Trigger | Automatic action |
+|---|---|---|
+| **Lopsided trade** | One side's NTV ≥ 10× the other **and** ≥ 5,000 NTV | Received assets held 48 h, then reviewed |
+| **Funnel** | One account receives from ≥ 5 distinct new accounts (< 14 days) within 24 h | Trading paused for the receiver until review |
+| **Shared device** | ≥ 3 accounts with the same device hash trading into one account within 7 days | Flag only |
+| **Farm rate** | Glint earned per hour > 3× the p99 for that level band, for 3 h in a row | Flag (suspected bot) |
+| **Dupe or ledger** | §8.2 tripwire | Freeze; server-wide kill switch if a ledger is unbalanced |
+
+**[Later]** A market board (asynchronous listings), mail with attachments, and trade-velocity models.
+
+Why: full currency trading means real-money traders will come. Server-side atomic trades shut out dupes. Gating new accounts and adding a short re-trade hold make bot-farm funnels slow and easy to see, while normal players never notice the limits.
+
+## 9. Seasonal cosmetic track [v0.1, Season 0]
+
+- **Season:** 10 weeks. The track has 30 tiers, and each tier costs 200 **Sparks** (6,000 in total).
+- **Sparks:** 1 per 10 kills (only kills with `E ≥ Lp − 5` count), 20 per boss with the §6.1 contribution check, and +50 for the first dungeon clear each UTC day. That is about 250 Sparks per hour, so the full track takes about 24 h of play over 10 weeks. Sparks stop at the end of the season.
+- **Rewards (cosmetic only):** 2 class skins, 6 dyes, 3 portal trails, 2 emotes and 1 title. The other tiers give 150 Prism in total (10 tiers × 15). Earned cosmetics are tradeable, and earned Prism is account-bound.
+- There is no paid premium track in v0.1 (§11 Q8).
+- Hardcore characters earn Sparks into the same account track. Cosmetics are account-wide and carry no power, so this has no effect on the hardcore economy.
+
+**Prism** is a cosmetic-only currency, earned on the track or bought ([Later] store). It is never tradeable and buys nothing that affects power.
+
+## 10. Decisions (2026-11-23)
+
+| # | Decision |
+|---|---|
+| D1 | Both death modes ship in v0.1: Standard (soft death) and Hardcore (permadeath) with a separate economy, trading pool and leaderboard (§7). |
+| D2 | Portal multiplier is 0.5–1.5 in v0.1. Later it is raised by clearing at your current max, up to a hard cap of 3.0. |
+| D3 | Full player trading, currency included, with anti-RMT and anti-dupe safeguards (§8). |
+| D4 | Cosmetics can also be earned through a small seasonal track (§9). |
+| D5 | Shard (server-instance) multiplier is a later phase. v0.1 has the portal multiplier only. |
+| D6 | Stride (movement speed) and Tempo (fire rate) are fixed per class, with at most +10% from gear in total. |
+| D7 | The overgear clamp stays at on-level tier + 3 (§4.1). |
+
+## 11. Open questions for Karyu
+
+1. **Prism and paid cosmetics tradeability:** *Recommendation:* account-bound and never tradeable. Because currency can be traded, tradeable Prism would turn into Glint, which means pay-to-win by the back door. Earned cosmetics can be traded.
+2. **Trade fee:** take 2% of Glint transferred? *Recommendation:* yes. It is a Glint sink, slows down currency laundering, and costs nothing on item-only trades.
+3. **Re-trade hold length:** *Recommendation:* 1 h at launch. Raise it to 24 h only if the funnel or lopsided flags show real-money traders at scale.
+4. **New-account gate and cap:** 72 h + 5 h played + level 10; 1,500 NTV per day until day 14. *Recommendation:* ship these values and tune them from flag data after 2 weeks.
+5. **Hardcore loss on death:** carried gear is destroyed and the hardcore stash and wallets survive. *Recommendation:* yes. Losing the whole account's hardcore stash is too punishing for an endless game.
+6. **Fallen hardcore characters:** stay as memorials, or convert to Standard? *Recommendation:* memorial only. Allowing conversion would make hardcore a risk-free way to farm.
+7. **Trade-log retention and privacy (EU/GDPR):** *Recommendation:* keep trade rows for 24 months. Keep salted IP and device hashes for 90 days, and state both in the privacy policy.
+8. **Paid premium season track:** *Recommendation:* none. Keep the seasonal track free and sell paid cosmetics only as separate store items, so nobody can pay to skip the track.
+9. **Enforcement:** automatic holds and pauses, but human-only bans? *Recommendation:* yes for v0.1. Revisit automatic bans once flag precision has been measured.
