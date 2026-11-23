@@ -87,3 +87,12 @@ is the alternative; a pattern uses at most one of these.
 Swept circle vs circle between tick `n-1` and `n`: relative motion reduced to a
 segment-circle test with radius `r_a + r_b`. This is what LocalSim uses so fast
 shots cannot tunnel. The Go side must use the same test when it applies hits.
+
+## Spiral and burst volleys
+
+`warden_spiral` / `warden_twinspiral_*` are `type: spiral`. Fixture `volley_index`
+is the emit index (0, 1, 2…): arm *i* fires at
+`base + i × 360°/arms + volley × rotate_per_emit_deg`.
+`acolyte_cross` is `type: burst`; `volley_index` is the repeat index, and
+`angle_offset_per_repeat_deg` is applied to the child volley. Hazard patterns
+emit no bullets.

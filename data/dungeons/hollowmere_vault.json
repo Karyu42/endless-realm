@@ -2,6 +2,7 @@
   "id": "hollowmere_vault",
   "name": "the Hollowmere Vault",
   "base_level": 10,
+  "grants_persistent": true,
   "rooms": [
     {
       "id": "antechamber",
@@ -59,14 +60,13 @@
           "enemy_id": "driftcap_spore",
           "x": 38.0,
           "y": 5.0
+        },
+        {
+          "enemy_id": "tallow_warden",
+          "x": 42.0,
+          "y": 6.0
         }
       ],
-      "boss_placeholder": {
-        "id": "tallow_warden",
-        "name": "the Tallow Warden",
-        "x": 42.0,
-        "y": 6.0
-      },
       "exit_portal": {
         "x": 44.0,
         "y": 6.0,
@@ -103,8 +103,8 @@
     "m100": 100,
     "practice_base_level": 1,
     "persistent": true,
-    "no_persistent_rewards": true,
     "reset_when_empty": true,
-    "placeholder": "Practice-slice portal. Official vault base_level is 10 (content-v0.1 \u00a73). This entrance uses practice_base_level so a new character can enter. Found-portal rules: M = 1.00, no deposit (vision \u00a76)."
+    "placeholder": "Practice-slice portal. Official vault base_level is 10. Grants nothing that persists outside the practice vault.",
+    "grants_persistent": false
   }
 }

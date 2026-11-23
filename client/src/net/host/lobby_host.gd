@@ -113,7 +113,7 @@ class HostInstance:
 	var portal_key: String = ""
 	var seed: int = 0
 	var m100: int = 100
-	var no_persistent_rewards: bool = false
+	var grants_persistent: bool = false
 	## The transfer this instance was created from (seed, M, B, E, opener),
 	## so a reset rebuilds the same slice.
 	var created_from: PortalTransfer = null
@@ -149,7 +149,7 @@ class PortalRecord:
 	## Persistent entrance: no admission expiry, one instance for the life
 	## of the host (never closed or replaced), capacity counts occupants.
 	var persistent: bool = false
-	var no_persistent_rewards: bool = false
+	var grants_persistent: bool = false
 	var reset_when_empty: bool = false
 
 
@@ -238,7 +238,6 @@ var loadtest_instances: int = 0
 const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
-var _retired_entrances: Dictionary = {}  # entrance key -> true (persistent, after stop)
 var _portal_records: Dictionary = {}  # source instance / entrance -> PortalRecord
 var _next_instance_index: int = 1
 var _instance_by_portal: Dictionary = {}  # portal_key -> HostInstance
@@ -347,11 +346,6 @@ func stop() -> void:
 	players.clear()
 	instances.resize(1)
 	_instance_by_portal.clear()
-	# A persistent entrance's instance ends with the lobby: free it, and
-	# retire the entrance id so this host object never rebuilds it.
-	for key in _portal_records:
-		if (_portal_records[key] as PortalRecord).persistent:
-			_retired_entrances[key] = true
 	_portal_records.clear()
 	# The lobby is closing: saved ability states do not outlive it.
 	_ability_stash.clear()
@@ -1000,7 +994,7 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			p.y = sp.y
 			p.aim_applied = sp.aim
 	for inst in stepped:
-		if inst.no_persistent_rewards:
+		if not inst.grants_persistent:
 			_enforce_practice_items(inst)
 			_route_practice_deaths(inst)
 	# Transfers queued during this step: the mover is rostered in the
@@ -1063,7 +1057,7 @@ func _resolve_bag(target_id: int, player_id: int) -> Dictionary:
 	var p := _find_player(player_id)
 	if p == null or p.instance == null:
 		return {}
-	if p.instance.no_persistent_rewards:
+	if not p.instance.grants_persistent:
 		# Practice instances: no pickups, deposits or hand-offs; only the
 		# exit can be used.
 		var exit: PortalSnapshot = p.instance.sim.portal_by_id(target_id)
@@ -1117,7 +1111,7 @@ func _portal_policy(portal: PortalSnapshot) -> Dictionary:
 	var src: Dictionary = def.practice_yard_portal
 	if not is_equal_approx(portal.x, float(src["x"])) or not is_equal_approx(portal.y, float(src["y"])) \
 			or portal.m100 != int(src["m100"]) or portal.base_level != int(src["practice_base_level"]):
-		return {}
+		return {"grants_persistent": def.grants_persistent}
 	return src
 
 
@@ -1148,10 +1142,9 @@ func _record_for(source: HostInstance, portal_id: int) -> PortalRecord:
 		record.created_tick = tick
 		var policy := _portal_policy(source.sim.portal_by_id(portal_id))
 		record.persistent = bool(policy.get("persistent", false))
-		record.no_persistent_rewards = bool(policy.get("no_persistent_rewards", false))
+		record.grants_persistent = bool(policy.get("grants_persistent", false))
 		# Reset is permitted only with host-enforced progression isolation.
-		record.reset_when_empty = record.persistent and record.no_persistent_rewards and bool(policy.get("reset_when_empty", false))
-		record.closed = _retired_entrances.has(key)
+		record.reset_when_empty = record.persistent and not record.grants_persistent and bool(policy.get("reset_when_empty", false))
 		_portal_records[key] = record
 	return _portal_records[key]
 
@@ -1208,7 +1201,7 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 		# for now an exit returns to the overworld.
 		_move_player(p, instances[0], p.id, xfer.arrival_x, xfer.arrival_y)
 		return
-	if source.no_persistent_rewards:
+	if not source.grants_persistent:
 		_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "only the practice exit is available here")
 		return
 	if not is_m100_allowed(xfer.m100) or not source.sim.m100_allowed(xfer.m100):
@@ -1238,13 +1231,13 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 		xfer.opener_id = p.sim_id
 		record.opener_source_id = p.sim_id
 		record.opener_lobby_id = p.id
-		dest = _create_dungeon_instance(xfer)
+		dest = _create_dungeon_instance(xfer, record.grants_persistent)
 		if dest == null:
 			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "dungeon unavailable or instance id space exhausted")
 			return
 		dest.portal_key = key
-		dest.no_persistent_rewards = record.no_persistent_rewards
-		if dest.no_persistent_rewards:
+		dest.grants_persistent = record.grants_persistent
+		if not dest.grants_persistent:
 			dest.sim.set_item_rules(false, false)
 		dest.capacity = record.capacity
 		dest.admitted = record.admitted
@@ -1262,7 +1255,7 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 ## A new dungeon instance with its own LocalSim, seed and multiplier (locked
 ## from the transfer at creation), its own entity id block, and capacity
 ## locked to the lobby's current max players.
-func _create_dungeon_instance(xfer: PortalTransfer) -> HostInstance:
+func _create_dungeon_instance(xfer: PortalTransfer, grants_persistent: bool = false) -> HostInstance:
 	var def: DungeonDef = catalog.dungeon(xfer.dungeon_id) if catalog != null else null
 	if def == null:
 		return null
@@ -1277,15 +1270,34 @@ func _create_dungeon_instance(xfer: PortalTransfer) -> HostInstance:
 	inst.seed = xfer.seed
 	inst.m100 = xfer.m100
 	inst.created_from = xfer
+	inst.grants_persistent = grants_persistent
 	inst.arrival_x = xfer.arrival_x
 	inst.arrival_y = xfer.arrival_y
 	inst.capacity = _settings.max_players
-	var dsim := _build_dungeon_sim(def, xfer, inst.index * INSTANCE_ID_BLOCK)
+	var dsim := _build_dungeon_sim(def, xfer, inst.index * INSTANCE_ID_BLOCK, grants_persistent)
 	if dsim == null:
 		return null
 	inst.sim = dsim
 	instances.append(inst)
 	return inst
+
+
+## TODO(persistence): all future save/export code must call this helper,
+## not world_view or get_player: practice progression is the entry snapshot.
+## No host character save/export path exists yet.
+func effective_character(player_id: int) -> PlayerCarry:
+	var p := _find_player(player_id)
+	if p == null or p.instance == null:
+		return null
+	var sp := p.instance.sim.get_player(p.sim_id)
+	if sp == null:
+		return null
+	var carry := PlayerCarry.from_sim(sp, p.instance.sim.ability_state(p.sim_id))
+	if not p.progression_entries.is_empty():
+		_apply_progression(carry, p.progression_entries.back()["fields"])
+	else:
+		carry.inventory = _copy_inventory(carry.inventory)
+	return carry
 
 
 ## Practice instances: nothing leaves its owner's inventory. Items a
@@ -1385,23 +1397,26 @@ func _apply_progression(carry: PlayerCarry, fields: Dictionary) -> void:
 
 func _restore_entry_progression(p: HostPlayer, carry: PlayerCarry) -> void:
 	if not p.progression_entries.is_empty():
-		_apply_progression(carry, p.progression_entries.back()["fields"])
+		var entry: Dictionary = p.progression_entries.back()
+		_apply_progression(carry, entry["fields"])
+		if carry.hp <= 0:
+			carry.hp = int(entry.get("hp", 1))
 		p.progression_entries.pop_back()
 
 
-func _build_dungeon_sim(def: DungeonDef, xfer: PortalTransfer, id_floor: int, practice: bool = false) -> LocalSim:
+func _build_dungeon_sim(def: DungeonDef, xfer: PortalTransfer, id_floor: int, grants_persistent: bool = false) -> LocalSim:
 	var dsim := LocalSim.new(_config, xfer.arrival_x, xfer.arrival_y, catalog)
 	dsim.remove_player(1)  # the built-in player; gone at the first step
 	if not dsim.set_id_floor(id_floor):
 		return null
 	dsim.set_lobby_settings(_settings)
-	if practice:
+	if not grants_persistent:
 		# Practice instances: no loot bags and no item transfers (§2.5).
 		dsim.set_item_rules(false, false)
 	# opener_id is the opener's sim id in the SOURCE world, not the
 	# destination id allocated later. Preserve that creation provenance.
 	dsim.configure_dungeon(def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
-			xfer.opener_id, xfer.opener_lp)
+			xfer.opener_id, xfer.opener_lp, grants_persistent)
 	return dsim
 
 
@@ -1429,23 +1444,13 @@ func _reset_instance(record: PortalRecord) -> bool:
 	var floor := old.alloc_player_id() + 1
 	if floor >= (inst.index + 1) * INSTANCE_ID_BLOCK:
 		return false
-	var fresh := _build_dungeon_sim(def, inst.created_from, floor, inst.no_persistent_rewards)
+	var fresh := _build_dungeon_sim(def, inst.created_from, floor, inst.grants_persistent)
 	if fresh == null:
 		return false
+	for p in players.duplicate():
+		if p.instance == inst:
+			_move_player(p, instances[0], p.id, 16.0, 16.0)
 	record.sim_ids.clear()
-	for p in players:
-		if p.instance != inst:
-			continue
-		var from := old.get_player(p.sim_id)
-		if from == null:
-			continue
-		var carry := PlayerCarry.from_sim(from, old.ability_state(p.sim_id))
-		var nid := fresh.alloc_player_id()
-		carry.player_id = nid
-		fresh.place_player(nid, inst.arrival_x, inst.arrival_y)
-		fresh.apply_carried_player(carry, inst.arrival_x, inst.arrival_y)
-		p.sim_id = nid
-		record.sim_ids[p.id] = nid
 	inst.sim = fresh
 	record.cleared = false
 	inst.linger_until_tick = -1
@@ -1462,8 +1467,8 @@ func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: 
 		return
 	var carry := PlayerCarry.from_sim(from, src.ability_state(p.sim_id))
 	_restore_entry_progression(p, carry)
-	if dest.no_persistent_rewards:
-		p.progression_entries.append({"instance": dest.index, "fields": _progression_fields(carry)})
+	if not dest.grants_persistent:
+		p.progression_entries.append({"instance": dest.index, "fields": _progression_fields(carry), "hp": carry.hp})
 		# The practice copy must not mutate the source inventory or entry copy.
 		carry.inventory = _copy_inventory(carry.inventory)
 	carry.player_id = dest_id

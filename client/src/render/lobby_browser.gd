@@ -5,6 +5,7 @@ var args: LobbyArgs
 var _client: LobbyClient
 var _pending_code: String = ""
 var _setup_error: String = ""
+var _ui: LobbyUiSettings
 
 
 func setup(p_args: LobbyArgs, error_text: String = "") -> void:
@@ -17,6 +18,7 @@ func setup(p_args: LobbyArgs, error_text: String = "") -> void:
 
 
 func _ready() -> void:
+	_ui = LobbyUiSettings.load_default()
 	if args == null:
 		args = LobbyArgs.new()
 	var max_edit: LineEdit = %MaxPlayersEdit
@@ -30,9 +32,14 @@ func _ready() -> void:
 	var offline_imports: CheckBox = %AllowOfflineImportsCheck
 	offline_imports.button_pressed = true
 	var broadcast_check: CheckBox = %BroadcastJoinCodeCheck
-	broadcast_check.button_pressed = false
+	broadcast_check.button_pressed = args.broadcast_join_code if args != null else false
+	broadcast_check.text = _ui.text("broadcast_code")
+	var invite_check: CheckBox = %InviteOnlyCheck
+	invite_check.button_pressed = args.invite_only if args != null else false
+	invite_check.text = _ui.text("invite_only_check")
+	invite_check.toggled.connect(_on_invite_toggled)
 	var offline_check: CheckBox = %PlayedOfflineCheck
-	offline_check.button_pressed = false
+	offline_check.button_pressed = args.played_offline if args != null else false
 	_client = LobbyClient.new()
 	add_child(_client)
 	_client.lobbies_changed.connect(_refresh_list)
@@ -42,14 +49,22 @@ func _ready() -> void:
 	%JoinSelectedButton.pressed.connect(_on_join_selected)
 	%JoinCodeButton.pressed.connect(_on_join_code)
 	%JoinIpButton.pressed.connect(_on_join_ip)
+	for n in [%NameEdit, %MaxPlayersEdit, %M100MinEdit, %M100MaxEdit, %HostCodeEdit]:
+		(n as LineEdit).text_changed.connect(func(_t: String) -> void: _refresh_validate())
+	for n in [%AllowImportsCheck, %AllowOfflineImportsCheck, %BroadcastJoinCodeCheck, %InviteOnlyCheck]:
+		(n as CheckBox).toggled.connect(func(_on: bool) -> void: _refresh_validate())
 	# stack.md: Android is join-only in v0.1 (desktop / --headless hosts).
 	if OS.has_feature("android"):
 		for n in [
 			%HostTitle, %NameEdit, %MaxPlayersEdit, %M100MinEdit, %M100MaxEdit, %HostCodeEdit,
-			%AllowImportsCheck, %AllowOfflineImportsCheck, %BroadcastJoinCodeCheck, %HostButton
+			%AllowImportsCheck, %AllowOfflineImportsCheck, %BroadcastJoinCodeCheck, %InviteOnlyCheck,
+			%HostButton, %ValidateLabel
 		]:
 			n.visible = false
+	_apply_touch_layout()
+	_on_invite_toggled(invite_check.button_pressed)
 	_refresh_list()
+	_refresh_validate()
 	if _setup_error != "":
 		%StatusLabel.text = _setup_error
 	if _pending_code != "":
@@ -57,50 +72,50 @@ func _ready() -> void:
 		get_tree().create_timer(1.5).timeout.connect(_try_pending_code)
 
 
-func _refresh_list() -> void:
-	var list: ItemList = %LobbyList
-	list.clear()
-	for lobby in _client.lobbies:
-		list.add_item(_format_lobby(lobby))
-	if _setup_error == "":
-		%StatusLabel.text = "%d lobby(s) on LAN" % _client.lobbies.size()
+func _apply_touch_layout() -> void:
+	if _ui == null or not _ui.is_valid():
+		return
+	var margin: MarginContainer = $Margin
+	var pad: int = _ui.margin_px()
+	margin.add_theme_constant_override("margin_left", pad)
+	margin.add_theme_constant_override("margin_top", pad)
+	margin.add_theme_constant_override("margin_right", pad)
+	margin.add_theme_constant_override("margin_bottom", pad)
+	var min_h: int = _ui.min_target_px()
+	var font: int = _ui.font_size
+	var status_font: int = _ui.status_font_size
+	var row_h: int = _ui.row_min_px()
+	var narrow: bool = OS.has_feature("android")
+	var vp := get_viewport_rect().size
+	if vp.x > 0.0 and vp.x < float(_ui.stack_narrow_px):
+		narrow = true
+	var cols: BoxContainer = $Margin/Cols
+	for prop in cols.get_property_list():
+		if String(prop.get("name", "")) == "vertical":
+			cols.set("vertical", narrow)
+			break
+	%LobbyList.custom_minimum_size = Vector2(0, maxf(180.0, float(row_h * 6)))
+	%LobbyList.add_theme_font_size_override("font_size", font)
+	%StatusLabel.add_theme_font_size_override("font_size", status_font)
+	%ValidateLabel.add_theme_font_size_override("font_size", status_font)
+	for n in [
+		%SoloButton, %HostButton, %JoinSelectedButton, %JoinCodeButton, %JoinIpButton,
+		%NameEdit, %MaxPlayersEdit, %M100MinEdit, %M100MaxEdit, %HostCodeEdit,
+		%JoinCodeEdit, %JoinIpEdit, %AllowImportsCheck, %AllowOfflineImportsCheck,
+		%BroadcastJoinCodeCheck, %InviteOnlyCheck, %PlayedOfflineCheck
+	]:
+		n.custom_minimum_size = Vector2(0, min_h)
+		if n is BaseButton or n is LineEdit or n is Label:
+			n.add_theme_font_size_override("font_size", font)
 
 
-func _format_lobby(info: Dictionary) -> String:
-	var preview: Array = info.get("preview", info.get("portals", []))
-	var chips: PackedStringArray = _fmt_mults(preview)
-	var more: int = int(info.get("more", 0))
-	if more > 0:
-		chips.append("+%d more" % more)
-	var portals := ", ".join(chips)
-	var code := String(info.get("code", ""))
-	var code_bit := ("code %s  " % code) if code != "" else ""
-	return "%s  %d/%d  %sportals [%s]  %s:%d" % [
-		String(info.get("name", "?")),
-		int(info.get("players", 0)),
-		int(info.get("max", 0)),
-		code_bit,
-		portals,
-		String(info.get("ip", "")),
-		int(info.get("port", 0)),
-	]
+func _on_invite_toggled(on: bool) -> void:
+	%BroadcastJoinCodeCheck.visible = not on and not OS.has_feature("android")
+	_refresh_validate()
 
 
-func _fmt_mults(values: Array) -> PackedStringArray:
-	var out: PackedStringArray = []
-	for v in values:
-		out.append("%.2f" % float(v))
-	return out
-
-
-func _on_solo() -> void:
-	GameSession.start_solo()
-	_go_arena()
-
-
-func _on_host() -> void:
-	var cfg := LobbyConfig.new()
-	var hs = cfg.host_settings
+func _draft_host_settings() -> LobbySettings:
+	var hs := LobbySettings.new()
 	var name_edit: LineEdit = %NameEdit
 	hs.lobby_name = name_edit.text.strip_edges()
 	if hs.lobby_name == "":
@@ -110,17 +125,62 @@ func _on_host() -> void:
 	hs.max_players = parsed_max if parsed_max >= 0 else 0
 	hs.m100_min = _parse_m100(%M100MinEdit.text)
 	hs.m100_max = _parse_m100(%M100MaxEdit.text)
-	var host_imports: CheckBox = %AllowImportsCheck
-	hs.imports_allowed = host_imports.button_pressed
-	var host_offline: CheckBox = %AllowOfflineImportsCheck
-	hs.offline_allowed = host_offline.button_pressed
-	var broadcast: CheckBox = %BroadcastJoinCodeCheck
-	cfg.broadcast_join_code = broadcast.button_pressed
-	var host_code_edit: LineEdit = %HostCodeEdit
-	hs.join_code = host_code_edit.text.strip_edges().to_upper()
-	# Show LobbySettings.validate() strings as-is, including name and join-code checks.
-	var reasons: PackedStringArray = hs.validate()
+	hs.imports_allowed = (%AllowImportsCheck as CheckBox).button_pressed
+	hs.offline_allowed = (%AllowOfflineImportsCheck as CheckBox).button_pressed
+	hs.join_code = (%HostCodeEdit as LineEdit).text.strip_edges().to_upper()
+	return hs
+
+
+func _refresh_validate() -> void:
+	if not %ValidateLabel.visible:
+		return
+	var reasons: PackedStringArray = _draft_host_settings().validate()
+	%ValidateLabel.text = " ".join(reasons)
+
+
+func _refresh_list() -> void:
+	var list: ItemList = %LobbyList
+	list.clear()
+	for lobby in _client.lobbies:
+		if LobbyRowFormat.is_invite_only(lobby):
+			continue
+		list.add_item(LobbyRowFormat.format(lobby, _ui))
+	if _setup_error == "":
+		%StatusLabel.text = "%d lobby(s) on LAN" % _visible_lobby_count()
+
+
+func _visible_lobby_count() -> int:
+	var n: int = 0
+	for lobby in _client.lobbies:
+		if not LobbyRowFormat.is_invite_only(lobby):
+			n += 1
+	return n
+
+
+func _visible_lobby_at(index: int) -> Dictionary:
+	var i: int = 0
+	for lobby in _client.lobbies:
+		if LobbyRowFormat.is_invite_only(lobby):
+			continue
+		if i == index:
+			return lobby
+		i += 1
+	return {}
+
+
+func _on_solo() -> void:
+	GameSession.start_solo()
+	_go_arena()
+
+
+func _on_host() -> void:
+	var cfg := LobbyConfig.new()
+	cfg.host_settings = _draft_host_settings()
+	cfg.invite_only = (%InviteOnlyCheck as CheckBox).button_pressed
+	cfg.broadcast_join_code = (not cfg.invite_only) and (%BroadcastJoinCodeCheck as CheckBox).button_pressed
+	var reasons: PackedStringArray = cfg.host_settings.validate()
 	if not reasons.is_empty():
+		%ValidateLabel.text = " ".join(reasons)
 		%StatusLabel.text = " ".join(reasons)
 		return
 	cfg.open_portals = [1.0] as Array[float]
@@ -134,21 +194,25 @@ func _on_host() -> void:
 func _on_join_selected() -> void:
 	var list: ItemList = %LobbyList
 	var selected: PackedInt32Array = list.get_selected_items()
-	if selected.is_empty() or selected[0] >= _client.lobbies.size():
-		%StatusLabel.text = "Select a lobby first."
+	if selected.is_empty():
+		%StatusLabel.text = _ui.text("select_lobby")
 		return
-	_join_info(_client.lobbies[selected[0]])
+	var info := _visible_lobby_at(selected[0])
+	if info.is_empty():
+		%StatusLabel.text = _ui.text("select_lobby")
+		return
+	_join_info(info)
 
 
 func _on_join_code() -> void:
 	var join_edit: LineEdit = %JoinCodeEdit
 	var code: String = join_edit.text.strip_edges()
 	if code == "":
-		%StatusLabel.text = "Enter a join code."
+		%StatusLabel.text = _ui.text("enter_join_code")
 		return
 	var info := _client.find_by_code(code)
 	if info.is_empty():
-		%StatusLabel.text = "No LAN lobby with that code yet. Keep the browser open."
+		%StatusLabel.text = _ui.text("code_not_found")
 		return
 	_join_info(info)
 
@@ -165,7 +229,7 @@ func _on_join_ip() -> void:
 	var ip_edit: LineEdit = %JoinIpEdit
 	var raw: String = ip_edit.text.strip_edges()
 	if raw == "":
-		%StatusLabel.text = "Enter host:port."
+		%StatusLabel.text = _ui.text("enter_host_port")
 		return
 	var host: String = raw
 	var port: int = LobbyBeacon.DEFAULT_WS_PORT
@@ -210,4 +274,3 @@ func _parse_m100(text: String) -> int:
 	if trimmed.is_empty() or not trimmed.is_valid_int():
 		return 0
 	return trimmed.to_int()
-

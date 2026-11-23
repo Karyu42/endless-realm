@@ -18,6 +18,9 @@ var lobby_host: LobbyHost
 var lobby_client: LobbyClient
 var lobby_config: LobbyConfig
 var beacon: LobbyBeaconBroadcaster
+## Remembers the host-issued rejoin token when the UI drops a local player.
+var local_join: LobbyLocalJoin = LobbyLocalJoin.new()
+var _host_bind: String = "0.0.0.0"
 ## New characters default to not played-offline (QA #28).
 var played_offline: bool = false
 var local_player_id: int = 1
@@ -61,10 +64,12 @@ func start_solo() -> void:
 
 func start_host(cfg: LobbyConfig, bind_host: String = "*") -> Error:
 	_teardown_net()
+	local_join.reset()
 	lobby_config = cfg
 	var bind := bind_host
 	if bind == "*" or bind == "":
 		bind = "0.0.0.0"
+	_host_bind = bind
 	lobby_host = LobbyHost.new(config)
 	lobby_host.port = cfg.ws_port
 	lobby_host.bind_address = bind
@@ -76,13 +81,15 @@ func start_host(cfg: LobbyConfig, bind_host: String = "*") -> Error:
 		start_solo()
 		return settings_err
 	cfg.host_settings = lobby_host.settings()
+	lobby_host.settings_changed.connect(_on_host_settings_changed)
 	var err: Error = lobby_host.start()
 	if err != OK:
 		lobby_host = null
 		start_solo()
 		return err
 	cfg.ws_port = lobby_host.port
-	var pid: int = lobby_host.add_local_player(null)
+	# First join: empty rejoin token (the host starts this player ready).
+	var pid: int = local_join.add(lobby_host, null)
 	if pid < 0:
 		lobby_host.stop()
 		lobby_host = null
@@ -91,12 +98,91 @@ func start_host(cfg: LobbyConfig, bind_host: String = "*") -> Error:
 	mode = Mode.HOST
 	local_player_id = pid
 	source = HostWorldSource.new(lobby_host, pid)
-	beacon = LobbyBeaconBroadcaster.new()
-	if beacon.start(cfg, bind) != OK:
-		# Discovery is optional; the host still listens on WebSocket.
-		beacon = null
+	_start_or_stop_beacon()
 	_reset_snapshots()
 	return OK
+
+
+func _on_host_settings_changed(s: LobbySettings) -> void:
+	if lobby_config != null and s != null:
+		lobby_config.host_settings = s.duplicate_settings()
+
+
+## Apply a copy of LobbySettings through the host API. Returns validate()
+## reasons, or a packed apply-failed string, or empty on success.
+func apply_lobby_settings(s: LobbySettings, ui: LobbyUiSettings) -> PackedStringArray:
+	if s == null:
+		return PackedStringArray([ui.text("apply_failed")])
+	var reasons: PackedStringArray = s.validate()
+	if not reasons.is_empty():
+		return reasons
+	if lobby_host == null or lobby_host.apply_settings(s) != OK:
+		return PackedStringArray([ui.text("apply_failed")])
+	return PackedStringArray()
+
+
+func set_invite_only(on: bool) -> void:
+	if lobby_config == null:
+		return
+	lobby_config.invite_only = on
+	_start_or_stop_beacon()
+
+
+func set_broadcast_join_code(on: bool) -> void:
+	if lobby_config == null:
+		return
+	lobby_config.broadcast_join_code = on
+
+
+func copy_join_code() -> String:
+	var code := current_join_code()
+	if code != "":
+		DisplayServer.clipboard_set(code)
+	return code
+
+
+func current_join_code() -> String:
+	if lobby_host != null:
+		return lobby_host.settings().join_code
+	if lobby_config != null:
+		return lobby_config.host_settings.join_code
+	return ""
+
+
+func drop_local_player() -> String:
+	if lobby_host == null:
+		return ""
+	return local_join.remove(lobby_host, local_player_id)
+
+
+func restore_local_player(character: Variant = null) -> int:
+	if lobby_host == null:
+		return -1
+	var pid: int = local_join.restore(lobby_host, character)
+	if pid >= 0:
+		local_player_id = pid
+		source = HostWorldSource.new(lobby_host, pid)
+		_reset_snapshots()
+	return pid
+
+
+func import_for_local_player(blob: PackedByteArray) -> int:
+	if lobby_host == null:
+		return ImportResult.REJECTED_UNKNOWN_PLAYER
+	return lobby_host.import_character(blob, local_player_id)
+
+
+func _start_or_stop_beacon() -> void:
+	if lobby_config == null or not lobby_config.should_broadcast() or lobby_host == null or mode != Mode.HOST:
+		if beacon != null:
+			beacon.stop()
+			beacon = null
+		return
+	if beacon == null:
+		beacon = LobbyBeaconBroadcaster.new()
+		if beacon.start(lobby_config, _host_bind) != OK:
+			# Discovery is optional; the host still listens on WebSocket.
+			beacon = null
 
 
 func start_client(url: String, offline: bool = false, join_code: String = "") -> Error:
@@ -154,8 +240,11 @@ func _teardown_net() -> void:
 		beacon.stop()
 		beacon = null
 	if lobby_host != null:
+		if lobby_host.settings_changed.is_connected(_on_host_settings_changed):
+			lobby_host.settings_changed.disconnect(_on_host_settings_changed)
 		lobby_host.stop()
 		lobby_host = null
+	local_join.reset()
 	if lobby_client != null:
 		lobby_client.stop()
 		lobby_client.queue_free()
@@ -280,7 +369,7 @@ func _switch_solo_instance(old: LocalSim, xfer: PortalTransfer) -> void:
 	var player := old.get_player(xfer.player_id)
 	if player == null:
 		return
-	var carry := PlayerCarry.from_sim(player, old.ability_state(xfer.player_id))
+	var carry := old.carry_out(xfer.player_id)
 	var next: LocalSim
 	if xfer.kind == PortalTransfer.KIND_ENTER:
 		next = _new_dungeon_sim(xfer)
@@ -298,7 +387,7 @@ func _new_dungeon_sim(xfer: PortalTransfer) -> LocalSim:
 	if def != null:
 		sim.configure_dungeon(
 			def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
-			xfer.opener_id, xfer.opener_lp
+			xfer.opener_id, xfer.opener_lp, xfer.grants_persistent
 		)
 	return sim
 

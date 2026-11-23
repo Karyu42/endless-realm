@@ -27,6 +27,14 @@ var strafe_switch_ticks: int = 40
 var ai_type: String = ""
 var pattern_id: String = ""
 var fire_interval_ticks: int = 0
+var alt_pattern_id: String = ""
+var alt_every_cycles: int = 0
+var sidestep_tiles: float = 0.0
+var sidestep_interval_ticks: int = 0
+var sidestep_duration_ticks: int = 10
+var party_scaling: String = "normal"
+var target_rule: String = ""
+var phases: Array[Dictionary] = []
 var _ai_fields: Dictionary = {}
 
 
@@ -61,11 +69,59 @@ static func from_json(d: Dictionary) -> EnemyDef:
 		e.pattern_id = String(ai.get("pattern", ""))
 		if e._ai_fields.has("fire_interval_ticks"):
 			e.fire_interval_ticks = int(ai.get("fire_interval_ticks", 0))
+		e.alt_pattern_id = String(ai.get("alt_pattern", ""))
+		e.alt_every_cycles = int(ai.get("alt_every_cycles", 0))
+		e.sidestep_tiles = float(ai.get("sidestep_tiles", 0.0))
+		e.sidestep_interval_ticks = int(ai.get("sidestep_interval_ticks", 0))
+		if e._ai_fields.has("sidestep_duration_ticks"):
+			e.sidestep_duration_ticks = int(ai.get("sidestep_duration_ticks", 10))
+	e.party_scaling = String(d.get("party_scaling", "normal"))
+	e.target_rule = String(d.get("target_rule", ""))
+	var raw_phases: Variant = d.get("phases", [])
+	if raw_phases is Array:
+		for phase in raw_phases:
+			if phase is Dictionary:
+				e.phases.append(phase)
 	return e
 
 
 func is_rooted() -> bool:
 	return ai_type == "rooted"
+
+
+func is_boss() -> bool:
+	return rank == "boss" or ai_type == "boss"
+
+
+func pattern_ids() -> PackedStringArray:
+	var out := PackedStringArray()
+	var seen: Dictionary = {}
+	if pattern_id != "" and not seen.has(pattern_id):
+		out.append(pattern_id)
+		seen[pattern_id] = true
+	if alt_pattern_id != "" and not seen.has(alt_pattern_id):
+		out.append(alt_pattern_id)
+		seen[alt_pattern_id] = true
+	for phase in phases:
+		var loops: Variant = phase.get("loops", [])
+		if loops is Array:
+			for loop in loops:
+				if not (loop is Dictionary):
+					continue
+				var pid: String = String(loop.get("pattern", ""))
+				if pid != "" and not seen.has(pid):
+					out.append(pid)
+					seen[pid] = true
+		var actions: Variant = phase.get("on_enter", [])
+		if actions is Array:
+			for action in actions:
+				if action is Dictionary:
+					var sid: String = String(action.get("summon", ""))
+					if sid != "" and not seen.has("summon:" + sid):
+						# summon ids are enemy ids; tagged so callers can split.
+						out.append("summon:" + sid)
+						seen["summon:" + sid] = true
+	return out
 
 
 func missing_pack_ids() -> PackedStringArray:

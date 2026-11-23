@@ -4,11 +4,12 @@
   "title": "Endless Realm dungeon layouts",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "name", "base_level", "rooms", "corridors"],
+  "required": ["id", "name", "base_level", "grants_persistent", "rooms", "corridors"],
   "properties": {
     "id": { "type": "string", "minLength": 1 },
     "name": { "type": "string", "minLength": 1 },
     "base_level": { "type": "integer", "minimum": 1 },
+    "grants_persistent": { "type": "boolean" },
     "rooms": {
       "type": "array",
       "minItems": 1,
@@ -82,16 +83,16 @@
     "practice_portal": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["x", "y", "radius", "m100", "practice_base_level", "placeholder"],
+      "required": ["x", "y", "radius", "m100", "practice_base_level", "grants_persistent", "placeholder"],
       "properties": {
         "x": { "type": "number" },
         "y": { "type": "number" },
         "radius": { "type": "number", "exclusiveMinimum": 0 },
         "persistent": { "type": "boolean" },
-        "no_persistent_rewards": { "type": "boolean" },
         "reset_when_empty": { "type": "boolean" },
         "m100": { "type": "integer" },
         "practice_base_level": { "type": "integer", "minimum": 1 },
+        "grants_persistent": { "type": "boolean" },
         "placeholder": { "type": "string", "minLength": 1 }
       }
     },

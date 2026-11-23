@@ -15,6 +15,7 @@ var player_level: int = 1
 var xp_tenths: int = 0
 var xp_to_next_tenths: int = 0
 var pending_glint: int = 0
+var pending_riftstone: int = 0
 var inventory: Array[ItemState] = []
 var equipped_weapon: ItemState = null
 var equipped_armor: ItemState = null
@@ -33,6 +34,7 @@ var ability_cooldown_max: int = 0
 var ward_ticks: int = 0
 var invuln_ticks: int = 0
 var portals: Array[PortalSnapshot] = []
+var hazards: Array[HazardState] = []
 
 
 func player_pixels() -> Vector2:
@@ -58,6 +60,7 @@ func duplicate_snapshot() -> WorldSnapshot:
 	copy.xp_tenths = xp_tenths
 	copy.xp_to_next_tenths = xp_to_next_tenths
 	copy.pending_glint = pending_glint
+	copy.pending_riftstone = pending_riftstone
 	copy.inventory = inventory.duplicate()
 	copy.equipped_weapon = equipped_weapon
 	copy.equipped_armor = equipped_armor
@@ -79,4 +82,5 @@ func duplicate_snapshot() -> WorldSnapshot:
 	copy.ward_ticks = ward_ticks
 	copy.invuln_ticks = invuln_ticks
 	copy.portals = portals.duplicate()
+	copy.hazards = hazards.duplicate()
 	return copy
