@@ -15,6 +15,10 @@ var inventory_slot: int = 0
 ## none. A nonzero value is an interact press on this seq, applied at most once
 ## per seq. Entity ids are int from LocalSim's single counter.
 var interact_target_id: int = 0
+## Requested proto field (not on the wire yet): bool ability_pressed = 7.
+## A true value is an ability press on this seq, applied at most once per seq
+## if Focus and the cooldown allow; otherwise it is a silent no-op.
+var ability_pressed: bool = false
 
 
 ## Build an intent from raw stick/key axes. Lengths above 1 (including 8-dir
@@ -28,7 +32,8 @@ static func from_raw(
 	fire_held: bool,
 	interact_pressed: bool = false,
 	inventory_slot: int = 0,
-	interact_target_id: int = 0
+	interact_target_id: int = 0,
+	ability_pressed: bool = false
 ) -> InputIntent:
 	var intent := InputIntent.new()
 	intent.seq = seq
@@ -37,6 +42,7 @@ static func from_raw(
 	intent.interact_pressed = interact_pressed
 	intent.inventory_slot = inventory_slot
 	intent.interact_target_id = interact_target_id
+	intent.ability_pressed = ability_pressed
 	var move_len := sqrt(raw_x * raw_x + raw_y * raw_y)
 	if move_len <= SimConstants.MOVE_EPS:
 		intent.move_x = 0.0

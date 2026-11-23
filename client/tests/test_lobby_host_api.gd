@@ -244,14 +244,12 @@ func test_local_interact_goes_through_validator_once_per_seq() -> void:
 		var p := _host.world_view(pid)
 		return {"x": p.player_x, "y": p.player_y}
 	_host.on_interact = func(pid: int, target: int) -> void: calls.append([pid, target])
-	# Calls _queue_input directly so the test does not depend on InputIntent
-	# carrying interact_target_id yet (#30).
-	var p: LobbyHost.HostPlayer = _host.players[0]
-	_host._queue_input(p, 1, 0.0, 0.0, 0.0, false, 77)
-	_host._queue_input(p, 1, 0.0, 0.0, 0.0, false, 77)  # same seq: dropped before the queue
+	# Through the public path: InputIntent.interact_target_id + submit_local_input.
+	_host.submit_local_input(id, InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, false, 0, 77))
+	_host.submit_local_input(id, InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, false, 0, 77))  # same seq
 	_host.run_tick()
 	assert_eq(calls, [[id, 77]])
-	_host._queue_input(p, 2, 0.0, 0.0, 0.0, false, 77)
+	_host.submit_local_input(id, InputIntent.from_raw(2, 0.0, 0.0, 0.0, false, false, 0, 77))
 	_host.run_tick()
 	assert_eq(calls.size(), 2, "new seq, new press")
 	assert_eq(_host.interact_validator.accepted, 2)
@@ -323,12 +321,62 @@ func test_import_flags() -> void:
 	s.offline_allowed = false
 	assert_eq(_host.apply_settings(s), OK)
 	assert_eq(_host.import_character(offline, id), ImportResult.REJECTED_OFFLINE_OFF)
-	assert_eq(_host.import_character(online, id), ImportResult.IMPORT_RESULT_OK)
-	assert_eq(_host.import_character(online, id), ImportResult.REJECTED_ALREADY_EXISTS)
-	var id2 := _host.add_local_player()
+	# Fails closed: a well-formed stub blob is not verified, so it is rejected.
+	assert_eq(_host.import_character(online, id), ImportResult.REJECTED_BAD_SIGNATURE)
 	s.offline_allowed = true
 	assert_eq(_host.apply_settings(s), OK)
-	assert_eq(_host.import_character(offline, id2), ImportResult.IMPORT_RESULT_OK)
+	assert_eq(_host.import_character(offline, id), ImportResult.REJECTED_BAD_SIGNATURE)
+	assert_true(_host.players[0].imported_character.is_empty(), "nothing attached")
+
+
+func test_import_never_ok_without_verification() -> void:
+	_host = _new_host()
+	var id := _host.add_local_player()
+	var blobs: Array[PackedByteArray] = [PackedByteArray(), PackedByteArray([0]),
+			"ERC".to_ascii_buffer()]
+	for offline in [false, true]:
+		for version in [0, 1, 2, 255]:
+			for payload in [PackedByteArray(), PackedByteArray([1, 2, 3]), PackedByteArray([0]).duplicate()]:
+				blobs.append(LobbyHost.make_stub_import_blob(offline, payload, version))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for i in range(200):
+		var b := PackedByteArray()
+		for j in range(rng.randi_range(0, 24)):
+			b.append(rng.randi_range(0, 255))
+		if i % 2 == 0 and b.size() >= 5:
+			b[0] = 0x45; b[1] = 0x52; b[2] = 0x43; b[3] = 1  # "ERC" v1
+		blobs.append(b)
+	var s := _host.settings()
+	for imports in [true, false]:
+		for offline_ok in [true, false]:
+			s.imports_allowed = imports
+			s.offline_allowed = offline_ok
+			assert_eq(_host.apply_settings(s), OK)
+			for b in blobs:
+				for pid in [id, 9999]:
+					assert_ne(_host.import_character(b, pid), ImportResult.IMPORT_RESULT_OK)
+	assert_true(_host.players[0].imported_character.is_empty())
+
+
+## Test-only host whose verifier passes, to cover the steps after verification.
+class VerifiedHost:
+	extends LobbyHost
+	func _signature_verified(_blob: PackedByteArray) -> bool:
+		return true
+
+
+func test_import_after_verification_attaches_once() -> void:
+	var h := VerifiedHost.new(SimConfig.new())
+	var id := h.add_local_player()
+	var blob := LobbyHost.make_stub_import_blob(false)
+	assert_eq(h.import_character(blob, id), ImportResult.IMPORT_RESULT_OK)
+	assert_eq(h.import_character(blob, id), ImportResult.REJECTED_ALREADY_EXISTS)
+	var s := h.settings()
+	s.imports_allowed = false
+	assert_eq(h.apply_settings(s), OK)
+	var id2 := h.add_local_player()
+	assert_eq(h.import_character(blob, id2), ImportResult.REJECTED_IMPORTS_OFF, "flags still first")
 
 
 func test_imports_off_does_not_block_hello() -> void:
@@ -408,3 +456,101 @@ func test_seq_never_accept_zero() -> void:
 	assert_false(v.validate(id, 0, 42, 0.0, 0.0))
 	assert_eq(v._last_seq[id], 0xFFFFFFFF, "validator last unchanged")
 	assert_true(v.validate(id, 1, 42, 0.0, 0.0))
+
+
+
+# --- max_players setter -----------------------------------------------------
+
+func test_max_players_setter_goes_through_apply_settings() -> void:
+	_host = _new_host()
+	watch_signals(_host)
+	_host.max_players = 8
+	assert_eq(_host.settings().max_players, 8)
+	assert_signal_emit_count(_host, "settings_changed", 1)
+	_host.max_players = 0
+	assert_eq(_host.max_players, 8, "invalid value refused")
+	assert_eq(_host.settings().max_players, 8)
+	_host.max_players = 51
+	assert_eq(_host.max_players, 8)
+	assert_signal_emit_count(_host, "settings_changed", 1, "no change event for refused values")
+	# The load-test-only override is separate and still works.
+	_host.set_loadtest_unsafe_max_players(100)
+	assert_eq(_host.max_players, 100)
+	assert_eq(_host.settings().max_players, 8)
+
+
+# --- ability press ----------------------------------------------------------
+
+func test_ability_pressed_round_trips() -> void:
+	var m = PB.ClientMessage.new()
+	var f = m.new_input()
+	f.set_seq(3)
+	f.set_ability_pressed(true)
+	assert_eq(m.to_bytes().hex_encode(), "120408033801", "encodes like Go")
+	var d = PB.ClientMessage.new()
+	assert_eq(d.from_bytes("120408033801".hex_decode()), PB.PB_ERR.NO_ERRORS)
+	assert_true(d.get_input().get_ability_pressed())
+	assert_eq(d.get_input().get_seq(), 3)
+	var old = PB.ClientMessage.new()
+	assert_eq(old.from_bytes("12020803".hex_decode()), PB.PB_ERR.NO_ERRORS)
+	assert_false(old.get_input().get_ability_pressed(), "unset is false")
+
+
+func _ability_intent(seq: int, pressed: bool) -> InputIntent:
+	var it := InputIntent.from_raw(seq, 0.0, 0.0, 0.0, false)
+	it.ability_pressed = pressed
+	return it
+
+
+func test_ability_pressed_is_one_shot_per_seq() -> void:
+	_host = _new_host()
+	var id := _host.add_local_player()
+	var p: LobbyHost.HostPlayer = _host.players[0]
+	# Remote path: a real encoded InputFrame through the host's packet decoder.
+	var conn := LobbyHost.HostConn.new()
+	conn.player = p
+	var press := func(seq: int) -> void:
+		var m = PB.ClientMessage.new()
+		var f = m.new_input()
+		f.set_seq(seq)
+		f.set_ability_pressed(true)
+		_host._on_packet(conn, m.to_bytes())
+	press.call(1)
+	press.call(1)  # same seq again
+	_host.run_tick()
+	assert_eq(_host.ability_presses, 1, "applied once")
+	assert_false(p.ability_pressed, "cleared after the tick")
+	_host.run_tick()
+	assert_eq(_host.ability_presses, 1, "not repeated on the next tick")
+	press.call(1)  # stale seq
+	press.call(0)  # seq 0 rejected
+	_host.run_tick()
+	assert_eq(_host.ability_presses, 1)
+	# A press is kept if a later frame in the same tick does not repeat it.
+	_host.submit_local_input(id, _ability_intent(2, true))
+	_host.submit_local_input(id, _ability_intent(3, false))
+	_host.run_tick()
+	assert_eq(_host.ability_presses, 2)
+	assert_eq(_host.world_view(id).applied_seq, 3)
+
+
+func test_host_ability_is_consumed_by_shared_sim_once() -> void:
+	_host = _new_host()
+	var id := _host.add_local_player()
+	var p: LobbyHost.HostPlayer = _host.players[0]
+	p.sim.set_catalog(DataCatalog.load_default())
+	p.sim.set_player_class("thornguard")
+	var sim_id := p.sim.snapshot().player_id
+	var intent := InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, false, 0, 0, true)
+	_host.submit_local_input(id, intent)
+	_host.run_tick()
+	assert_eq(p.sim.ward_ticks(sim_id), 59, "sim consumed ability")
+	assert_almost_eq(p.sim.focus(sim_id), 60.25, 1e-6)
+	assert_false(p.ability_pressed, "host queue cleared")
+	assert_false(p.sim._intent.ability_pressed, "sim one-shot cleared")
+	p.sim.set_ability_cooldown_ticks(sim_id, 0)
+	_host.submit_local_input(id, intent)  # duplicate seq cannot recast
+	_host.run_tick()
+	assert_eq(p.sim.ward_ticks(sim_id), 58, "ward not refreshed")
+	assert_almost_eq(p.sim.focus(sim_id), 60.5, 1e-6)
+	assert_false(p.sim._intent.ability_pressed)

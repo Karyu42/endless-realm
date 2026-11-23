@@ -31,6 +31,7 @@ var interact_pressed: bool = false
 var inventory_slot: int = 0
 ## Snapshot id of the interactable the client auto-selected (0 = none).
 var interact_target_id: int = 0
+var ability_pressed: bool = false
 
 var _accum: float = 0.0
 var _seq: int = 0
@@ -124,6 +125,7 @@ func _new_sim() -> LocalSim:
 	sim.set_bounds(0.0, 0.0, 32.0, 32.0)
 	sim.set_world_seed(1)
 	sim.set_player_class("thornguard")
+	sim.apply_class_motion()
 	# Practice yard: every enemy is fixed at the data E (killXP(1), Glint 1, T* = 0).
 	sim.set_practice_yard(true)
 	var yard_e: int = 1
@@ -174,12 +176,14 @@ func _process(delta: float) -> void:
 		if _seq > 0xFFFFFFFF:
 			_seq = 1
 		var intent := InputIntent.from_raw(
-			_seq, move_x, move_y, aim, fire_held, interact_pressed, inventory_slot, interact_target_id
+			_seq, move_x, move_y, aim, fire_held, interact_pressed, inventory_slot, interact_target_id,
+			ability_pressed
 		)
 		# Consume one-shot actions so catch-up ticks do not repeat them.
 		interact_pressed = false
 		inventory_slot = 0
 		interact_target_id = 0
+		ability_pressed = false
 		source.submit_input(intent)
 		source.step()
 		prev_snapshot = curr_snapshot

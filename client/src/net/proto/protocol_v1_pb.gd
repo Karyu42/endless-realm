@@ -995,6 +995,11 @@ class InputFrame:
 		service.field = __interact_target_id
 		data[__interact_target_id.tag] = service
 		
+		__ability_pressed = PBField.new("ability_pressed", PB_DATA_TYPE.BOOL, PB_RULE.OPTIONAL, 7, true, DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL])
+		service = PBServiceField.new()
+		service.field = __ability_pressed
+		data[__ability_pressed.tag] = service
+		
 	var data = {}
 	
 	var __seq: PBField
@@ -1074,6 +1079,19 @@ class InputFrame:
 		__interact_target_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
 	func set_interact_target_id(value : int) -> void:
 		__interact_target_id.value = value
+	
+	var __ability_pressed: PBField
+	func has_ability_pressed() -> bool:
+		if __ability_pressed.value != null:
+			return true
+		return false
+	func get_ability_pressed() -> bool:
+		return __ability_pressed.value
+	func clear_ability_pressed() -> void:
+		data[7].state = PB_SERVICE_STATE.UNFILLED
+		__ability_pressed.value = DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL]
+	func set_ability_pressed(value : bool) -> void:
+		__ability_pressed.value = value
 	
 	func _to_string() -> String:
 		return PBPacker.message_to_string(data)
