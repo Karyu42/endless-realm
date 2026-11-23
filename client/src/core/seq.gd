@@ -2,8 +2,9 @@ class_name Seq
 extends Object
 ## uint32 serial-number comparison for InputFrame.seq (RFC 1982 style).
 ##
-## Client game_session.gd wraps _seq from 0xFFFFFFFF back to 1 (0 is skipped).
-## A last value of 0 means nothing has been received yet.
+## next() wraps from 0xFFFFFFFF back to 1 (0 is skipped). GameSession uses
+## this for the InputIntent seq counter. A last value of 0 means nothing
+## has been received yet.
 
 
 ## True when a is ahead of b: ((a - b) & 0xFFFFFFFF) is in [1, 2^31).
@@ -21,3 +22,11 @@ static func seq_is_next(seq: int, last: int) -> bool:
 	if last == 0:
 		return seq >= 1
 	return seq_newer(seq, last)
+
+
+## Next uint32 seq after `seq`, skipping 0 on wrap. Seq 0 is always rejected.
+static func next(seq: int) -> int:
+	var n: int = (seq + 1) & 0xFFFFFFFF
+	if n == 0:
+		return 1
+	return n

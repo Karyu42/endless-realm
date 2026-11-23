@@ -65,14 +65,7 @@ func find_by_code(code: String) -> Dictionary:
 func send_intent(intent: InputIntent) -> void:
 	if _ws == null or _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		return
-	var msg = PB.ClientMessage.new()
-	var frame = msg.new_input()
-	frame.set_seq(intent.seq)
-	frame.set_move_x(intent.move_x)
-	frame.set_move_y(intent.move_y)
-	frame.set_aim(intent.aim)
-	frame.set_fire_held(intent.fire_held)
-	_ws.put_packet(msg.to_bytes())
+	_ws.put_packet(NetClient.encode_input(intent))
 
 
 func _process(_delta: float) -> void:

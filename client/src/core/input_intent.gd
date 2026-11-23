@@ -11,9 +11,9 @@ var fire_held: bool = false
 var interact_pressed: bool = false
 ## 1–8 equips that inventory slot this tick; 0 means no slot action.
 var inventory_slot: int = 0
-## Mirrors upcoming proto InputFrame.interact_target_id = 6 (uint64). 0 means
-## none. A nonzero value is an interact press on this seq, applied at most once
-## per seq. Entity ids are int from LocalSim's single counter.
+## proto InputFrame.interact_target_id = 6 (uint64). 0 means none. A nonzero
+## value is an interact press on this seq, applied at most once per seq.
+## Entity ids are int from LocalSim's single counter and stay below 2^63.
 var interact_target_id: int = 0
 ## Requested proto field (not on the wire yet): bool ability_pressed = 7.
 ## A true value is an ability press on this seq, applied at most once per seq
