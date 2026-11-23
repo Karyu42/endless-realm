@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestParseMultiplierDecimalAndHundredths(t *testing.T) {
 		{"1.05", 105},
 		{"1.0", 100},
 		{"1.50", 150},
-		{"1.051", 105}, // rounded to whole hundredths, then accepted
+		{"1", 100}, // bare 1 is decimal 1.00, not 1 hundredth
 		{"50", 50},
 		{"105", 105},
 		{"150", 150},
@@ -59,15 +60,25 @@ func TestParseMultiplierDecimalAndHundredths(t *testing.T) {
 }
 
 func TestParseAndFloatRejectVisionCases(t *testing.T) {
-	for _, s := range []string{"0.45", "1.55", "1.07"} {
+	for _, s := range []string{"0.45", "1.55", "1.07", "1.053", "1.047", "0.495", "1.504", "2"} {
 		if _, err := ParseMultiplier(s); err == nil {
 			t.Fatalf("ParseMultiplier(%q): want error", s)
 		}
 	}
-	for _, m := range []float64{0.45, 1.55, 1.07} {
+	for _, m := range []float64{0.45, 1.55, 1.07, 1.053, 1.047, 0.495, 1.504} {
 		if _, err := MultiplierFromFloat(m); err == nil {
 			t.Fatalf("MultiplierFromFloat(%g): want error", m)
 		}
+	}
+}
+
+func TestParseMultiplierBareIntegerHint(t *testing.T) {
+	_, err := ParseMultiplier("2")
+	if err == nil {
+		t.Fatal("want error for bare 2")
+	}
+	if want := "integers under 10 are decimals"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %q, want substring %q", err, want)
 	}
 }
 
@@ -109,20 +120,12 @@ func TestMultiplierRejectsNaNInfAndOutOfRange(t *testing.T) {
 	}
 }
 
-func TestMultiplierFromFloatStoresRoundedValue(t *testing.T) {
-	m100, err := MultiplierFromFloat(1.049)
-	if err != nil {
-		t.Fatal(err)
+func TestMultiplierFromFloatRejectsOffHundredth(t *testing.T) {
+	if _, err := MultiplierFromFloat(1.049); err == nil {
+		t.Fatal("1.049: want off-hundredth error")
 	}
-	if m100 != 105 {
-		t.Fatalf("1.049 rounded to %d, want 105", m100)
-	}
-	inst, err := New(1, m100, clock.NewFake(time.Unix(0, 0)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inst.MultiplierHundredths() != 105 {
-		t.Fatalf("stored %d, want 105", inst.MultiplierHundredths())
+	if _, err := MultiplierFromFloat(1.053); err == nil {
+		t.Fatal("1.053: want off-hundredth error")
 	}
 }
 
@@ -226,6 +229,74 @@ func TestRunDeadlineSchedulingNoDrift(t *testing.T) {
 	}
 	clk.Advance(time.Nanosecond)
 	waitSnap(t, ctx, snaps, 4)
+
+	stopRun()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("Run did not exit after cancel")
+	}
+}
+
+func TestRunCatchUpCapOnLongJump(t *testing.T) {
+	// A 1 hour stall must not replay 72,000 ticks. At most MaxCatchUpTicks
+	// steps run, then cadence resumes at the current deadline.
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	start := time.Unix(1, 0)
+	clk := clock.NewFake(start)
+	inst, err := New(1, 100, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snaps, unsub := inst.Subscribe()
+	defer unsub()
+
+	runCtx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
+	done := make(chan struct{})
+	go func() {
+		inst.Run(runCtx)
+		close(done)
+	}()
+
+	clk.BlockUntilWaiters(1)
+	clk.Advance(time.Hour)
+	// Catch-up steps complete before the next After waiter is registered.
+	clk.BlockUntilWaiters(1)
+
+	var got []uint32
+drain:
+	for {
+		select {
+		case snap := <-snaps:
+			got = append(got, snap.Tick)
+			if len(got) > MaxCatchUpTicks {
+				t.Fatalf("produced %d ticks, cap is %d: %v", len(got), MaxCatchUpTicks, got)
+			}
+		default:
+			break drain
+		}
+	}
+	if n := len(got); n == 0 || n > MaxCatchUpTicks {
+		t.Fatalf("after 1h jump got %d ticks %v, want 1..%d", n, got, MaxCatchUpTicks)
+	}
+	if inst.Tick() != uint32(len(got)) {
+		t.Fatalf("tick counter %d, snapshots %d", inst.Tick(), len(got))
+	}
+	wantSkip := uint64(int(time.Hour/TickDuration) - len(got))
+	if inst.SkippedTicks() != wantSkip {
+		t.Fatalf("skipped %d, want %d", inst.SkippedTicks(), wantSkip)
+	}
+
+	// Resume normal cadence: the next period produces exactly one tick.
+	clk.BlockUntilWaiters(1)
+	clk.Advance(TickDuration)
+	waitSnap(t, ctx, snaps, uint32(len(got)+1))
+	clk.BlockUntilWaiters(1)
+	clk.Advance(TickDuration)
+	waitSnap(t, ctx, snaps, uint32(len(got)+2))
 
 	stopRun()
 	select {

@@ -85,3 +85,17 @@ func TestParseDefaultMultiplier(t *testing.T) {
 		t.Fatalf("default %d, want 100", cfg.MultiplierHundredths)
 	}
 }
+
+func TestParseBareOneAndRejectOffHundredth(t *testing.T) {
+	t.Setenv(EnvMultiplier, "")
+	cfg, err := Parse([]string{"-multiplier", "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MultiplierHundredths != 100 {
+		t.Fatalf("bare 1 -> %d, want 100", cfg.MultiplierHundredths)
+	}
+	if _, err := Parse([]string{"-multiplier", "1.053"}); err == nil {
+		t.Fatal("1.053: want error")
+	}
+}
