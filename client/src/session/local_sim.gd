@@ -18,6 +18,9 @@ const MAX_ENTITY_ID: int = 0x7FFFFFFFFFFFFFFF
 ## Third mix-seed constant for per-player PCG32 initstate:
 ## initstate = _mix_seed(instance_seed, player_id, PLAYER_RNG_STREAM), initseq = 1.
 const PLAYER_RNG_STREAM: int = 0xA51C11E57EA1
+## Domain for a dungeon instance seed, so derived_instance_seed is not a bare
+## _mix_seed(world, id, tick) like enemy volley seeds. "DNGN".
+const DUNGEON_INSTANCE_SEED_DOMAIN: int = 0x444E474E
 
 var _config: SimConfig
 var _catalog: DataCatalog
@@ -61,6 +64,9 @@ var _blocking_tiles: Dictionary = {}
 var _portals: Array[PortalSnapshot] = []
 var _pending_transfers: Array[PortalTransfer] = []
 var _dungeon: DungeonDef = null
+## Test hook for vision §3.2 step 1. Real player Ward is not wired yet, so
+## mitigation is a no-op (Ward = 0) unless a test sets this.
+var _test_armor_ward: float = 0.0
 var _instance_base_level: int = 0
 var _instance_content_level: int = 0
 var _opener_id: int = 0
@@ -852,10 +858,13 @@ func _pattern_shots_vs_players(sim_tick: int) -> void:
 				if _ability_of(p.id).invuln_ticks > 0:
 					continue
 				var dmg: int = 0
+				var attacker_level: int = 1
 				var src := _enemy_by_id(b.source_id)
-				if src != null and src.def != null:
-					dmg = src.def.damage_for(b.damage_key)
-				if _hurt_player(p, dmg):
+				if src != null:
+					attacker_level = src.content_level
+					if src.def != null:
+						dmg = src.def.damage_for(b.damage_key)
+				if _hurt_player(p, dmg, attacker_level):
 					b.consumed = true
 				break
 
@@ -872,28 +881,49 @@ func _contact_vs_players() -> void:
 				p.prev_x, p.prev_y, p.x, p.y, _config.player_radius_tiles,
 				e.prev_x, e.prev_y, e.x, e.y, e.radius()
 			):
-				if _hurt_player(p, e.def.contact_damage if e.def != null else 0):
+				# Slipstep i-frames: skip this player and keep checking others
+				# instead of stopping at the first overlap.
+				if _ability_of(p.id).invuln_ticks > 0:
+					continue
+				var dmg: int = e.def.contact_damage if e.def != null else 0
+				if _hurt_player(p, dmg, e.content_level):
 					e.contact_cooldown = _config.contact_cooldown_ticks
 				break
 
 
-func _hurt_player(p: SimPlayerState, amount: int) -> bool:
+func _hurt_player(p: SimPlayerState, amount: int, attacker_level: int = 1) -> bool:
 	if p == null or amount <= 0 or p.hp <= 0:
 		return false
 	var ast := _ability_of(p.id)
 	if ast.invuln_ticks > 0:
 		return false
+	# vision §3.2 order: (1) Ward/armor mitigation, × D; (2) damage-taken
+	# multipliers such as Thorn Ward; (3) round half-up and max(1) once at
+	# the end. No rounding or minimum between steps.
+	var raw: float = _mitigate_incoming(float(amount), attacker_level)
 	if ast.ward_ticks > 0 and ast.ability_def != null:
-		# vision §2: the cut multiplies final damage after mitigation and D.
-		# Incoming amounts are still raw until those land in _hurt_player.
-		# The vision §3.2 "minimum of 1" applies after mitigation, which is
-		# not in this hook yet, so a product that rounds to 0 stays 0.
-		amount = SimScaling.round_half_up(float(amount) * ast.ability_def.damage_taken_mult)
+		raw *= ast.ability_def.damage_taken_mult
+	amount = maxi(1, SimScaling.round_half_up(raw))
 	p.hp -= amount
 	if p.hp < 0:
 		p.hp = 0
 	p.flash_ticks = _config.player_flash_ticks
 	return true
+
+
+## vision §3.2 step 1: raw × 100 / (100 + defenderWard / m(attackerLevel)), then × D.
+## Player Ward and D are not wired yet, so this is a no-op (Ward = 0, D = 1)
+## unless a test sets _test_armor_ward.
+func _mitigate_incoming(raw: float, attacker_level: int) -> float:
+	var m_atk: float = _scaling.m(maxi(attacker_level, 1))
+	if m_atk <= 0.0:
+		m_atk = 1.0
+	return raw * 100.0 / (100.0 + _test_armor_ward / m_atk)
+
+
+## Test hook: pretend the player has this much Ward for incoming mitigation.
+func set_test_armor_ward(ward: float) -> void:
+	_test_armor_ward = maxf(ward, 0.0)
 
 
 func _enemy_by_id(id: int) -> EnemyState:
@@ -960,11 +990,6 @@ func pending_glint() -> int:
 
 ## Read-only view of ground bags. Do not mutate or keep past a step().
 func ground_drops() -> Array[GroundDrop]:
-	return _ground_drops
-
-
-## Same read-only array as ground_drops().
-func bags() -> Array[GroundDrop]:
 	return _ground_drops
 
 
@@ -1090,7 +1115,11 @@ func portal_by_id(id: int) -> PortalSnapshot:
 
 
 func derived_instance_seed(portal_id: int, enter_tick: int) -> int:
-	return _mix_seed(_world_seed, portal_id, enter_tick)
+	return _mix_seed(
+		_mix_seed(_world_seed, portal_id, enter_tick),
+		0,
+		DUNGEON_INSTANCE_SEED_DOMAIN
+	)
 
 
 ## Place the packed practice-yard entrance (found-portal rules, M locked at creation).
@@ -1842,6 +1871,9 @@ func _activate_rooms() -> void:
 
 
 func _maybe_spawn_exit() -> void:
+	# TODO: gate the exit on defeating the Tallow Warden once it is a real
+	# boss, not a KIND_PLACEHOLDER marker. Until then, the exit appears when
+	# combat rooms are activated and packed enemies are dead.
 	if _dungeon == null or _exit_spawned:
 		return
 	for room in _dungeon.rooms:

@@ -266,3 +266,46 @@ func test_focus_defaults_to_zero_without_a_class() -> void:
 	assert_almost_eq(st.focus_regen(), 0.0, 0.0)
 	st.regen(SimConstants.TICK_DT)
 	assert_almost_eq(st.focus, 0.0, 0.0)
+
+func test_thorn_ward_never_drops_a_hit_below_one() -> void:
+	var sim := _class_sim("thornguard")
+	var pid: int = _pid(sim)
+	_act(sim, 1, true)
+	var p: SimPlayerState = sim.get_player(pid)
+	var start_hp: int = p.hp
+	# 1 × 0.50 = 0.5, half-up is already 1.
+	assert_true(sim._hurt_player(p, 1))
+	assert_eq(p.hp, start_hp - 1)
+	# Heavy armor mitigation would round the product to 0; max(1) still lands.
+	sim.set_test_armor_ward(10000.0)
+	start_hp = p.hp
+	assert_true(sim._hurt_player(p, 1))
+	assert_eq(p.hp, start_hp - 1, "min-1 floor is applied once at the end")
+
+
+func test_incoming_damage_rounds_half_up_once_at_the_end() -> void:
+	var sim := _class_sim("thornguard")
+	var pid: int = _pid(sim)
+	var p: SimPlayerState = sim.get_player(pid)
+	# Ward = 100, m(1) = 1: 5 × 100/(100+100) = 2.5, half-up to 3.
+	sim.set_test_armor_ward(100.0)
+	var start_hp: int = p.hp
+	assert_true(sim._hurt_player(p, 5))
+	assert_eq(p.hp, start_hp - 3)
+	# 4 × 0.5 = 2.0 stays 2 (not rounded away from even).
+	start_hp = p.hp
+	assert_true(sim._hurt_player(p, 4))
+	assert_eq(p.hp, start_hp - 2)
+
+
+func test_mitigation_and_damage_taken_stack_before_rounding() -> void:
+	var sim := _class_sim("thornguard")
+	var pid: int = _pid(sim)
+	_act(sim, 1, true)
+	var p: SimPlayerState = sim.get_player(pid)
+	# Ward = 25, m(1) = 1 → ×0.80, then Thorn Ward ×0.50: 11 × 0.8 × 0.5 = 4.4 → 4.
+	# Rounding after mitigation only would be 8.8 → 9, then ×0.5 → 4.5 → 5.
+	sim.set_test_armor_ward(25.0)
+	var start_hp: int = p.hp
+	assert_true(sim._hurt_player(p, 11))
+	assert_eq(p.hp, start_hp - 4, "no rounding between mitigation and the Ward cut")

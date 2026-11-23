@@ -265,3 +265,108 @@ func test_unknown_dungeon_enemy_id_is_logged() -> void:
 	catalog.report_unknown_ids()
 	assert_push_error("DataCatalog: unknown id no_such_enemy")
 	room["spawns"] = original
+
+func test_derived_instance_seed_uses_the_dungeon_domain() -> void:
+	var sim := _yard()
+	var portal_id: int = 7
+	var enter_tick: int = 3
+	var bare: int = sim._mix_seed(1, portal_id, enter_tick)
+	var want: int = sim._mix_seed(bare, 0, LocalSim.DUNGEON_INSTANCE_SEED_DOMAIN)
+	assert_eq(sim.derived_instance_seed(portal_id, enter_tick), want)
+	assert_ne(sim.derived_instance_seed(portal_id, enter_tick), bare, "not a bare world,id,tick mix")
+
+
+func test_player_xp_focus_cooldown_and_inventory_carry_into_and_out_of_the_vault() -> void:
+	var yard := _yard()
+	var pid := _pid(yard)
+	yard.grant_xp_tenths(123)
+	yard.set_focus(pid, 40.0)
+	yard.set_ability_cooldown_ticks(pid, 80)
+	var item := ItemState.new()
+	item.drop_id = "carry-token"
+	item.display_base = "Carry Token"
+	item.tier = 1
+	assert_true(yard.get_player(pid).inventory.add(item))
+	var start_xp: int = yard.get_player(pid).xp_tenths
+	assert_eq(start_xp, 123)
+	var portal: PortalSnapshot = yard.snapshot().portals[0]
+	var yp := yard.get_player(pid)
+	yp.x = 8.5
+	yp.y = 16.0
+	yp.prev_x = yp.x
+	yp.prev_y = yp.y
+	yard.apply_input(pid, _enter_intent(1, portal.id))
+	yard.step()
+	var xfer: PortalTransfer = yard.take_pending_transfers()[0]
+	var catalog := _catalog()
+	var def := catalog.dungeon(xfer.dungeon_id)
+	var dungeon := LocalSim.new(SimConfig.new(), xfer.arrival_x, xfer.arrival_y, catalog)
+	dungeon.set_lobby_settings(_default_settings())
+	dungeon.configure_dungeon(
+		def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
+		xfer.opener_id, xfer.opener_lp
+	)
+	if dungeon.get_player(pid) == null:
+		assert_true(dungeon.add_player(pid, {"x": xfer.arrival_x, "y": xfer.arrival_y}))
+		dungeon.step()
+	# Snapshot after the enter tick: Focus regen and cooldown clock already ran.
+	var into := PlayerCarry.from_sim(yard.get_player(pid), yard.ability_state(pid))
+	dungeon.apply_carried_player(into, xfer.arrival_x, xfer.arrival_y)
+	var dp := dungeon.get_player(pid)
+	assert_eq(dp.xp_tenths, into.xp_tenths)
+	assert_eq(into.xp_tenths, 123)
+	assert_almost_eq(dungeon.focus(pid), into.ability.focus, 1e-6)
+	assert_eq(dungeon.ability_cooldown_ticks(pid), into.ability.cooldown_ticks)
+	assert_eq(dp.inventory.slots[0].drop_id, "carry-token")
+
+	var back := PlayerCarry.from_sim(dp, dungeon.ability_state(pid))
+	var yard2 := _yard()
+	if yard2.get_player(pid) == null:
+		assert_true(yard2.add_player(pid, {"x": 16.0, "y": 16.0}))
+		yard2.step()
+	yard2.apply_carried_player(back, 16.0, 16.0)
+	var yp2 := yard2.get_player(pid)
+	assert_eq(yp2.xp_tenths, back.xp_tenths)
+	assert_eq(back.xp_tenths, 123)
+	assert_almost_eq(yard2.focus(pid), back.ability.focus, 1e-6)
+	assert_eq(yard2.ability_cooldown_ticks(pid), back.ability.cooldown_ticks)
+	assert_eq(yp2.inventory.slots[0].drop_id, "carry-token")
+
+
+func test_reentering_mid_clear_starts_uncleared() -> void:
+	var catalog := _catalog()
+	var def := catalog.dungeon("hollowmere_vault")
+	var sim := LocalSim.new(SimConfig.new(), 6.0, 6.0, catalog)
+	sim.set_lobby_settings(_default_settings())
+	var pid := _pid(sim)
+	sim.configure_dungeon(def, 42, 100, 1, 1, pid, 1)
+	var p := sim.get_player(pid)
+	p.x = 16.0
+	p.y = 6.0
+	sim.step()
+	assert_eq(sim.snapshot().enemies.size(), 2, "Drip Hall is activated")
+	sim.defeat_all_enemies()
+	# Mid-clear: hall is empty, kennels not entered, no exit yet.
+	var exits := 0
+	for item in sim.snapshot().portals:
+		if item.kind == PortalSnapshot.KIND_EXIT:
+			exits += 1
+	assert_eq(exits, 0)
+	# A re-enter builds a fresh instance; rooms and the exit reset.
+	var again := LocalSim.new(SimConfig.new(), 6.0, 6.0, catalog)
+	again.set_lobby_settings(_default_settings())
+	if again.get_player(pid) == null:
+		assert_true(again.add_player(pid, {"x": 6.0, "y": 6.0}))
+		again.step()
+	again.configure_dungeon(def, 42, 100, 1, 1, pid, 1)
+	assert_eq(again.snapshot().enemies.size(), 0, "antechamber starts empty")
+	exits = 0
+	for item in again.snapshot().portals:
+		if item.kind == PortalSnapshot.KIND_EXIT:
+			exits += 1
+	assert_eq(exits, 0, "exit is not already open")
+	var p2 := again.get_player(pid)
+	p2.x = 16.0
+	p2.y = 6.0
+	again.step()
+	assert_eq(again.snapshot().enemies.size(), 2, "Drip Hall spawns a fresh pair")
