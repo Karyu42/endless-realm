@@ -206,14 +206,7 @@ func add_player(id: int, character: Variant = null) -> bool:
 		# Keep a live player who was queued to leave (same-tick re-add).
 		_pending_removes.erase(id)
 		_pending_adds.erase(id)
-		if character is Dictionary:
-			var d: Dictionary = character
-			var x: float = float(d["x"]) if d.has("x") else live.x
-			var y: float = float(d["y"]) if d.has("y") else live.y
-			if d.has("x") or d.has("y"):
-				_set_placed_position(live, x, y)
-			if d.has("hp"):
-				live.hp = int(d["hp"])
+		_apply_character_state(live, character, false)
 		return true
 	if not _player_id_accept(id):
 		return false
@@ -320,17 +313,32 @@ func _make_player(id: int, x: float, y: float, character: Variant) -> SimPlayerS
 
 
 func _apply_character(p: SimPlayerState, character: Variant) -> void:
+	_apply_character_state(p, character, true)
+
+
+## Shared by a fresh add_player, a same-tick cancelled leave, and
+## place_player's HP argument. Class and position follow the character
+## Dictionary (or a class-id String). HP is sanitized by _apply_placed_hp.
+func _apply_character_state(p: SimPlayerState, character: Variant, fresh: bool) -> void:
+	if p == null:
+		return
 	var class_id: String = p.class_id
+	var class_set: bool = false
+	var has_hp: bool = false
+	var requested_hp: int = 0
 	if character == null:
 		pass
 	elif character is String:
 		class_id = String(character)
+		class_set = true
 	elif character is Dictionary:
 		var d: Dictionary = character
 		if d.has("class_id"):
 			class_id = String(d["class_id"])
+			class_set = true
 		elif d.has("class"):
 			class_id = String(d["class"])
+			class_set = true
 		if d.has("x"):
 			p.x = float(d["x"])
 			p.prev_x = p.x
@@ -338,10 +346,30 @@ func _apply_character(p: SimPlayerState, character: Variant) -> void:
 			p.y = float(d["y"])
 			p.prev_y = p.y
 		if d.has("hp"):
-			p.hp = int(d["hp"])
+			has_hp = true
+			requested_hp = int(d["hp"])
 		if d.has("x") or d.has("y"):
 			_set_placed_position(p, p.x, p.y)
-	_set_player_class_on(p, class_id, not (character is Dictionary and (character as Dictionary).has("hp")))
+	if fresh or class_set:
+		_set_player_class_on(p, class_id, not has_hp)
+	if has_hp:
+		_apply_placed_hp(p, requested_hp, fresh)
+
+
+## Character-dict / place_player HP sanitizing. Values below 0 are ignored:
+## the current HP is kept, or max HP is used on a fresh add. Values above
+## max are capped. A dead player (hp <= 0) is not brought back to life.
+func _apply_placed_hp(p: SimPlayerState, requested: int, fresh: bool) -> void:
+	if p == null:
+		return
+	var max_hp: int = _current_max_hp(p)
+	if requested < 0:
+		if fresh:
+			p.hp = max_hp
+		return
+	if not fresh and p.hp <= 0:
+		return
+	p.hp = requested if requested <= max_hp else max_hp
 
 
 func _alloc_id() -> int:
@@ -745,6 +773,7 @@ func _spawn_projectile(p: SimPlayerState, sim_tick: int) -> void:
 ## lands inside a live fight.
 func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
+	var created: bool = p == null
 	if p == null:
 		if not _player_id_accept(id):
 			return
@@ -759,8 +788,8 @@ func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
 		# built-in player 1, or a same-tick re-add).
 		_pending_removes.erase(id)
 	_set_placed_position(p, x, y)
-	if hp >= 0:
-		p.hp = hp
+	# The default hp of -1 means "leave HP alone" (or fill to max on a new player).
+	_apply_placed_hp(p, hp, created)
 
 
 func enemy_target_id(enemy_id: int) -> int:

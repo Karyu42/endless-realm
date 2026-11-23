@@ -251,3 +251,113 @@ func test_internal_tracking_stays_bounded_after_many_cycles() -> void:
 	assert_eq(vault._boss_damage_by.size(), 0, "fight-end clears credit maps")
 	assert_eq(vault._boss_near_ticks.size(), 0)
 	assert_eq(vault._boss_ally_heals.size(), 0)
+
+
+func test_character_dict_hp_is_sanitized() -> void:
+	# Character-dict / place_player HP sanitizing: ignore values below 0,
+	# cap at max (200), and do not revive a dead player. Covers a fresh
+	# add_player, place_player, and a same-tick cancelled leave.
+	var sim := _new_sim()
+
+	# Fresh add_player takes effect at the start of the next step.
+	var fresh_neg: int = sim.alloc_player_id()
+	assert_true(sim.add_player(fresh_neg, {"x": 3.0, "y": 3.0, "hp": -5}))
+	sim.step()
+	assert_eq(sim.get_player(fresh_neg).hp, 200, "fresh add ignores HP below 0 and uses max")
+
+	var fresh_zero: int = sim.alloc_player_id()
+	assert_true(sim.add_player(fresh_zero, {"x": 3.0, "y": 3.0, "hp": 0}))
+	sim.step()
+	assert_eq(sim.get_player(fresh_zero).hp, 0)
+
+	var fresh_over: int = sim.alloc_player_id()
+	assert_true(sim.add_player(fresh_over, {"x": 3.0, "y": 3.0, "hp": 99999}))
+	sim.step()
+	assert_eq(sim.get_player(fresh_over).hp, 200)
+
+	# place_player of a current occupant.
+	var placed: int = sim.alloc_player_id()
+	assert_true(sim.add_player(placed, {"x": 3.0, "y": 3.0}))
+	sim.step()
+	sim.get_player(placed).hp = 120
+	sim.place_player(placed, 3.0, 3.0, -5)
+	assert_eq(sim.get_player(placed).hp, 120, "place_player ignores HP below 0")
+	sim.place_player(placed, 3.0, 3.0, 99999)
+	assert_eq(sim.get_player(placed).hp, 200)
+	sim.place_player(placed, 3.0, 3.0, 0)
+	assert_eq(sim.get_player(placed).hp, 0)
+	sim.place_player(placed, 3.0, 3.0, 80)
+	assert_eq(sim.get_player(placed).hp, 0, "place_player does not revive a dead player")
+
+	# place_player creating a new player.
+	var new_neg: int = sim.alloc_player_id()
+	sim.place_player(new_neg, 3.0, 3.0, -5)
+	assert_eq(sim.get_player(new_neg).hp, 200)
+	var new_zero: int = sim.alloc_player_id()
+	sim.place_player(new_zero, 3.0, 3.0, 0)
+	assert_eq(sim.get_player(new_zero).hp, 0)
+	var new_over: int = sim.alloc_player_id()
+	sim.place_player(new_over, 3.0, 3.0, 99999)
+	assert_eq(sim.get_player(new_over).hp, 200)
+
+	# Same-tick cancelled leave.
+	var readd: int = sim.alloc_player_id()
+	assert_true(sim.add_player(readd, {"x": 3.0, "y": 3.0}))
+	sim.step()
+	sim.get_player(readd).hp = 120
+	sim.remove_player(readd)
+	assert_true(sim.add_player(readd, {"hp": -5}))
+	assert_eq(sim.get_player(readd).hp, 120, "cancelled leave ignores HP below 0")
+	sim.remove_player(readd)
+	assert_true(sim.add_player(readd, {"hp": 99999}))
+	assert_eq(sim.get_player(readd).hp, 200)
+	sim.remove_player(readd)
+	assert_true(sim.add_player(readd, {"hp": 0}))
+	assert_eq(sim.get_player(readd).hp, 0)
+	sim.remove_player(readd)
+	assert_true(sim.add_player(readd, {"hp": 80}))
+	assert_eq(sim.get_player(readd).hp, 0, "cancelled leave does not revive a dead player")
+
+
+func test_cancelled_leave_applies_class_like_a_fresh_add() -> void:
+	# A cancelled leave applies class the same way a fresh add does: a class
+	# with no HP fills to the class max, and a class with HP is sanitized.
+	var sim := _new_sim()
+
+	var fresh: int = sim.alloc_player_id()
+	assert_true(sim.add_player(fresh, "gleamwright"))
+	sim.step()
+	assert_eq(sim.get_player(fresh).class_id, "gleamwright")
+	assert_eq(sim.get_player(fresh).hp, 140)
+
+	var fresh_dict: int = sim.alloc_player_id()
+	assert_true(sim.add_player(fresh_dict, {"class_id": "gleamwright", "x": 4.0, "y": 4.0}))
+	sim.step()
+	assert_eq(sim.get_player(fresh_dict).class_id, "gleamwright")
+	assert_eq(sim.get_player(fresh_dict).hp, 140)
+
+	var fill: int = sim.alloc_player_id()
+	assert_true(sim.add_player(fill, {"x": 5.0, "y": 5.0}))
+	sim.step()
+	sim.get_player(fill).hp = 80
+	sim.remove_player(fill)
+	assert_true(sim.add_player(fill, "gleamwright"))
+	assert_eq(sim.get_player(fill).class_id, "gleamwright")
+	assert_eq(sim.get_player(fill).hp, 140, "class without hp fills to max, like a fresh add")
+
+	var kept: int = sim.alloc_player_id()
+	assert_true(sim.add_player(kept, {"x": 5.0, "y": 5.0}))
+	sim.step()
+	sim.get_player(kept).hp = 80
+	sim.remove_player(kept)
+	assert_true(sim.add_player(kept, {"class_id": "gleamwright", "hp": 50}))
+	assert_eq(sim.get_player(kept).class_id, "gleamwright")
+	assert_eq(sim.get_player(kept).hp, 50)
+
+	var capped: int = sim.alloc_player_id()
+	assert_true(sim.add_player(capped, {"x": 5.0, "y": 5.0}))
+	sim.step()
+	sim.remove_player(capped)
+	assert_true(sim.add_player(capped, {"class": "gleamwright", "hp": 99999}))
+	assert_eq(sim.get_player(capped).class_id, "gleamwright")
+	assert_eq(sim.get_player(capped).hp, 140, "HP is capped at the new class max")
