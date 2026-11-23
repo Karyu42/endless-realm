@@ -12,3 +12,4 @@ client/test_results/
 
 # Load test output (tools/loadtest)
 loadtest-results/
+__pycache__/
