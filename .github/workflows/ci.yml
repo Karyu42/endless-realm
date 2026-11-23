@@ -474,8 +474,10 @@ jobs:
           grep -q "android.permission.INTERNET" "${RUNNER_TEMP}/badging.txt" || { echo "::error::APK lacks INTERNET permission"; exit 1; }
           "${bt}/apksigner" verify --verbose --print-certs "$apk" | grep -vE '^WARNING' | tee "${RUNNER_TEMP}/certs.txt"
           if [ "${FIXED_DEBUG_KEY:-false}" = "true" ]; then
-            grep -qx "Signer #1 certificate SHA-256 digest: ${EXPECTED_DEBUG_CERT_SHA256}" "${RUNNER_TEMP}/certs.txt" \
-              || { echo "::error::APK is not signed with the fixed debug cert ${EXPECTED_DEBUG_CERT_SHA256}"; exit 1; }
+            # Every signer cert digest (v2/v3 lines) must be the fixed one, and there must be at least one.
+            digests="$(sed -nE 's/.*certificate SHA-256 digest: ([0-9a-f]{64})$/\1/p' "${RUNNER_TEMP}/certs.txt" | sort -u)"
+            [ "$digests" = "$EXPECTED_DEBUG_CERT_SHA256" ] \
+              || { echo "::error::APK is not signed with the fixed debug cert ${EXPECTED_DEBUG_CERT_SHA256} (got: ${digests:-none})"; exit 1; }
             echo "Signed with the fixed debug cert ${EXPECTED_DEBUG_CERT_SHA256}"
           fi
       - name: Smoke-run the Linux export headless
