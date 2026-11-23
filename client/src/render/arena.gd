@@ -13,7 +13,6 @@ var _hint_touch: bool = false
 
 
 func _ready() -> void:
-	print("DataCatalog: cannot read res://data/qa_probe.json (QA probe, revert me)")
 	_shots = Node2D.new()
 	_shots.name = "Shots"
 	add_child(_shots)
