@@ -219,7 +219,6 @@ _DRIFTCAP_REQUIRED = {
 
 
 def _schema_rejects_missing(schema_path, pack_path, kind, key, field, drop):
-    import copy
     import tempfile
 
     doc = json.loads(pack_path.read_text(encoding="utf-8"))

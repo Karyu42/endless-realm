@@ -5,12 +5,9 @@ extends WorldSource
 ## RefCounted classes — no Node, SceneTree, Input, or rendering dependencies —
 ## and is deterministic (tick-based, PCG32 only).
 ##
-## Advance the world with step(), not tick(). tick() is the completed-tick
-## getter used by WorldSource and LobbyHost (which calls p.sim.tick() as a
-## getter after step()). The host contract named the advance tick(); until
-## the host switches, step() stays the advance so existing host CI keeps
-## working. apply_input(id, intent) then step() is the multi-player loop.
-## Solo play is one player: submit_input(intent) applies to that player.
+## Contract: apply_input(id, intent) then step() to advance. tick() is the
+## completed-tick getter, not the advance. Solo play is one player:
+## submit_input(intent) applies to that player, then step().
 
 const READY_EPS: float = 1e-9
 ## content-v0.1 §2.3: nearest player in aggro range, re-picked every 1 s.
@@ -161,7 +158,15 @@ func apply_input(id: int, intent: InputIntent) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p == null or intent == null:
 		return
+	# A later apply_input in the same tick must not drop a pending one-shot.
+	# OR ability_pressed; keep a nonzero interact_target_id (latest nonzero wins).
+	var pending_ability: bool = p.intent.ability_pressed
+	var pending_target: int = p.intent.interact_target_id
 	p.intent = _copy_intent(intent)
+	if pending_ability:
+		p.intent.ability_pressed = true
+	if p.intent.interact_target_id == 0 and pending_target != 0:
+		p.intent.interact_target_id = pending_target
 
 
 ## Solo / existing WorldSource path: apply to the default player (id 1, or
@@ -415,6 +420,11 @@ func world_view(player_id: int) -> WorldSnapshot:
 	return snap
 
 
+## Read-only view of in-flight player shots. Do not mutate or keep past a step().
+func projectiles() -> Array[SimProjectile]:
+	return _projectiles
+
+
 func projectile_count() -> int:
 	return _projectiles.size()
 
@@ -552,10 +562,8 @@ func _player_pos(id: int) -> Vector2:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p != null:
 		return Vector2(p.x, p.y)
-	var d: SimPlayerState = _default_player()
-	if d != null:
-		return Vector2(d.x, d.y)
-	return Vector2.ZERO
+	push_error("LocalSim: unknown player id %s" % id)
+	return Vector2.INF
 
 
 func _player_hp_of(id: int) -> int:
@@ -649,9 +657,10 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 	var aim_x: float = e.x
 	var aim_y: float = e.y
 	if e.target_id != 0:
-		var tpos := _player_pos(e.target_id)
-		aim_x = tpos.x
-		aim_y = tpos.y
+		var tp: SimPlayerState = _players.get(e.target_id, null) as SimPlayerState
+		if tp != null:
+			aim_x = tp.x
+			aim_y = tp.y
 	var dx: float = aim_x - e.x
 	var dy: float = aim_y - e.y
 	var dist: float = sqrt(dx * dx + dy * dy)
@@ -777,6 +786,10 @@ func _pattern_shots_vs_players(sim_tick: int) -> void:
 				_hit_p0.x, _hit_p0.y, _hit_p1.x, _hit_p1.y, b.radius_tiles,
 				p.prev_x, p.prev_y, p.x, p.y, _config.player_radius_tiles
 			):
+				# Slipstep i-frames: skip this player and keep checking others
+				# instead of stopping at the first overlap.
+				if _ability_of(p.id).invuln_ticks > 0:
+					continue
 				var dmg: int = 0
 				var src := _enemy_by_id(b.source_id)
 				if src != null and src.def != null:
@@ -882,6 +895,24 @@ func xp_tenths() -> int:
 func pending_glint() -> int:
 	var p := _default_player()
 	return p.pending_glint if p != null else 0
+
+
+## Read-only view of ground bags. Do not mutate or keep past a step().
+func ground_drops() -> Array[GroundDrop]:
+	return _ground_drops
+
+
+## Same read-only array as ground_drops().
+func bags() -> Array[GroundDrop]:
+	return _ground_drops
+
+
+## The bag with this entity id, or null. Do not mutate the returned bag.
+func bag_by_id(id: int) -> GroundDrop:
+	for bag in _ground_drops:
+		if bag.id == id:
+			return bag
+	return null
 
 
 func ground_drop_count() -> int:
@@ -1145,10 +1176,7 @@ func _live_own_bag(p: SimPlayerState, bag: GroundDrop) -> bool:
 
 
 func _bag_by_id(id: int) -> GroundDrop:
-	for bag in _ground_drops:
-		if bag.id == id:
-			return bag
-	return null
+	return bag_by_id(id)
 
 
 func _ability_of(player_id: int) -> PlayerAbilityState:
@@ -1178,6 +1206,10 @@ func ability_cooldown_ticks(player_id: int) -> int:
 
 func set_ability_cooldown_ticks(player_id: int, ticks: int) -> void:
 	_ability_of(player_id).cooldown_ticks = maxi(0, ticks)
+
+
+func set_invuln_ticks(player_id: int, ticks: int) -> void:
+	_ability_of(player_id).invuln_ticks = maxi(0, ticks)
 
 
 func ward_ticks(player_id: int) -> int:
