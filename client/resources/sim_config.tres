@@ -10,5 +10,5 @@ tempo_bonus = 0.0
 projectile_speed_tiles_per_s = 14.0
 projectile_range_tiles = 7.0
 projectile_lifetime_ticks_override = 0
-player_radius_tiles = 0.35
+player_radius_tiles = 0.30
 projectile_radius_tiles = 0.15
