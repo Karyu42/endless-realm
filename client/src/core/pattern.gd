@@ -22,6 +22,14 @@ var range_tiles: float = 1.0
 var size: String = "S"
 var damage_key: String = ""
 var trigger: String = "timer"
+var interval_ticks: int = 0
+var _present: Dictionary = {}
+
+
+static func required_pack_fields(pattern_id: String) -> PackedStringArray:
+	if pattern_id == "spore_ring":
+		return PackedStringArray(["count", "aim", "angle_offset_cycle_deg", "interval_ticks"])
+	return PackedStringArray()
 
 
 static func lifetime_ticks(range_tiles: float, speed: float) -> int:
@@ -42,6 +50,8 @@ static func size_radius(size: String) -> float:
 
 static func from_json(d: Dictionary) -> PatternDef:
 	var p := PatternDef.new()
+	for k in d.keys():
+		p._present[String(k)] = true
 	p.id = String(d.get("id", ""))
 	p.type = String(d.get("type", "fan"))
 	p.count = int(d.get("count", 1))
@@ -54,6 +64,8 @@ static func from_json(d: Dictionary) -> PatternDef:
 	p.size = String(d.get("size", "S"))
 	p.damage_key = String(d.get("damage_key", ""))
 	p.trigger = String(d.get("trigger", "timer"))
+	if p._present.has("interval_ticks"):
+		p.interval_ticks = int(d.get("interval_ticks", 0))
 	var cycle: Variant = d.get("angle_offset_cycle_deg", [])
 	if cycle is Array:
 		for v in cycle:
@@ -69,6 +81,14 @@ static func from_json(d: Dictionary) -> PatternDef:
 	if p.count < 1:
 		p.count = 1
 	return p
+
+
+func missing_pack_ids() -> PackedStringArray:
+	var out := PackedStringArray()
+	for field in required_pack_fields(id):
+		if not _present.has(field):
+			out.append("%s.%s" % [id, field])
+	return out
 
 
 func emit(seed: int, origin_x: float, origin_y: float, aim_rad: float, volley_index: int) -> Array[PatternBullet]:
@@ -134,4 +154,5 @@ func _bullet(index: int, angle: float, ox: float, oy: float) -> PatternBullet:
 	b.lifetime_ticks = lifetime_ticks(range_tiles, speed)
 	b.radius_tiles = size_radius(size)
 	b.damage_key = damage_key
+	b.pattern_id = id
 	return b

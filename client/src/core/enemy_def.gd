@@ -24,9 +24,10 @@ var no_leash: bool = false
 var hover_radius: float = 3.0
 var leash: float = 16.0
 var strafe_switch_ticks: int = 40
-var ai_type: String = "chase_hover"
+var ai_type: String = ""
 var pattern_id: String = ""
-var fire_interval_ticks: int = 30
+var fire_interval_ticks: int = 0
+var _ai_fields: Dictionary = {}
 
 
 static func from_json(d: Dictionary) -> EnemyDef:
@@ -54,10 +55,30 @@ static func from_json(d: Dictionary) -> EnemyDef:
 	e.strafe_switch_ticks = int(d.get("strafe_switch_ticks", 40))
 	var ai: Variant = d.get("ai", {})
 	if ai is Dictionary:
-		e.ai_type = String(ai.get("type", "chase_hover"))
+		for k in ai.keys():
+			e._ai_fields[String(k)] = true
+		e.ai_type = String(ai.get("type", ""))
 		e.pattern_id = String(ai.get("pattern", ""))
-		e.fire_interval_ticks = int(ai.get("fire_interval_ticks", 30))
+		if e._ai_fields.has("fire_interval_ticks"):
+			e.fire_interval_ticks = int(ai.get("fire_interval_ticks", 0))
 	return e
+
+
+func is_rooted() -> bool:
+	return ai_type == "rooted"
+
+
+func missing_pack_ids() -> PackedStringArray:
+	var out := PackedStringArray()
+	if not is_rooted():
+		return out
+	if not _ai_fields.has("type") or ai_type == "":
+		out.append("%s.ai.type" % id)
+	if not _ai_fields.has("pattern") or pattern_id == "":
+		out.append("%s.ai.pattern" % id)
+	if not _ai_fields.has("fire_interval_ticks"):
+		out.append("%s.ai.fire_interval_ticks" % id)
+	return out
 
 
 ## Drop-aggro radius: explicit value, or aggro_radius + 4 tiles.

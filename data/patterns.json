@@ -12,6 +12,23 @@
       "size": "S",
       "damage_key": "spit",
       "trigger": "timer"
+    },
+    {
+      "id": "spore_ring",
+      "type": "ring",
+      "count": 8,
+      "aim": "fixed",
+      "start_angle_deg": 0,
+      "angle_offset_cycle_deg": [
+        0,
+        22.5
+      ],
+      "speed": 4.0,
+      "range": 5.0,
+      "size": "M",
+      "damage_key": "ring",
+      "trigger": "timer",
+      "interval_ticks": 40
     }
   ]
 }
