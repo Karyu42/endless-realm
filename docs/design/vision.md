@@ -204,7 +204,7 @@ Dividing by `m(L)` keeps the limits meaningful at every level. 1 NTV is about on
 | Established accounts | no hard cap; anomaly flags only |
 | **Re-trade hold:** items and currency received in a trade | cannot be traded on again for 1 h |
 | Cooldown between trades (per character) | 5 s |
-| Trade fee (Glint sink and RMT friction) | 2% of Glint transferred, paid by the sender (§11 Q2) |
+| Trade fee (Glint sink and RMT friction) | 2% of Glint transferred, paid by the sender (D9) |
 
 ### 8.5 Anomaly flags
 The system raises flags into a review queue. v0.1 has no automatic bans.
@@ -226,7 +226,7 @@ Why: full currency trading means real-money traders will come. Server-side atomi
 - **Season:** 10 weeks. The track has 30 tiers, and each tier costs 200 **Sparks** (6,000 in total).
 - **Sparks:** 1 per 10 kills (only kills with `E ≥ Lp − 5` count), 20 per boss with the §6.1 contribution check, and +50 for the first dungeon clear each UTC day. That is about 250 Sparks per hour, so the full track takes about 24 h of play over 10 weeks. Sparks stop at the end of the season.
 - **Rewards (cosmetic only):** 2 class skins, 6 dyes, 3 portal trails, 2 emotes and 1 title. The other tiers give 150 Prism in total (10 tiers × 15). Earned cosmetics are tradeable, and earned Prism is account-bound.
-- There is no paid premium track in v0.1 (§11 Q8).
+- There is no paid premium track in v0.1 (D15).
 - Hardcore characters earn Sparks into the same account track. Cosmetics are account-wide and carry no power, so this has no effect on the hardcore economy.
 
 **Prism** is a cosmetic-only currency, earned on the track or bought ([Later] store). It is never tradeable and buys nothing that affects power.
