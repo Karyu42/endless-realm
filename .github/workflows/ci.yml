@@ -494,8 +494,9 @@ jobs:
             echo "::error::Linux export hit script errors on startup"
             fail=1
           fi
-          if grep -nE '^(ERROR|SCRIPT ERROR):' "${log}.plain" > "${log}.errors"; then
-            echo "::error::Linux export logged engine/script errors during the headless smoke run:"
+          # "DataCatalog: cannot read" / "unknown id" catch exports that silently ship without data/ (#16).
+          if grep -nE '^(ERROR|SCRIPT ERROR):|DataCatalog: cannot read|unknown id' "${log}.plain" > "${log}.errors"; then
+            echo "::error::Linux export logged engine/script/data errors during the headless smoke run:"
             sed 's/^/  /' "${log}.errors"
             fail=1
           fi
