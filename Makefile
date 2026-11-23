@@ -23,6 +23,11 @@ COMPOSE   ?= docker compose --env-file tools/versions.env
 dev:
 	$(COMPOSE) up --build
 
+# CI runs `make test` with GOFLAGS='-timeout=3m -count=1' (PR #5). Go applies
+# only the flags each subcommand knows, so `go vet` ignores those test flags.
+# -count=1 is also on the test command line so a local `make test` without
+# GOFLAGS does not reuse cached results; a duplicate -count=1 is harmless.
+# Do not add -timeout here: a command-line timeout would override CI's GOFLAGS.
 vet:
 	cd server && $(GO) vet ./...
 

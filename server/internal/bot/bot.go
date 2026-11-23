@@ -27,12 +27,10 @@ const (
 
 // Config is the bot contract invoked by CI (PR #5 ci.yml / soak.yml):
 //
-//	er-bot -clients=1 -seed=1 -mult=1.0
-//	er-bot -clients=$N -seed=1 -mult=1.0 -duration=10m
+//	er-bot -url=ws://127.0.0.1:8080/ws -clients=1 -seed=1 -mult=1.0
+//	er-bot -url=ws://127.0.0.1:8080/ws -clients=$N -seed=1 -mult=1.0 -duration=10m
 //
-// -url is required unless ER_SMOKE_URL is set; if both are empty the
-// default is DefaultURL so the current CI invocation (which does not pass
-// -url) works against compose's published port.
+// -url is the contract; if it is empty, ER_SMOKE_URL is used, then DefaultURL.
 type Config struct {
 	URL      string
 	Clients  int

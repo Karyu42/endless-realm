@@ -61,7 +61,7 @@ The first WebSocket message must be a protobuf `Hello` with `protocol_version = 
 
 ## Bot contract (`server/cmd/bot`)
 
-Standalone test client used by CI `integration-smoke` / soak (PR #5) and `make smoke`. Build it the way CI does:
+Standalone test client used by CI `integration-smoke` / soak and `make smoke`. Build it the way CI does:
 
 ```sh
 cd server && go build -o er-bot ./cmd/bot
@@ -71,20 +71,17 @@ Invocation (flags match `.github/workflows/ci.yml` and `soak.yml` on PR #5):
 
 ```sh
 # smoke (CI): handshake + at least one snapshot, then exit 0
-./er-bot -clients=1 -seed=1 -mult=1.0
+./er-bot -url ws://127.0.0.1:8080/ws -clients=1 -seed=1 -mult=1.0
 
 # soak (CI): stay connected for the duration, then exit 0
-./er-bot -clients=8 -seed=1 -mult=1.0 -duration=10m
-
-# explicit URL (recommended; also used by `make smoke`)
-./er-bot -url ws://127.0.0.1:8080/ws -clients=1 -seed=1 -mult=1.0
+./er-bot -url ws://127.0.0.1:8080/ws -clients=8 -seed=1 -mult=1.0 -duration=10m
 ```
 
 Without Docker, start the server with `make run` and run the smoke command above in another shell.
 
 | Flag | Meaning |
 |---|---|
-| `-url` | WebSocket URL. If omitted, `ER_SMOKE_URL` is used; if that is also empty, the default is `ws://127.0.0.1:8080/ws` so the current CI invocation (which does not pass `-url`) works against compose's published port. |
+| `-url` | WebSocket URL. CI passes `-url ws://127.0.0.1:8080/ws`. If omitted, `ER_SMOKE_URL` is used; if that is also empty, the default is `ws://127.0.0.1:8080/ws`. |
 | `-clients` | Concurrent clients (must be ≥ 1). CI smoke uses `1`. |
 | `-seed` | Expected `Welcome.instance_seed`. Exit non-zero on mismatch. CI passes `1`, matching compose `ER_SEED`. |
 | `-mult` | Expected level multiplier, decimal or hundredths (same rules as the server). Exit non-zero on mismatch. CI passes `1.0`. |
