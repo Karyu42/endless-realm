@@ -1659,7 +1659,8 @@ func test_hosted_vault_instance_is_configured_from_host_data() -> void:
 	_assert_configured(inst, true)
 
 
-func test_missing_grants_flag_fails_closed() -> void:
+## Host data saying false wins over a packed true (fails closed).
+func test_host_data_without_grants_wins_over_packed_claim() -> void:
 	_host = _new_host()
 	var def: DungeonDef = _host.catalog.dungeon("hollowmere_vault")
 	var saved := def.grants_persistent
