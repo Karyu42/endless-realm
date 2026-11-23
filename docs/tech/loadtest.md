@@ -4,10 +4,10 @@ Status: early spike for stack decision 2b (player-hosted lobbies run by the
 Godot game itself, one GDScript sim shared with solo, Go kept as a test
 harness). Question: can a GDScript host hold 50 players at 20 Hz?
 
-**Answer on this box: yes.** At 50 clients the host tick is 9.2 ms p50 and
-14.7 ms p99 against a 50 ms budget, with 0 skipped ticks over 60 s and about
-20% of one core. That is roughly 3.4x headroom at p99. 100 clients still hold
-20 Hz (24 ms p99).
+**Answer on this box: yes.** At 50 clients the host tick is 10.0 ms p50 and
+16.5 ms p99 against a 50 ms budget, with 0 skipped ticks over 60 s and about
+21% of one core. That is roughly 3x headroom at p99. 100 clients still hold
+20 Hz (27.6 ms p99).
 
 ## What runs
 
@@ -73,7 +73,7 @@ Results land in `loadtest-results/results.{json,md}` (git-ignored).
 **Not a gaming PC and not a phone.** It is a shared cloud VM: 8 vCPU,
 `Intel(R) Xeon(R) Processor` (model name only), 15.6 GiB RAM, Linux 6.12,
 Godot 4.7.2.stable.official, Go 1.27.4. Load average before the runs was
-about 0.3–0.6. Other agents share the box, so expect some noise in max
+about 0.4–1.2. Other agents share the box, so expect some noise in max
 values. The host is single-threaded GDScript, so "CPU %" is percent of one
 core.
 
@@ -83,37 +83,38 @@ Main curve: 60 s per point, 20 emitters.
 
 | clients | live bullets (avg) | tick p50 / p95 / p99 / max (ms) | net-in / sim / encode / send p50 (ms) | achieved Hz | skipped ticks | snapshot B/client/s (wire stub) | projected full-state B/client/s | host CPU % (of one core) | host RSS MiB (max) | bot ok |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 8 | 941 | 2.91 / 4.33 / 5.27 / 40.09 | 0.72 / 1.29 / 0.80 / 0.08 | 20.02 | 0 | 1,202 | 5,058 | 6.7 | 122.1 | yes |
-| 25 | 893 | 5.26 / 7.74 / 9.11 / 10.35 | 1.70 / 1.48 / 1.84 / 0.20 | 20.01 | 0 | 3,571 | 13,939 | 11.5 | 122.2 | yes |
-| 50 | 802 | 9.17 / 12.70 / 14.71 / 42.73 | 3.37 / 1.80 / 3.40 / 0.51 | 20.01 | 0 | 7,030 | 27,002 | 19.5 | 121.7 | yes |
+| 8 | 942 | 3.11 / 4.79 / 5.34 / 11.90 | 0.84 / 1.33 / 0.85 / 0.09 | 20.02 | 0 | 1,202 | 4,708 | 7.1 | 130.1 | yes |
+| 25 | 890 | 5.87 / 8.89 / 9.95 / 30.49 | 2.19 / 1.56 / 1.89 / 0.23 | 20.02 | 0 | 3,571 | 12,842 | 13.1 | 130.3 | yes |
+| 50 | 806 | 10.02 / 14.08 / 16.45 / 44.46 | 4.30 / 1.90 / 3.33 / 0.50 | 20.01 | 0 | 7,041 | 24,818 | 21.3 | 130.2 | yes |
 
 Headroom points: 30 s each.
 
 | clients | emitters | live bullets (avg) | tick p50 / p95 / p99 / max (ms) | net-in / sim / encode / send p50 (ms) | achieved Hz | skipped ticks | projected full-state B/client/s | host CPU % | host RSS MiB |
 |---|---|---|---|---|---|---|---|---|---|
-| 100 | 20 | 685 | 16.35 / 20.73 / 24.06 / 29.28 | 6.06 / 2.52 / 6.64 / 0.99 | 20.03 | 0 | 53,005 | 32.2 | 122.5 |
-| 50 | 40 | 1608 | 10.79 / 13.86 / 16.71 / 20.79 | 3.67 / 3.02 / 3.48 / 0.48 | 20.03 | 0 | 27,743 | 22.2 | 122.4 |
+| 100 | 20 | 674 | 18.00 / 23.07 / 27.57 / 46.51 | 7.77 / 2.65 / 6.36 / 1.05 | 20.03 | 0 | 48,654 | 34.8 | 130.4 |
+| 50 | 40 | 1598 | 11.42 / 15.57 / 17.84 / 44.18 | 4.37 / 3.13 / 3.35 / 0.49 | 20.03 | 0 | 25,574 | 23.5 | 130.1 |
 
 Notes:
 - **Bullet count:** fewer live bullets at higher player counts is expected,
   because more of them hit someone and are removed.
-- **Max outliers:** the single 40 ms max values (at 8 and 50 clients) are
-  isolated spikes. No tick ran late and none were skipped. They are likely
+- **Max outliers:** the 30–46 ms max values are isolated spikes. No tick ran late and none were skipped. They are likely
   scheduler or allocation noise on a shared VM.
-- **Host upload:** at 50 players, the projected full state is about 27 KB/s
-  per client, so about 1.35 MB/s (about 11 Mbit/s) total. That is fine on a
+- **Host upload:** at 50 players, the projected full state is about 25 KB/s
+  per client, so about 1.25 MB/s (about 10 Mbit/s) total. That is fine on a
   LAN, but it matters for a home-upload host and for 100 players. Interest
   management and delta snapshots are the lever.
 
 ## Hotspots
 
 At 50 clients the tick is about 75% codec:
-- **Input decode (net-in), 3.4 ms:** godobuf costs about 65 µs per decoded
-  InputFrame, and 50 arrive per tick.
-- **Snapshot encode, 3.4 ms:** this covers the stub plus the projected full
+- **Input decode (net-in), 4.3 ms:** godobuf costs about 85 µs per decoded
+  InputFrame, and 50 arrive per tick. It was about 65 µs before the #12
+  portal messages grew the ClientMessage oneof, because godobuf's generic
+  parser scales with the schema.
+- **Snapshot encode, 3.3 ms:** this covers the stub plus the projected full
   state.
 
-The sim itself (50 LocalSims + about 800 swept bullets) is only 1.8 ms, and
+The sim itself (50 LocalSims + about 800 swept bullets) is only 1.9 ms, and
 doubling bullets to about 1,600 adds about 1.2 ms. If a heavier real sim or a
 weaker host (a phone) needs room, the first levers are in this order:
 1. A hand-written fixed-layout InputFrame decoder, or decoding only the
@@ -131,6 +132,12 @@ weaker host (a phone) needs room, the first levers are in this order:
   HP scaling, and lag-compensation rewind.
 - **Real networks:** real network latency, loss, and TCP head-of-line
   blocking. Everything here ran on loopback.
+- **godobuf names:** godobuf v0.7.0 output does not compile on Godot 4.7.2
+  for the current proto. `instance_id` generates `get_instance_id()`, which
+  overrides `Object`'s method, and `message Error` shadows the global `Error`
+  enum. The gen script renames both in the generated GDScript
+  (`get_instance_id_value()`, `ErrorMsg`). The cleaner fix is to avoid those
+  names in `proto/v1`, which is wire-compatible.
 - **Codegen check:** `make proto` / proto-codegen-check does not regenerate
   the GDScript codecs yet. Regenerate them with
   `tools/loadtest/gen-gdscript-proto.sh` (pinned godobuf v0.7.0,
