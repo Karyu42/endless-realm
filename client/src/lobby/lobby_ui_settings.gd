@@ -15,6 +15,7 @@ var font_size: int = 0
 var status_font_size: int = 0
 var stack_narrow_px: int = 0
 var assume_dpi: int = 0
+var message_max_width_mm: float = 0.0
 var strings: Dictionary = {}
 var import_messages: Dictionary = {}
 var error_messages: Dictionary = {}
@@ -55,9 +56,11 @@ static func from_json(d: Dictionary, feel_touch: Dictionary = {}) -> LobbyUiSett
 		return u
 	if not u._int(td, "assume_dpi", "assume_dpi"):
 		return u
+	if not u._num(td, "message_max_width_mm", "message_max_width_mm"):
+		return u
 	if u.min_target_mm <= 0.0 or u.margin_mm <= 0.0 or u.row_min_mm <= 0.0 \
 			or u.font_size < 1 or u.status_font_size < 1 or u.stack_narrow_px < 1 \
-			or u.assume_dpi < 1:
+			or u.assume_dpi < 1 or u.message_max_width_mm <= 0.0:
 		push_error("LobbyUiSettings: invalid packed value")
 		return u
 	var sd: Dictionary = strs
@@ -126,7 +129,14 @@ func dpi() -> float:
 
 
 func px_from_mm(mm: float) -> int:
-	return int(round(mm * dpi() / 25.4))
+	return px_from_mm_at(mm, dpi())
+
+
+func px_from_mm_at(mm: float, dpi_value: float) -> int:
+	var d: float = dpi_value
+	if d <= 0.0:
+		d = float(assume_dpi)
+	return int(round(mm * d / 25.4))
 
 
 func min_target_px() -> int:
@@ -134,11 +144,45 @@ func min_target_px() -> int:
 
 
 func margin_px() -> int:
-	return maxi(px_from_mm(margin_mm), 1)
+	return margin_px_at(dpi())
+
+
+func margin_px_at(dpi_value: float) -> int:
+	return maxi(px_from_mm_at(margin_mm, dpi_value), 1)
 
 
 func row_min_px() -> int:
 	return maxi(px_from_mm(row_min_mm), 1)
+
+
+## Cap a message to the packed width, and also to the viewport minus margins
+## so a long line wraps on a narrow Android screen.
+func message_max_width_px(viewport_width: float) -> int:
+	return message_max_width_px_at(viewport_width, dpi())
+
+
+func message_max_width_px_at(viewport_width: float, dpi_value: float) -> int:
+	var packed: int = maxi(px_from_mm_at(message_max_width_mm, dpi_value), 1)
+	if viewport_width <= 0.0:
+		return packed
+	var inner: int = int(floor(viewport_width)) - 2 * margin_px_at(dpi_value)
+	return maxi(mini(packed, inner), 1)
+
+
+func apply_message_label(label: Label, viewport_width: float) -> int:
+	return apply_message_label_at(label, viewport_width, dpi())
+
+
+func apply_message_label_at(label: Label, viewport_width: float, dpi_value: float) -> int:
+	if label == null or not is_valid():
+		return 0
+	var w: int = message_max_width_px_at(viewport_width, dpi_value)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.custom_minimum_size = Vector2(float(w), label.custom_minimum_size.y)
+	label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	if label.size.x > float(w):
+		label.size.x = float(w)
+	return w
 
 
 func _num(d: Dictionary, key: String, field: String) -> bool:

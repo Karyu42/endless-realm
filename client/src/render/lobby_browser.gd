@@ -6,6 +6,9 @@ var _client: LobbyClient
 var _pending_code: String = ""
 var _setup_error: String = ""
 var _ui: LobbyUiSettings
+var _join_client: LobbyClient
+## Held join/setup status; _refresh_list must not replace it with the LAN count.
+var _sticky_status: String = ""
 
 
 func setup(p_args: LobbyArgs, error_text: String = "") -> void:
@@ -61,12 +64,19 @@ func _ready() -> void:
 			%HostButton, %ValidateLabel
 		]:
 			n.visible = false
+	var vp := get_viewport()
+	if vp != null and not vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.connect(_on_viewport_size_changed)
+	%StatusLabel.mouse_filter = Control.MOUSE_FILTER_STOP
+	%StatusLabel.gui_input.connect(_on_status_gui_input)
 	_apply_touch_layout()
 	_on_invite_toggled(invite_check.button_pressed)
 	_refresh_list()
 	_refresh_validate()
-	if _setup_error != "":
-		%StatusLabel.text = _setup_error
+	if GameSession.join_error_text != "":
+		_hold_status(GameSession.take_join_error())
+	elif _setup_error != "":
+		_hold_status(_setup_error)
 	if _pending_code != "":
 		# Wait a couple of beacons for a matching LAN host.
 		get_tree().create_timer(1.5).timeout.connect(_try_pending_code)
@@ -108,6 +118,45 @@ func _apply_touch_layout() -> void:
 		if n is BaseButton or n is LineEdit or n is Label:
 			n.add_theme_font_size_override("font_size", font)
 
+	if _ui != null and _ui.is_valid():
+		_ui.apply_message_label(%StatusLabel, get_viewport_rect().size.x)
+
+
+func _on_viewport_size_changed() -> void:
+	_apply_touch_layout()
+
+
+func _hold_status(text: String) -> void:
+	_sticky_status = text
+	if text != "":
+		%StatusLabel.text = text
+
+
+func _clear_sticky_status() -> void:
+	_sticky_status = ""
+
+
+func _dismiss_status() -> void:
+	if _sticky_status == "" and _setup_error == "":
+		return
+	_sticky_status = ""
+	_setup_error = ""
+	%StatusLabel.text = "%d lobby(s) on LAN" % _visible_lobby_count()
+
+
+func _on_status_gui_input(event: InputEvent) -> void:
+	if _sticky_status == "" and _setup_error == "":
+		return
+	var tap: bool = event is InputEventScreenTouch and event.pressed
+	var click: bool = (
+		event is InputEventMouseButton
+		and event.pressed
+		and event.button_index == MOUSE_BUTTON_LEFT
+	)
+	if tap or click:
+		_dismiss_status()
+		accept_event()
+
 
 func _on_invite_toggled(on: bool) -> void:
 	%BroadcastJoinCodeCheck.visible = not on and not OS.has_feature("android")
@@ -145,6 +194,9 @@ func _refresh_list() -> void:
 		if LobbyRowFormat.is_invite_only(lobby):
 			continue
 		list.add_item(LobbyRowFormat.format(lobby, _ui))
+	if _sticky_status != "":
+		%StatusLabel.text = _sticky_status
+		return
 	if _setup_error == "":
 		%StatusLabel.text = "%d lobby(s) on LAN" % _visible_lobby_count()
 
@@ -239,11 +291,12 @@ func _on_join_ip() -> void:
 		port = int(parts[1])
 	var url := "ws://%s:%d/ws" % [host, port]
 	var played_offline: CheckBox = %PlayedOfflineCheck
+	_clear_sticky_status()
 	var err: Error = GameSession.start_client(url, played_offline.button_pressed, "")
 	if err != OK:
-		%StatusLabel.text = "Could not reach %s" % url
+		_hold_status("Could not reach %s" % url)
 		return
-	_go_arena()
+	_await_join()
 
 
 func _join_info(info: Dictionary) -> void:
@@ -254,15 +307,48 @@ func _join_info(info: Dictionary) -> void:
 		path = "/" + path
 	var url := "ws://%s:%d%s" % [ip, port, path]
 	var played_offline: CheckBox = %PlayedOfflineCheck
+	_clear_sticky_status()
 	var err: Error = GameSession.start_client(
 		url,
 		played_offline.button_pressed,
 		String(info.get("code", ""))
 	)
 	if err != OK:
-		%StatusLabel.text = "Could not join %s" % url
+		_hold_status("Could not join %s" % url)
 		return
+	_await_join()
+
+
+
+func _await_join() -> void:
+	_disconnect_join_signals()
+	var lc: LobbyClient = GameSession.lobby_client
+	if lc == null:
+		return
+	_join_client = lc
+	lc.welcomed.connect(_on_join_welcomed)
+	lc.join_error_received.connect(_on_join_refused)
+
+
+func _disconnect_join_signals() -> void:
+	if _join_client != null and is_instance_valid(_join_client):
+		if _join_client.welcomed.is_connected(_on_join_welcomed):
+			_join_client.welcomed.disconnect(_on_join_welcomed)
+		if _join_client.join_error_received.is_connected(_on_join_refused):
+			_join_client.join_error_received.disconnect(_on_join_refused)
+	_join_client = null
+
+
+func _on_join_welcomed(_pid: int) -> void:
+	_disconnect_join_signals()
 	_go_arena()
+
+
+func _on_join_refused(_code: int, _reason: String) -> void:
+	_disconnect_join_signals()
+	var text: String = GameSession.join_error_text
+	if text != "":
+		_hold_status(text)
 
 
 func _go_arena() -> void:

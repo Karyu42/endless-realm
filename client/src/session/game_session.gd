@@ -1,4 +1,6 @@
 extends Node
+
+const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
 ## Autoload. Owns a WorldSource, steps it at 20 Hz, and exposes snapshots for
 ## render interpolation. Gameplay nodes emit input and read state only.
 ## Solo, listen-host, and remote client all submit InputIntent through source.
@@ -41,6 +43,10 @@ var last_hit_tick: int = -1
 ## Packed portal / ErrorReply copy for the local player; empty when none.
 var portal_error_text: String = ""
 var portal_error_code: int = 0
+## Packed Hello-time join refusal copy; empty when none. Not portal copy.
+var join_error_text: String = ""
+var join_error_code: int = 0
+signal join_refused(text: String)
 
 var _accum: float = 0.0
 var _seq: int = 0
@@ -190,6 +196,7 @@ func _start_or_stop_beacon() -> void:
 
 
 func start_client(url: String, offline: bool = false, join_code: String = "") -> Error:
+	clear_join_error()
 	_teardown_net()
 	played_offline = offline
 	lobby_client = LobbyClient.new()
@@ -203,6 +210,7 @@ func start_client(url: String, offline: bool = false, join_code: String = "") ->
 		return err
 	lobby_client.welcomed.connect(_on_client_welcomed)
 	lobby_client.error_received.connect(_on_client_portal_error)
+	lobby_client.join_error_received.connect(_on_client_join_error)
 	mode = Mode.CLIENT
 	source = ClientWorldSource.new(lobby_client)
 	_reset_snapshots()
@@ -221,6 +229,59 @@ func _on_host_portal_rejected(player_id: int, code: int, _reason: String) -> voi
 
 func _on_client_portal_error(code: int, _reason: String) -> void:
 	apply_portal_error(code)
+
+
+func _on_client_join_error(code: int, _reason: String) -> void:
+	apply_join_error(code)
+	var failed: LobbyClient = lobby_client
+	if mode == Mode.CLIENT and (failed == null or failed.player_id == 0):
+		call_deferred("_abandon_failed_join", failed)
+
+
+func _abandon_failed_join(failed: LobbyClient = null) -> void:
+	if mode != Mode.CLIENT:
+		return
+	# A later start_client may already have replaced this client.
+	if lobby_client != failed:
+		return
+	if lobby_client != null and lobby_client.player_id != 0:
+		return
+	start_solo()
+
+
+## Hello-time join refusal. INSTANCE_FULL uses packed lobby_full copy, not the
+## portal "area is full" sentence. JOIN_REFUSED uses its own packed message.
+## Join-floor UNSPECIFIED is left alone.
+func apply_join_error(code: int) -> String:
+	var ui := LobbyUiSettings.load_default()
+	var text := ""
+	if code == PB.ErrorCode.INSTANCE_FULL:
+		text = ui.text("lobby_full")
+		if text == "":
+			DataCatalog.report_unknown_id("lobby_ui.strings.lobby_full")
+	elif code == PB.ErrorCode.JOIN_REFUSED:
+		if ui.maps_error(code):
+			text = ui.error_message(code)
+		else:
+			DataCatalog.report_unknown_id(ErrorCodes.catalog_id(code))
+	elif code != PB.ErrorCode.ERROR_CODE_UNSPECIFIED:
+		DataCatalog.report_unknown_id(ErrorCodes.catalog_id(code))
+	join_error_text = text
+	join_error_code = code
+	if text != "":
+		join_refused.emit(text)
+	return text
+
+
+func take_join_error() -> String:
+	var text: String = join_error_text
+	clear_join_error()
+	return text
+
+
+func clear_join_error() -> void:
+	join_error_text = ""
+	join_error_code = 0
 
 
 ## Show packed copy for this ErrorCode and unlock interact so the player can retry.
