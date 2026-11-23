@@ -430,7 +430,7 @@ JSON under `data/`, with a JSON Schema next to each file, as `docs/tech/stack.md
 
 ```
 data/
-  scaling.json          # coefficients for vision formulas: m, g, XP, D, party scaling (0.6 / 0.75, cap 8), sync +5, Riftstone 4/5
+  scaling.json          # coefficients for vision formulas: m, g, XP, D, group HP scaling (vision §3.5: normal k/t 60/30, boss 75/38, kink 8, n_max 50), sync +5, Riftstone 4/5
   classes.json          # stats, weapon_id, ability_id
   weapons.json
   abilities.json
