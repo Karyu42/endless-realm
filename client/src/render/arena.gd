@@ -56,6 +56,7 @@ var _portal_views: Dictionary = {}
 var _portal_free: Array[Polygon2D] = []
 var _loot_btn: Button
 var _prompt: Label
+var _lobby_ui: LobbyUiSettings
 var _ability: Label
 var _floats: Node2D
 var _last_player_hp: int = -1
@@ -154,6 +155,8 @@ func _ready() -> void:
 	_prompt.name = "InteractPrompt"
 	_prompt.add_theme_font_size_override("font_size", 18)
 	_prompt.add_theme_color_override("font_color", Color(0.85, 0.95, 0.98))
+	_lobby_ui = LobbyUiSettings.load_default()
+	_apply_prompt_wrap()
 	_loot_btn = Button.new()
 	_loot_btn.name = "LootButton"
 	_loot_btn.text = "Loot"
@@ -178,6 +181,7 @@ func _ready() -> void:
 	var margin := MarginContainer.new()
 	margin.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
 	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_right", 16)
 	margin.add_theme_constant_override("margin_top", 12)
 	var vbox := VBoxContainer.new()
 	vbox.add_child(_hint)
@@ -213,6 +217,15 @@ func _ready() -> void:
 	host_layer.layer = 6
 	host_layer.add_child(host_panel)
 	add_child(host_layer)
+	if not GameSession.join_refused.is_connected(_on_hello_join_refused):
+		GameSession.join_refused.connect(_on_hello_join_refused)
+	var vp := get_viewport()
+	if vp != null and not vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.connect(_on_viewport_size_changed)
+	if GameSession.join_error_text != "" and (
+		GameSession.lobby_client == null or GameSession.lobby_client.player_id == 0
+	):
+		_return_to_lobby_on_join_refuse()
 	_refresh_hint()
 	queue_redraw()
 
@@ -549,6 +562,24 @@ func _on_loot_pressed() -> void:
 	GameSession.clear_portal_error()
 	GameSession.interact_pressed = true
 	GameSession.interact_target_id = _nearest_prompt_interactable_id()
+
+
+func _on_viewport_size_changed() -> void:
+	_apply_prompt_wrap()
+
+
+func _apply_prompt_wrap() -> void:
+	if _prompt == null or _lobby_ui == null or not _lobby_ui.is_valid():
+		return
+	_lobby_ui.apply_message_label(_prompt, get_viewport_rect().size.x)
+
+
+func _on_hello_join_refused(_text: String) -> void:
+	_return_to_lobby_on_join_refuse()
+
+
+func _return_to_lobby_on_join_refuse() -> void:
+	get_tree().change_scene_to_file("res://src/render/lobby_browser.tscn")
 
 
 func _prompt_range() -> float:

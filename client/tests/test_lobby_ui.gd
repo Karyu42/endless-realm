@@ -6,6 +6,8 @@ extends GutTest
 var _ui: LobbyUiSettings
 var _host: LobbyHost
 
+const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
+
 
 func before_each() -> void:
 	_ui = LobbyUiSettings.load_default()
@@ -16,6 +18,7 @@ func after_each() -> void:
 		_host.stop()
 		_host = null
 	GameSession.clear_portal_error()
+	GameSession.clear_join_error()
 	GameSession.interact_pressed = false
 	GameSession.interact_target_id = 0
 
@@ -27,6 +30,14 @@ func test_pack_loads_without_fallbacks() -> void:
 	assert_false(_ui.text("imports_ok").is_empty())
 	assert_false(_ui.text("name_placeholder").is_empty())
 	assert_false(_ui.text("imports_allowed_check").is_empty())
+	assert_false(_ui.text("lobby_full").is_empty())
+	assert_ne(_ui.text("lobby_full"), _ui.error_message(PB.ErrorCode.INSTANCE_FULL))
+	assert_eq(PB.ErrorCode.JOIN_REFUSED, 7)
+	assert_eq(ErrorCodes.name_of(PB.ErrorCode.JOIN_REFUSED), "JOIN_REFUSED")
+	assert_true(_ui.maps_error(PB.ErrorCode.JOIN_REFUSED))
+	assert_false(_ui.error_message(PB.ErrorCode.JOIN_REFUSED).is_empty())
+	assert_ne(_ui.error_message(PB.ErrorCode.JOIN_REFUSED), _ui.text("lobby_full"))
+	assert_gt(_ui.message_max_width_mm, 0.0)
 
 
 func test_missing_pack_is_invalid() -> void:
@@ -314,15 +325,14 @@ func test_drop_restore_drop_drop_restore_keeps_ability_state() -> void:
 	assert_almost_eq(_host.sim.focus(id), focus, 1e-6)
 
 
-const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
-
 
 func test_error_messages_cover_each_portal_code() -> void:
 	var codes: PackedInt32Array = ErrorCodes.packed()
-	assert_eq(codes.size(), 3)
+	assert_eq(codes.size(), 4)
 	assert_true(codes.has(PB.ErrorCode.MULTIPLIER_NOT_ALLOWED))
 	assert_true(codes.has(PB.ErrorCode.INSTANCE_FULL))
 	assert_true(codes.has(PB.ErrorCode.INSTANCE_NOT_FOUND))
+	assert_true(codes.has(PB.ErrorCode.JOIN_REFUSED))
 	for code in codes:
 		var name: String = ErrorCodes.name_of(code)
 		assert_ne(name, "UNKNOWN", "unnamed ErrorCode %d" % code)
@@ -334,6 +344,51 @@ func test_error_messages_cover_each_portal_code() -> void:
 		assert_false(msg.is_empty(), "empty player-facing message for %s" % name)
 		assert_ne(msg, name, "message for %s should be player-facing" % name)
 		assert_false(msg.contains(name), "message for %s should be original copy" % name)
+
+
+func test_every_host_sent_error_code_has_copy_in_both_packs() -> void:
+	# Codes LobbyHost actually sends on ErrorReply / portal_rejected, except
+	# UNSPECIFIED, which is left without packed copy.
+	var host_src := FileAccess.get_file_as_string("res://src/net/host/lobby_host.gd")
+	assert_false(host_src.is_empty(), "could not read LobbyHost")
+	var re := RegEx.new()
+	assert_eq(re.compile("PB\\.ErrorCode\\.([A-Z_]+)"), OK)
+	var sent: Dictionary = {}
+	for m in re.search_all(host_src):
+		var name: String = m.get_string(1)
+		if name == "ERROR_CODE_UNSPECIFIED":
+			continue
+		sent[name] = true
+	assert_gt(sent.size(), 0, "expected host-sent ErrorCodes")
+	assert_true(sent.has("JOIN_REFUSED"))
+	var data_pack: Dictionary = DataCatalog._read_json(
+		DataCatalog.repo_root().path_join("data/lobby_ui.json")
+	)
+	var client_pack: Dictionary = DataCatalog._read_json("res://data/lobby_ui.json")
+	var data_msgs: Dictionary = data_pack.get("error_messages", {})
+	var client_msgs: Dictionary = client_pack.get("error_messages", {})
+	var packed: PackedInt32Array = ErrorCodes.packed()
+	for name in sent.keys():
+		assert_true(
+			data_msgs.has(name) and String(data_msgs[name]) != "",
+			"data/lobby_ui.json is missing player-facing text for host-sent %s" % name
+		)
+		assert_true(
+			client_msgs.has(name) and String(client_msgs[name]) != "",
+			"client/data/lobby_ui.json is missing player-facing text for host-sent %s" % name
+		)
+		assert_eq(
+			String(data_msgs[name]),
+			String(client_msgs[name]),
+			"lobby_ui packs are out of sync for %s" % name
+		)
+		var code: int = -1
+		for packed_code in packed:
+			if ErrorCodes.name_of(packed_code) == name:
+				code = packed_code
+				break
+		assert_ne(code, -1, "ErrorCodes.packed() / NAMES is missing host-sent %s" % name)
+		assert_true(_ui.maps_error(code), "loaded pack does not map host-sent %s" % name)
 
 
 func test_unknown_error_code_is_logged_and_unmapped() -> void:
@@ -374,23 +429,35 @@ func test_portal_rejected_for_the_local_player_applies_the_message() -> void:
 	assert_eq(GameSession.portal_error_text, _ui.error_message(PB.ErrorCode.INSTANCE_NOT_FOUND))
 
 
+func _welcome(client: LobbyClient, pid: int = 7) -> void:
+	var msg = PB.ServerMessage.new()
+	msg.new_welcome().set_player_id(pid)
+	client._on_packet(msg.to_bytes())
+
+
 func test_lobby_client_error_reply_emits_each_code_and_is_not_a_join_reject() -> void:
 	for code in ErrorCodes.packed():
 		var client := LobbyClient.new()
 		var got_code: Array = [-1]
+		var join_code: Array = [-1]
 		var rejected: Array = [false]
 		client.error_received.connect(func(c: int, _reason: String) -> void:
 			got_code[0] = c
 		)
+		client.join_error_received.connect(func(c: int, _reason: String) -> void:
+			join_code[0] = c
+		)
 		client.rejected.connect(func(_reason: String) -> void:
 			rejected[0] = true
 		)
+		_welcome(client)
 		var msg = PB.ServerMessage.new()
 		var err = msg.new_error()
 		err.set_code(code)
 		err.set_reason("host reason must not become a join reject")
 		client._on_packet(msg.to_bytes())
 		assert_eq(got_code[0], code)
+		assert_eq(join_code[0], -1, "mid-session ErrorReply must not emit join_error_received")
 		assert_eq(client.last_error_code, code)
 		assert_false(rejected[0], "ErrorReply must not emit rejected")
 		client.free()
@@ -407,9 +474,189 @@ func test_lobby_client_join_reject_still_emits_rejected() -> void:
 	client.error_received.connect(func(_c: int, _r: String) -> void:
 		errors[0] += 1
 	)
+	client.join_error_received.connect(func(_c: int, _r: String) -> void:
+		errors[0] += 1
+	)
 	var msg = PB.ServerMessage.new()
 	msg.new_reject().set_reason("full lobby")
 	client._on_packet(msg.to_bytes())
 	assert_true(rejected[0])
 	assert_eq(errors[0], 0)
 	client.free()
+
+func test_hello_time_instance_full_uses_lobby_full_not_portal_copy() -> void:
+	var client := LobbyClient.new()
+	var portal_codes: Array = []
+	var join_codes: Array = []
+	var rejected: Array = [false]
+	client.error_received.connect(func(c: int, _reason: String) -> void:
+		portal_codes.append(c)
+	)
+	client.join_error_received.connect(func(c: int, _reason: String) -> void:
+		join_codes.append(c)
+	)
+	client.rejected.connect(func(_reason: String) -> void:
+		rejected[0] = true
+	)
+	assert_eq(client.player_id, 0)
+	var msg = PB.ServerMessage.new()
+	var err = msg.new_error()
+	err.set_code(PB.ErrorCode.INSTANCE_FULL)
+	err.set_reason("lobby is full")
+	client._on_packet(msg.to_bytes())
+	assert_eq(join_codes, [PB.ErrorCode.INSTANCE_FULL])
+	assert_eq(portal_codes, [])
+	assert_false(rejected[0])
+	var text: String = GameSession.apply_join_error(PB.ErrorCode.INSTANCE_FULL)
+	assert_eq(text, _ui.text("lobby_full"))
+	assert_eq(GameSession.join_error_text, _ui.text("lobby_full"))
+	assert_ne(text, _ui.error_message(PB.ErrorCode.INSTANCE_FULL))
+	assert_eq(GameSession.portal_error_text, "")
+	assert_false(text.contains("area is full"))
+	client.free()
+
+
+func test_mid_session_instance_full_still_uses_portal_copy() -> void:
+	var client := LobbyClient.new()
+	_welcome(client)
+	GameSession._on_client_portal_error(PB.ErrorCode.INSTANCE_FULL, "lobby is full")
+	assert_eq(GameSession.portal_error_text, _ui.error_message(PB.ErrorCode.INSTANCE_FULL))
+	assert_eq(GameSession.join_error_text, "")
+	assert_ne(GameSession.portal_error_text, _ui.text("lobby_full"))
+	client.free()
+
+
+func test_hello_time_unspecified_is_left_alone() -> void:
+	var text: String = GameSession.apply_join_error(PB.ErrorCode.ERROR_CODE_UNSPECIFIED)
+	assert_eq(text, "")
+	assert_eq(GameSession.join_error_text, "")
+	assert_eq(GameSession.portal_error_text, "")
+
+
+func test_hello_time_join_refused_uses_packed_copy() -> void:
+	var client := LobbyClient.new()
+	var portal_codes: Array = []
+	var join_codes: Array = []
+	client.error_received.connect(func(c: int, _reason: String) -> void:
+		portal_codes.append(c)
+	)
+	client.join_error_received.connect(func(c: int, _reason: String) -> void:
+		join_codes.append(c)
+	)
+	assert_eq(client.player_id, 0)
+	var msg = PB.ServerMessage.new()
+	var err = msg.new_error()
+	err.set_code(PB.ErrorCode.JOIN_REFUSED)
+	err.set_reason("host reason must not become the copy")
+	client._on_packet(msg.to_bytes())
+	assert_eq(join_codes, [PB.ErrorCode.JOIN_REFUSED])
+	assert_eq(portal_codes, [])
+	var text: String = GameSession.apply_join_error(PB.ErrorCode.JOIN_REFUSED)
+	assert_eq(text, _ui.error_message(PB.ErrorCode.JOIN_REFUSED))
+	assert_eq(GameSession.join_error_text, text)
+	assert_eq(GameSession.portal_error_text, "")
+	assert_false(text.contains("host reason"))
+	assert_ne(text, _ui.text("lobby_full"))
+	client.free()
+
+
+func test_mid_session_join_refused_uses_packed_copy() -> void:
+	var client := LobbyClient.new()
+	_welcome(client)
+	GameSession._on_client_portal_error(PB.ErrorCode.JOIN_REFUSED, "host reason")
+	assert_eq(GameSession.portal_error_text, _ui.error_message(PB.ErrorCode.JOIN_REFUSED))
+	assert_eq(GameSession.join_error_text, "")
+	assert_false(GameSession.portal_error_text.contains("host reason"))
+	client.free()
+
+
+func test_lobby_full_status_stays_after_a_later_beacon() -> void:
+	await _assert_sticky_status_survives_beacon(
+		PB.ErrorCode.INSTANCE_FULL,
+		_ui.text("lobby_full")
+	)
+
+
+func test_join_refused_status_stays_after_a_later_beacon() -> void:
+	await _assert_sticky_status_survives_beacon(
+		PB.ErrorCode.JOIN_REFUSED,
+		_ui.error_message(PB.ErrorCode.JOIN_REFUSED)
+	)
+
+
+func _assert_sticky_status_survives_beacon(code: int, want: String) -> void:
+	var browser: Control = preload("res://src/render/lobby_browser.tscn").instantiate()
+	add_child_autofree(browser)
+	await get_tree().process_frame
+	GameSession.apply_join_error(code)
+	browser._on_join_refused(code, "ignored")
+	var status: Label = browser.get_node("%StatusLabel")
+	assert_eq(status.text, want)
+	var lc: LobbyClient = browser._client
+	lc.lobbies.append({
+		"name": "Practice Lobby",
+		"players": 1,
+		"max": 8,
+		"m100_min": 100,
+		"m100_max": 100,
+	} as Dictionary)
+	lc.lobbies_changed.emit()
+	await get_tree().process_frame
+	assert_eq(status.text, want, "a later beacon must not replace the join error")
+	assert_false(status.text.contains("lobby(s) on LAN"))
+	GameSession.clear_join_error()
+
+
+func test_message_label_wraps_inside_phone_viewports() -> void:
+	# Typical phone DPI, where the packed 72 mm cap is wider than a 720 px
+	# portrait width, so a landscape _ready would overflow after rotation.
+	const PHONE_DPI := 400.0
+	var long := "%s  ·  E to enter Hollowmere Vault  ·  E1  ×1.00" % _ui.error_message(PB.ErrorCode.INSTANCE_FULL)
+	var land_w := 1280.0
+	var port_w := 720.0
+	var narrow_w := 360.0
+	var land_cap: int = _ui.message_max_width_px_at(land_w, PHONE_DPI)
+	var port_cap: int = _ui.message_max_width_px_at(port_w, PHONE_DPI)
+	var narrow_cap: int = _ui.message_max_width_px_at(narrow_w, PHONE_DPI)
+	assert_gt(land_cap, 720, "landscape cap at phone DPI should exceed portrait 720")
+	assert_lte(land_cap, int(land_w))
+	assert_lte(port_cap, int(port_w))
+	assert_lt(port_cap, land_cap)
+	assert_lte(narrow_cap, int(narrow_w))
+	var label := await _laid_out_message_label(land_w, PHONE_DPI, long)
+	assert_eq(label.autowrap_mode, TextServer.AUTOWRAP_WORD_SMART)
+	assert_lte(label.size.x, land_w, "landscape text must stay inside the viewport")
+	assert_lte(label.size.x, float(land_cap) + 1.0)
+	# Rotate to 720 px portrait and re-apply the cap, as size_changed does.
+	var rotated: int = _ui.apply_message_label_at(label, port_w, PHONE_DPI)
+	assert_eq(rotated, port_cap)
+	label.get_parent().custom_minimum_size = Vector2(port_w, 400)
+	label.get_parent().size = Vector2(port_w, 400)
+	await get_tree().process_frame
+	assert_lte(label.size.x, port_w, "after rotation the text must stay inside 720 px")
+	assert_lte(label.size.x, float(port_cap) + 1.0)
+	assert_gt(label.get_line_count(), 1, "long prompt must wrap in portrait")
+	# Also cover a 360 px portrait width.
+	var narrow: int = _ui.apply_message_label_at(label, narrow_w, PHONE_DPI)
+	assert_eq(narrow, narrow_cap)
+	label.get_parent().custom_minimum_size = Vector2(narrow_w, 400)
+	label.get_parent().size = Vector2(narrow_w, 400)
+	await get_tree().process_frame
+	assert_lte(label.size.x, narrow_w, "text must stay inside a 360 px viewport")
+	assert_lte(label.size.x, float(narrow_cap) + 1.0)
+
+
+func _laid_out_message_label(viewport_w: float, dpi_value: float, text: String) -> Label:
+	var frame := Control.new()
+	frame.custom_minimum_size = Vector2(viewport_w, 400)
+	frame.size = Vector2(viewport_w, 400)
+	frame.clip_contents = true
+	add_child_autofree(frame)
+	var label := Label.new()
+	label.add_theme_font_size_override("font_size", 18)
+	frame.add_child(label)
+	_ui.apply_message_label_at(label, viewport_w, dpi_value)
+	label.text = text
+	await get_tree().process_frame
+	return label
+

@@ -9,6 +9,7 @@ const NAMES: Dictionary = {
 	PB.ErrorCode.MULTIPLIER_NOT_ALLOWED: "MULTIPLIER_NOT_ALLOWED",
 	PB.ErrorCode.INSTANCE_FULL: "INSTANCE_FULL",
 	PB.ErrorCode.INSTANCE_NOT_FOUND: "INSTANCE_NOT_FOUND",
+	PB.ErrorCode.JOIN_REFUSED: "JOIN_REFUSED",
 }
 
 
@@ -18,6 +19,7 @@ static func packed() -> PackedInt32Array:
 		PB.ErrorCode.MULTIPLIER_NOT_ALLOWED,
 		PB.ErrorCode.INSTANCE_FULL,
 		PB.ErrorCode.INSTANCE_NOT_FOUND,
+		PB.ErrorCode.JOIN_REFUSED,
 	])
 
 

@@ -9,6 +9,8 @@ signal welcomed(player_id: int)
 signal rejected(reason: String)
 ## Mid-session ErrorReply (portal refusals). Not a join Reject.
 signal error_received(code: int, reason: String)
+## Hello-time ErrorReply, before Welcome. A join refusal, not a mid-session portal refusal.
+signal join_error_received(code: int, reason: String)
 signal snapshot_received(tick: int)
 signal lobbies_changed
 
@@ -116,9 +118,13 @@ func _on_packet(buf: PackedByteArray) -> void:
 	elif msg.has_error():
 		last_error_code = msg.get_error().get_code()
 		last_reason = msg.get_error().get_reason()
-		# Keep Reject (join) and ErrorReply (portal / mid-session) separate so
-		# a refused portal does not look like a kicked join.
-		error_received.emit(last_error_code, last_reason)
+		# Keep Reject, Hello-time join refusals, and mid-session portal
+		# ErrorReply on separate signals so a full lobby is not shown as a
+		# refused portal.
+		if player_id == 0:
+			join_error_received.emit(last_error_code, last_reason)
+		else:
+			error_received.emit(last_error_code, last_reason)
 
 
 func _poll_udp() -> void:
