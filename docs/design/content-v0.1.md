@@ -58,21 +58,19 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 
 **Focus timing:** Focus regen is applied at the **end of the tick**, after any spend on that tick. Same-tick regen therefore can't pay for a cast. A cast on tick t needs `Focus ≥ cost` from the Focus left at the end of tick t−1.
 
-**Join state on a hosted game (spec target):** solo play is unchanged. The ready first join and the elapsed-time restore below are **planned** and not implemented yet; see "Current host code" at the end of this rule. On a hosted game, the host stores ability state only under a **host-verified identity**. A character id the client merely claims is never a key.
-- **Snapshot:** when a verified player disconnects, the host takes a snapshot of their current Focus and the ability cooldown remaining.
+**Join state on a hosted game:** solo play is unchanged. On a hosted game, the host stores ability state only under a **host-verified identity**. A character id the client merely claims is never a key.
+- **Snapshot:** when a verified player leaves, the host takes a snapshot of their current Focus and the ability cooldown remaining.
   - It is keyed by that player's verified identity.
-  - It lives only as long as the host process; a host restart clears every snapshot.
-- **Join with a snapshot:** the host restores the snapshot, adjusted for the host time elapsed since the disconnect.
-  - The cooldown is reduced by the elapsed time, down to a floor of 0.
-  - Focus regenerates at the normal rate (5/s plus gear) for the elapsed time, capped at max Focus.
-- **Join with no snapshot:** the player starts **ready**, with 100 Focus and the ability cooldown at 0. This is the first join in this host session for that verified identity, including the listen-host player's own first join.
-- **Phase 1 (now):** the rules above apply to players the host verifies itself: the listen-host player and local players. Their key is the host-issued token or character.
-  - **Remote joins start conservative:** 0 Focus and the ability on full cooldown, every time.
+  - It lives only as long as the host process. A host restart (`stop()`) clears every snapshot, and the host keeps a bounded number of them, dropping the oldest first.
+- **Join with a snapshot:** the host restores the snapshot, adjusted for the host ticks elapsed since the player left.
+  - The cooldown is reduced by the elapsed ticks, down to a floor of 0.
+  - Focus regenerates at the class rate for the elapsed time, capped at max Focus.
+- **First join this host session:** the player starts **ready**, with 100 Focus and the ability cooldown at 0. That includes the listen-host player's own first join.
+- **Rejoin key without a snapshot:** the player starts conservative, with 0 Focus and the ability on full cooldown. This covers a token that was already used, dropped, or not issued by this host.
+  - A local player who leaves before entering the sim (before the host step after their join) leaves no snapshot, so rejoining with that token also starts conservative.
+- **Phase 1 (implemented, #52):** the listen-host player and local players are verified by the host itself. `remove_local_player()` returns a single-use, host-issued token, and passing it to `add_local_player(character, rejoin_token)` restores the snapshot.
+  - **Remote joins start conservative** every time: 0 Focus and the ability on full cooldown.
 - **Phase 2 (after the handshake identity PR, #50):** remote joins switch to the same rules, keyed by the character id that the handshake has verified.
-- **Current host code (main, from #46):**
-  - Every hosted join, including the listen-host player's own first join, starts conservative: 0 Focus and the ability on full cooldown.
-  - A host-verified rejoin restores the **exact** saved Focus and cooldown, with no elapsed-time adjustment.
-  - This spec replaces both behaviors for verified players once it's implemented. Remote joins keep the conservative start until #50.
 
 **Fire timing (fire on press, all weapons):** each weapon tracks `next_ready` as a float64 sim time in seconds (tick × 0.05), starting at 0. Let `cd = 1 / (Tempo × (1 + tempoBonus))`. On every tick where `fire_held` is true and `now ≥ next_ready − 1e-9`, one volley fires:
 - If fire has been held on every tick since the previous volley (one continuous hold), set `next_ready = next_ready + cd`. This keeps the long-run rate exact even though `cd` isn't a whole number of ticks.
@@ -347,6 +345,8 @@ The thresholds are fractions of the scaled max HP. A transition happens on the f
 - `warden_drip`: a fan of 3 bullets with 20° total spread, aimed, speed 8, range 12, size L, 28 damage. It fires every 1.0 s, offset 0.5 s from the ring.
 
 **Transition at 66%, "Melt"** (2.0 s): the boss can't be damaged and its crown flame turns orange. It spawns 4 Waxen Acolytes, one in each corner. Their HP uses the normal-enemy scaling with the boss fight's `n`, and they drop no loot.
+- **When the Warden dies,** every living Waxen Acolyte dies on the same tick. Each plays its normal death effect and gives no loot and no XP.
+- **Scaling:** the adds and the boss use the boss encounter's `n_peak` (vision §3.5, §6.1 rule 6a). Players count by being in range, not by dealing damage or giving input.
 
 **Phase 2, "Guttering" (66% to 33%)**: a 6.0 s loop.
 - `warden_spiral` (0–4 s): a 4-arm spiral. Arms are 90° apart and emit 1 bullet each every 0.1 s, rotating +9° per emit. Speed 4, range 12, size S, 20 damage.
