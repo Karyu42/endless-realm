@@ -7,10 +7,15 @@ option go_package = "github.com/Karyu42/endless-realm/server/internal/protocol/v
 // Protocol v1. The protocol_version field is the agreed u16 version
 // (proto3 has no uint16; the value must be exactly 1).
 //
+// This file is additive: new fields and oneof members do not bump the
+// handshake version. Old clients (Hello + InputFrame only) keep working.
+//
 // Wire: binary WebSocket frames containing a ClientMessage or ServerMessage.
 // Angles are radians in Godot 2D convention (+X = 0, +Y down, clockwise
 // positive). float fields are float32 on the wire; sim math is float64.
 // Time in snapshots is tick index, not milliseconds.
+//
+// Portal multiplier is uint32 m100 (whole hundredths), never a float.
 
 message Hello {
   uint32 protocol_version = 1;
@@ -23,6 +28,10 @@ message Welcome {
   uint64 instance_seed = 4;
   // Display only; the client must not use this to compute rewards.
   float multiplier = 5;
+  // Instance this session starts in (the process default / smoke instance).
+  uint64 instance_id = 6;
+  // Locked M100 of instance_id. Prefer this over the display float.
+  uint32 m100 = 7;
 }
 
 message Reject {
@@ -51,10 +60,74 @@ message PlayerStub {
   uint32 applied_seq = 2;
 }
 
+// Open a new portal instance with a locked multiplier.
+// m100 is whole hundredths: 50 ≤ m100 ≤ 150 and m100 % 5 == 0 (v0.1).
+// On success the opener is moved into the new instance.
+message OpenPortal {
+  uint32 m100 = 1;
+}
+
+// Join an existing instance by id (including the default instance, which
+// returns the session to the process default / hub).
+message JoinInstance {
+  uint64 instance_id = 1;
+}
+
+// Return to the process default instance without closing the portal.
+message LeaveInstance {}
+
+message ListInstances {}
+
+message InstanceInfo {
+  uint64 instance_id = 1;
+  uint32 m100 = 2;
+  // Unset (0) in InstanceList. Seeds are only sent on Welcome,
+  // OpenPortalOk, and JoinInstanceOk for the caller's own instance.
+  uint64 seed = 3;
+  uint32 player_count = 4;
+  bool is_default = 5;
+}
+
+message OpenPortalOk {
+  uint64 instance_id = 1;
+  uint32 m100 = 2;
+  uint64 seed = 3;
+}
+
+message JoinInstanceOk {
+  uint64 instance_id = 1;
+  uint32 m100 = 2;
+  uint64 seed = 3;
+}
+
+message InstanceList {
+  repeated InstanceInfo instances = 1;
+}
+
+// Application error (the connection stays open). Handshake failures still
+// use Reject and close the socket.
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  INVALID_MULTIPLIER = 1;
+  INSTANCE_NOT_FOUND = 2;
+  ALREADY_IN_INSTANCE = 3;
+  INSTANCE_FULL = 4;
+  OPEN_PORTAL_LIMIT = 5;
+}
+
+message Error {
+  ErrorCode code = 1;
+  string reason = 2;
+}
+
 message ClientMessage {
   oneof payload {
     Hello hello = 1;
     InputFrame input = 2;
+    OpenPortal open_portal = 3;
+    JoinInstance join_instance = 4;
+    ListInstances list_instances = 5;
+    LeaveInstance leave_instance = 6;
   }
 }
 
@@ -63,5 +136,9 @@ message ServerMessage {
     Welcome welcome = 1;
     Reject reject = 2;
     Snapshot snapshot = 3;
+    OpenPortalOk open_portal_ok = 4;
+    JoinInstanceOk join_instance_ok = 5;
+    InstanceList instance_list = 6;
+    Error error = 7;
   }
 }

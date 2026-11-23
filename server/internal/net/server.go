@@ -1,8 +1,9 @@
-// Package net serves /healthz and the /ws WebSocket endpoint.
+// Package net serves /healthz, /metrics and the /ws WebSocket endpoint.
 package net
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -21,7 +22,11 @@ import (
 
 const handshakeTimeout = 5 * time.Second
 
-// Server is the HTTP + WebSocket front door to one in-process instance.
+// errPortalRuntime is returned for valid portal commands. The Go process is
+// a test harness; portal runtime lives in the Godot host.
+var errPortalRuntime = fmt.Errorf("portal runtime is not implemented on the Go test harness")
+
+// Server is the HTTP + WebSocket front door to the process-default instance.
 type Server struct {
 	inst    *instance.Instance
 	http    *http.Server
@@ -44,6 +49,7 @@ func NewContext(ctx context.Context, inst *instance.Instance) *Server {
 	s.nextID.Store(1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
+	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/ws", s.handleWS)
 	s.http = &http.Server{Handler: mux, BaseContext: func(net.Listener) context.Context { return s.baseCtx }}
 	return s
@@ -57,6 +63,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	s.http.Addr = addr
 	health, connect := listenURLs(addr)
 	log.Printf("health: %s", health)
+	log.Printf("metrics: %s", strings.Replace(health, "/healthz", "/metrics", 1))
 	log.Printf("connect: %s", connect)
 	return s.http.ListenAndServe()
 }
@@ -116,6 +123,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	fmt.Fprintf(w, "# HELP er_skipped_ticks Ticks skipped by the 20 Hz catch-up cap.\n")
+	fmt.Fprintf(w, "# TYPE er_skipped_ticks counter\n")
+	fmt.Fprintf(w, "er_skipped_ticks %d\n", s.inst.SkippedTicks())
+	fmt.Fprintf(w, "# HELP er_instances Current in-process instances (the process-default test harness instance).\n")
+	fmt.Fprintf(w, "# TYPE er_instances gauge\n")
+	fmt.Fprintf(w, "er_instances 1\n")
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -206,23 +223,51 @@ func (s *Server) session(ctx context.Context, conn *websocket.Conn) error {
 				errCh <- fmt.Errorf("decode client message: %w", err)
 				return
 			}
-			in := cm.GetInput()
-			if in == nil {
-				errCh <- fmt.Errorf("expected input frame after handshake")
-				return
+			out, err := s.handleClient(id, &cm)
+			if err != nil {
+				if werr := write(ctx, errorMsg(err)); werr != nil {
+					errCh <- werr
+					return
+				}
+				continue
 			}
-			s.inst.SubmitInput(instance.Input{
-				PlayerID: id,
-				Seq:      in.GetSeq(),
-				MoveX:    float64(in.GetMoveX()),
-				MoveY:    float64(in.GetMoveY()),
-				Aim:      float64(in.GetAim()),
-				FireHeld: in.GetFireHeld(),
-			})
+			if out != nil {
+				if werr := write(ctx, out); werr != nil {
+					errCh <- werr
+					return
+				}
+			}
 		}
 	}()
 	err = <-errCh
 	return err
+}
+
+func (s *Server) handleClient(id uint32, cm *protocolv1.ClientMessage) (*protocolv1.ServerMessage, error) {
+	switch p := cm.Payload.(type) {
+	case *protocolv1.ClientMessage_Input:
+		in := p.Input
+		s.inst.SubmitInput(instance.Input{
+			PlayerID: id,
+			Seq:      in.GetSeq(),
+			MoveX:    float64(in.GetMoveX()),
+			MoveY:    float64(in.GetMoveY()),
+			Aim:      float64(in.GetAim()),
+			FireHeld: in.GetFireHeld(),
+		})
+		return nil, nil
+	case *protocolv1.ClientMessage_OpenPortal:
+		if err := instance.ValidateM100U32(p.OpenPortal.GetM100()); err != nil {
+			return nil, err
+		}
+		return nil, errPortalRuntime
+	case *protocolv1.ClientMessage_JoinInstance,
+		*protocolv1.ClientMessage_LeaveInstance,
+		*protocolv1.ClientMessage_ListInstances:
+		return nil, errPortalRuntime
+	default:
+		return nil, fmt.Errorf("expected input or portal command after handshake")
+	}
 }
 
 func (s *Server) readHello(ctx context.Context, conn *websocket.Conn) (*protocolv1.Hello, error) {
@@ -257,6 +302,8 @@ func (s *Server) writeWelcome(ctx context.Context, conn *websocket.Conn) (uint32
 			TickHz:          instance.TickRate,
 			InstanceSeed:    s.inst.Seed(),
 			Multiplier:      float32(s.inst.Multiplier()),
+			InstanceId:      instance.DefaultInstanceID,
+			M100:            uint32(s.inst.MultiplierHundredths()),
 		}},
 	}
 	body, err := proto.Marshal(welcome)
@@ -282,6 +329,17 @@ func (s *Server) reject(ctx context.Context, conn *websocket.Conn, clientVer uin
 	}
 	_ = conn.Close(websocket.StatusPolicyViolation, reason)
 	return fmt.Errorf("%s", reason)
+}
+
+func errorMsg(err error) *protocolv1.ServerMessage {
+	code := protocolv1.ErrorCode_ERROR_CODE_UNSPECIFIED
+	reason := err.Error()
+	if errors.Is(err, instance.ErrInvalidMultiplier) {
+		code = protocolv1.ErrorCode_INVALID_MULTIPLIER
+	}
+	return &protocolv1.ServerMessage{
+		Payload: &protocolv1.ServerMessage_Error{Error: &protocolv1.Error{Code: code, Reason: reason}},
+	}
 }
 
 func snapshotMsg(snap instance.Snapshot) *protocolv1.ServerMessage {
