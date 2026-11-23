@@ -8,8 +8,6 @@ var move_x: float = 0.0
 var move_y: float = 0.0
 var aim: float = 0.0
 var fire_held: bool = false
-## One-shot ability press on this seq, consumed by the host once per tick.
-var ability_pressed: bool = false
 var interact_pressed: bool = false
 ## 1–8 equips that inventory slot this tick; 0 means no slot action.
 var inventory_slot: int = 0
