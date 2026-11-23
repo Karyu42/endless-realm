@@ -1,25 +1,28 @@
 class_name ImportPolicy
 extends RefCounted
-## STUB: client-side import-refusal rules (vision §11.3 / §11.5).
+## Client-side import-refusal rules (vision §11.3 / §11.5).
 ## Applied when importing a character, not when joining a lobby.
-## Test and settings-UI only until the Server Engineer's IMPORT_RESULT_
-## enum and import_character() hook land. Do not treat this as the wire API.
+## Codes are ImportResult constants; use ImportResult.name_of() / all()
+## for UI and wire mapping. LobbyHost.import_character() is the host check.
 
-const REJECTED_IMPORTS_OFF := "REJECTED_IMPORTS_OFF"
-const REJECTED_OFFLINE_OFF := "REJECTED_OFFLINE_OFF"
+## Allowed; same value as ImportResult.IMPORT_RESULT_OK.
+const IMPORT_RESULT_OK := ImportResult.IMPORT_RESULT_OK
+const REJECTED_IMPORTS_OFF := ImportResult.REJECTED_IMPORTS_OFF
+const REJECTED_OFFLINE_OFF := ImportResult.REJECTED_OFFLINE_OFF
 
 
-## Empty string means the import is allowed. A non-empty code is a refusal.
+## ImportResult.IMPORT_RESULT_OK means the import is allowed. Any other
+## code is a refusal (ImportResult.name_of(code) is the reason name).
 static func refuse_reason(
 	is_import: bool,
 	played_offline: bool,
 	imports_allowed: bool,
 	offline_allowed: bool
-) -> String:
+) -> int:
 	if not is_import:
-		return ""
+		return ImportResult.IMPORT_RESULT_OK
 	if not imports_allowed:
-		return REJECTED_IMPORTS_OFF
+		return ImportResult.REJECTED_IMPORTS_OFF
 	if played_offline and not offline_allowed:
-		return REJECTED_OFFLINE_OFF
-	return ""
+		return ImportResult.REJECTED_OFFLINE_OFF
+	return ImportResult.IMPORT_RESULT_OK

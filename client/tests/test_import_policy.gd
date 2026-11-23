@@ -3,7 +3,7 @@ extends GutTest
 
 
 func test_join_is_never_refused_by_import_policy() -> void:
-	assert_eq(ImportPolicy.refuse_reason(false, true, false, false), "")
+	assert_eq(ImportPolicy.refuse_reason(false, true, false, false), ImportResult.IMPORT_RESULT_OK)
 
 
 func test_imports_off_refuses_any_import() -> void:
@@ -22,8 +22,17 @@ func test_offline_off_refuses_only_offline_flagged_imports() -> void:
 		ImportPolicy.refuse_reason(true, true, true, false),
 		ImportPolicy.REJECTED_OFFLINE_OFF
 	)
-	assert_eq(ImportPolicy.refuse_reason(true, false, true, false), "")
+	assert_eq(ImportPolicy.refuse_reason(true, false, true, false), ImportResult.IMPORT_RESULT_OK)
 
 
 func test_both_allowed_accepts_offline_import() -> void:
-	assert_eq(ImportPolicy.refuse_reason(true, true, true, true), "")
+	assert_eq(ImportPolicy.refuse_reason(true, true, true, true), ImportResult.IMPORT_RESULT_OK)
+
+
+func test_import_result_name_of_matches_codes() -> void:
+	assert_eq(
+		ImportResult.name_of(ImportPolicy.refuse_reason(true, false, false, true)),
+		"REJECTED_IMPORTS_OFF"
+	)
+	assert_eq(ImportResult.name_of(ImportResult.IMPORT_RESULT_OK), "IMPORT_RESULT_OK")
+	assert_true(ImportResult.all().has(ImportResult.REJECTED_OFFLINE_OFF))

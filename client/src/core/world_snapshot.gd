@@ -23,6 +23,7 @@ var ground_drops: Array[GroundDrop] = []
 var projectiles: Array[SimProjectile] = []
 var enemies: Array[EnemySnapshot] = []
 var pattern_bullets: Array[PatternBullet] = []
+var players: Array[PlayerSnapshot] = []
 var player_focus: float = 0.0
 var player_focus_max: int = 0
 var ability_id: String = ""
@@ -64,6 +65,10 @@ func duplicate_snapshot() -> WorldSnapshot:
 	copy.projectiles = projectiles.duplicate()
 	copy.enemies = enemies.duplicate()
 	copy.pattern_bullets = pattern_bullets.duplicate()
+	var player_copies: Array[PlayerSnapshot] = []
+	for ps in players:
+		player_copies.append(ps.duplicate_snapshot())
+	copy.players = player_copies
 	copy.player_focus = player_focus
 	copy.player_focus_max = player_focus_max
 	copy.ability_id = ability_id

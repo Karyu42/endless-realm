@@ -29,14 +29,15 @@ remote client. LAN discovery is a UDP beacon (magic `ERLB`) on port **18080**.
 The WebSocket listen port defaults to **8080**, path `/ws`. The join code is
 only included in the beacon when the host opts in.
 
-Until the Server Engineer's host hooks land, this listen-host path is
-temporary: the host plays in a separate local `LocalSim`, remotes see the
-host's stand-in bullet world, joiners get an empty arena (snapshot
-replication is stubbed), and lobby settings are client-side stubs
-(`validate()` is shown in the UI; `LobbyHost.apply_settings` is not called
-yet). The beacon player count counts the listen host as one but never
-reports more than max, so a full lobby cannot show 51/50 before
-`add_local_player` exists.
+The lobby UI uses the host API in `src/net/host/`: `LobbySettings` with
+`apply_settings()` / `settings()`, `add_local_player` /
+`submit_local_input`, and the host arena renders from `world_view()` once
+the first tick has a snapshot. Import refusals use `ImportResult`
+constants and `name_of()`. The world is not one shared multi-player
+`LocalSim` on the host yet, so remotes still do not see shared enemies;
+`LocalSim` itself now supports several players in one world (see below)
+for the host to switch to. The beacon player count is `players.size()`
+after the listen host is added, capped at max.
 
 ## Host or join a lobby
 
@@ -48,9 +49,10 @@ code 2 when headless (same as `host_main`) and, with a display, shows the
 error and stays on the lobby browser instead of entering the solo arena.
 The allowed portal M range is an integer `m100` in [50, 150] step 5, with
 min <= 100 <= max; `validate()` reasons are shown in the UI. Import policy
-uses two settings (`imports_allowed` / `offline_allowed`) with refusal
-codes `REJECTED_IMPORTS_OFF` and `REJECTED_OFFLINE_OFF`, applied when
-importing a character, not when joining. Android is join-only in v0.1
+uses two settings (`imports_allowed` / `offline_allowed`) with
+`ImportResult` constants (`REJECTED_IMPORTS_OFF`, `REJECTED_OFFLINE_OFF`,
+and the rest) and `ImportResult.name_of()`, applied when importing a
+character, not when joining. Android is join-only in v0.1
 (desktop or `--headless -- --host`; a phone listen-host cap is a later
 follow-up).
 
@@ -162,6 +164,34 @@ they fit the uint64 wire field.
 Every practice-yard enemy is fixed at the data E: kills give normal
 `killXP(1)`, Glint `ceil(m(1))` = 1, and loot rolls at T* = 0.
 
+## Shared LocalSim (multi-player)
+
+`LocalSim` can run several players in one world. `add_player(id, character)`
+and `remove_player(id)` take effect at the start of the next `step()`.
+`apply_input(id, intent)` only stores the latest intent; `step()` then
+processes players in ascending id order. A player with no new input keeps
+their last move, aim, and `fire_held`. One-shot fields (`interact_target_id`,
+and later `ability_pressed`) clear after each step, so a press never fires
+twice. Removing a player drops their in-flight shots. Solo play is unchanged:
+`LocalSim.new()` still spawns player 1 immediately, and `submit_input` /
+`snapshot()` talk to that player.
+
+Advance the world with `step()`, not `tick()`. `tick()` is the completed-tick
+getter (`WorldSource` / `LobbyHost` already call it that way). Per-player
+state lives on `SimPlayerState`. Each player's PCG32 stream is
+`PCG32.new(mix(instance_seed, player_id, PLAYER_RNG_STREAM), 1)`.
+`world_view(player_id)` (and `snapshot()` for the default player) includes a
+`players` list and only that viewer's bags.
+
+**De-aggro** (content-v0.1 §2.3): each enemy has a `deaggro_radius` data
+field, by default `aggro_radius + 4` tiles. An enemy drops aggro when no
+living player is within `deaggro_radius` of it, or when its 16-tile leash
+(§2.1) triggers, whichever comes first. The Mirebell Matron keeps her own
+rule: she doesn't leash while any eligible player is within 20 tiles, so
+her `deaggro_radius` is 20, not the default 16. That is data
+(`deaggro_radius` and `no_leash`), not a hardcoded name. After de-aggro,
+a moving enemy returns toward spawn.
+
 ## Host interact hook
 
 `proto/v1.InputFrame.interact_target_id` is a uint64 entity id, not a boolean.
@@ -171,14 +201,13 @@ host's position. Unknown / disallowed targets and targets beyond the accept rang
 `data/scaling.json` (`interact_accept_range_tiles`) are silently dropped;
 the same seq cannot interact twice, including across the uint32 wrap.
 
-The listen-host `GameSession` path does not set those hooks yet. The host
-player still plays in a separate `LocalSim` (`HostWorldSource`), remotes
-each have their own movement `LocalSim` plus the stand-in bullet field, and
-snapshot replication is stubbed. Wiring `resolver` / `on_interact` to the
-listen-host sim would check range against the wrong positions. The Host API
-below (`add_local_player`, `submit_local_input`, `world_view` / `ticked`) is
-on main; interact still waits on the host running one shared `LocalSim`
-(with loot) instead of a per-player sim plus the stand-in field.
+The listen-host `GameSession` now calls `apply_settings()`,
+`add_local_player`, `submit_local_input`, and renders from `world_view()`
+when it is available. It does not set `resolver` / `on_interact` yet:
+the host still runs one `LocalSim` per player, so wiring those hooks
+would check range against the wrong positions. Interact waits on the host
+switching to one shared `LocalSim` (with loot) instead of a per-player sim
+plus the stand-in field.
 
 The host has not wired the shared sim's interactables yet. For the loot work,
 set `host.interact_validator.resolver` to

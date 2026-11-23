@@ -547,10 +547,10 @@ func test_host_ability_is_consumed_by_shared_sim_once() -> void:
 	assert_eq(p.sim.ward_ticks(sim_id), 59, "sim consumed ability")
 	assert_almost_eq(p.sim.focus(sim_id), 60.25, 1e-6)
 	assert_false(p.ability_pressed, "host queue cleared")
-	assert_false(p.sim._intent.ability_pressed, "sim one-shot cleared")
+	assert_false(p.sim.get_player(sim_id).intent.ability_pressed, "sim one-shot cleared")
 	p.sim.set_ability_cooldown_ticks(sim_id, 0)
 	_host.submit_local_input(id, intent)  # duplicate seq cannot recast
 	_host.run_tick()
 	assert_eq(p.sim.ward_ticks(sim_id), 58, "ward not refreshed")
 	assert_almost_eq(p.sim.focus(sim_id), 60.5, 1e-6)
-	assert_false(p.sim._intent.ability_pressed)
+	assert_false(p.sim.get_player(sim_id).intent.ability_pressed)

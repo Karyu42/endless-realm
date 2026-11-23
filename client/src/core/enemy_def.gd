@@ -2,6 +2,8 @@ class_name EnemyDef
 extends RefCounted
 ## One entry from data/enemies.json.
 
+const DEFAULT_DEAGGRO_PAD: float = 4.0
+
 var id: String = ""
 var display_name: String = ""
 var rank: String = "normal"
@@ -13,6 +15,12 @@ var move_speed: float = 0.0
 var wander_speed: float = 0.0
 var radius: float = 0.35
 var aggro_radius: float = 8.0
+## Optional. When omitted or negative, defaults to aggro_radius + DEFAULT_DEAGGRO_PAD.
+var deaggro_radius: float = -1.0
+## When true, the 16-tile leash is ignored. The Mirebell Matron doesn't leash
+## while any eligible player is within 20 tiles (deaggro_radius 20), as data,
+## not a hardcoded name.
+var no_leash: bool = false
 var hover_radius: float = 3.0
 var leash: float = 16.0
 var strafe_switch_ticks: int = 40
@@ -39,6 +47,9 @@ static func from_json(d: Dictionary) -> EnemyDef:
 	e.wander_speed = float(d.get("wander_speed", e.move_speed))
 	e.radius = float(d.get("radius", 0.35))
 	e.aggro_radius = float(d.get("aggro_radius", 8.0))
+	if d.has("deaggro_radius"):
+		e.deaggro_radius = float(d["deaggro_radius"])
+	e.no_leash = bool(d.get("no_leash", false))
 	e.hover_radius = float(d.get("hover_radius", 3.0))
 	e.leash = float(d.get("leash", 16.0))
 	e.strafe_switch_ticks = int(d.get("strafe_switch_ticks", 40))
@@ -68,6 +79,13 @@ func missing_pack_ids() -> PackedStringArray:
 	if not _ai_fields.has("fire_interval_ticks"):
 		out.append("%s.ai.fire_interval_ticks" % id)
 	return out
+
+
+## Drop-aggro radius: explicit value, or aggro_radius + 4 tiles.
+func deaggro_range() -> float:
+	if deaggro_radius >= 0.0:
+		return deaggro_radius
+	return aggro_radius + DEFAULT_DEAGGRO_PAD
 
 
 func damage_for(key: String) -> int:
