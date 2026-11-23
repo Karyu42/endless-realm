@@ -385,3 +385,26 @@ func test_local_input_seq_survives_uint32_wrap() -> void:
 	_host.submit_local_input(id, _intent(0xFFFFFFFF, -1.0, 0.0))
 	_host.run_tick()
 	assert_eq(_host.world_view(id).applied_seq, 1)
+
+
+func test_seq_never_accept_zero() -> void:
+	for last in [0, 1, 0x80000000, 0xFFFFFFFF]:
+		assert_false(Seq.seq_newer(0, last))
+		assert_false(Seq.seq_is_next(0, last))
+	_host = _new_host()
+	var id := _host.add_local_player()
+	_host.submit_local_input(id, _intent(0xFFFFFFFF))
+	_host.run_tick()
+	_host.submit_local_input(id, _intent(0, 1.0))
+	assert_eq(_host.players[0].seq, 0xFFFFFFFF, "last unchanged")
+	_host.run_tick()
+	assert_eq(_host.world_view(id).applied_seq, 0xFFFFFFFF)
+	_host.submit_local_input(id, _intent(1))
+	_host.run_tick()
+	assert_eq(_host.world_view(id).applied_seq, 1)
+	var v := HostInteractValidator.new()
+	v.resolver = func(_target: int, _player: int) -> Dictionary: return {"x": 0.0, "y": 0.0}
+	assert_true(v.validate(id, 0xFFFFFFFF, 42, 0.0, 0.0))
+	assert_false(v.validate(id, 0, 42, 0.0, 0.0))
+	assert_eq(v._last_seq[id], 0xFFFFFFFF, "validator last unchanged")
+	assert_true(v.validate(id, 1, 42, 0.0, 0.0))
