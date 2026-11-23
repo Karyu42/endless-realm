@@ -180,3 +180,41 @@ func test_projectile_despawns_at_range_before_lifetime() -> void:
 	sim.submit_input(InputIntent.from_raw(12, 0.0, 0.0, 0.0, false))
 	sim.step()
 	assert_eq(sim.projectile_count(), 0, "elapsed 2, distance 2 is not below range")
+
+
+## Gleamwright: Tempo 2.5, cd = 0.4 s.
+func _gleamwright() -> SimConfig:
+	return _cfg(2.5)
+
+
+func test_gleamwright_cast_lock_has_no_catch_up() -> void:
+	# content-v0.1 §1 / #19: a 5-tick Kindle Pulse lock on tick 14 breaks the
+	# hold with no catch-up. After the block, the next volley is a fresh
+	# press that still respects leftover cooldown: 0, 8, 19, 27, 35.
+	var cfg := _gleamwright()
+	cfg.projectile_range_tiles = 100.0
+	cfg.projectile_lifetime_ticks_override = 100
+	var sim := LocalSim.new(cfg, 0.0, 0.0)
+	for i in range(36):
+		# Lock occupies ticks 14–18 inclusive (0.25 s = 5 ticks).
+		sim.set_fire_blocked(i >= 14 and i <= 18)
+		sim.submit_input(InputIntent.from_raw(i + 1, 0.0, 0.0, 0.0, true))
+		sim.step()
+	assert_eq(_spawn_ticks(sim), [0, 8, 19, 27, 35])
+
+
+func test_rate_change_mid_hold_applies_from_the_next_shot() -> void:
+	# A pending next_ready is kept; the new cooldown is applied after the
+	# next volley. Thornguard 2.0 fires on 0 then would fire on 10; changing
+	# to 4.0/s (cd 0.25 s) on tick 5 still fires at 10, then 15, 20, 25.
+	var cfg := _thornguard()
+	cfg.projectile_range_tiles = 100.0
+	cfg.projectile_lifetime_ticks_override = 100
+	var sim := LocalSim.new(cfg, 0.0, 0.0)
+	for i in range(26):
+		if i == 5:
+			sim.config().fire_rate_shots_per_s = 4.0
+		sim.submit_input(InputIntent.from_raw(i + 1, 0.0, 0.0, 0.0, true))
+		sim.step()
+	assert_eq(_spawn_ticks(sim), [0, 10, 15, 20, 25])
+
