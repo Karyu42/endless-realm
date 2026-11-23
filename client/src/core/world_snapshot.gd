@@ -24,6 +24,14 @@ var projectiles: Array[SimProjectile] = []
 var enemies: Array[EnemySnapshot] = []
 var pattern_bullets: Array[PatternBullet] = []
 var players: Array[PlayerSnapshot] = []
+var player_focus: float = 0.0
+var player_focus_max: int = 0
+var ability_id: String = ""
+var ability_name: String = ""
+var ability_cooldown_ticks: int = 0
+var ability_cooldown_max: int = 0
+var ward_ticks: int = 0
+var invuln_ticks: int = 0
 
 
 func player_pixels() -> Vector2:
@@ -61,4 +69,12 @@ func duplicate_snapshot() -> WorldSnapshot:
 	for ps in players:
 		player_copies.append(ps.duplicate_snapshot())
 	copy.players = player_copies
+	copy.player_focus = player_focus
+	copy.player_focus_max = player_focus_max
+	copy.ability_id = ability_id
+	copy.ability_name = ability_name
+	copy.ability_cooldown_ticks = ability_cooldown_ticks
+	copy.ability_cooldown_max = ability_cooldown_max
+	copy.ward_ticks = ward_ticks
+	copy.invuln_ticks = invuln_ticks
 	return copy
