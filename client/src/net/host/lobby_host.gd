@@ -306,6 +306,7 @@ func _init(config: SimConfig = null) -> void:
 	var ow := HostInstance.new()
 	ow.index = 0
 	ow.sim = sim
+	ow.grants_persistent = true  # the overworld keeps what players earn
 	instances.append(ow)
 	_configure_sim()
 	interact_validator.resolver = _resolve_bag
@@ -1322,15 +1323,30 @@ func _enforce_practice_items(inst: HostInstance) -> void:
 		var sp := inst.sim.get_player(p.sim_id)
 		if sp == null or sp.inventory == null:
 			continue
+		# Each player keeps at most as many copies of an item as they brought
+		# in (items without an id are counted the same way): nothing extra.
+		var allowed: Dictionary = {}
+		var entry_inv: PlayerInventory = p.progression_entries.back()["fields"].get("inventory")
+		if entry_inv != null:
+			for item in entry_inv.live_items():
+				if item.drop_id == "" or owned.get(item.drop_id) == p:
+					allowed[item.drop_id] = int(allowed.get(item.drop_id, 0)) + 1
 		var inv := sp.inventory
-		for i in range(inv.slots.size()):
-			var it: ItemState = inv.slots[i]
-			if it != null and it.drop_id != "" and owned.get(it.drop_id) != p:
-				inv.slots[i] = null
 		for slot in ["weapon", "armor", "charm"]:
 			var eq: ItemState = inv.equipped_for(slot)
-			if eq != null and eq.drop_id != "" and owned.get(eq.drop_id) != p:
-				inv.set_equipped(slot, null)
+			if eq != null:
+				if int(allowed.get(eq.drop_id, 0)) > 0:
+					allowed[eq.drop_id] = int(allowed[eq.drop_id]) - 1
+				else:
+					inv.set_equipped(slot, null)
+		for i in range(inv.slots.size()):
+			var it: ItemState = inv.slots[i]
+			if it == null or _is_equipped(inv, it):
+				continue
+			if int(allowed.get(it.drop_id, 0)) > 0:
+				allowed[it.drop_id] = int(allowed[it.drop_id]) - 1
+			else:
+				inv.slots[i] = null
 	if not inst.sim.ground_drops().is_empty():
 		inst.sim.clear_ground_drops()  # no ground piles in a practice instance
 	for p in here:
@@ -1343,6 +1359,13 @@ func _enforce_practice_items(inst: HostInstance) -> void:
 		for did in owned:
 			if owned[did] == p and not have.has(did):
 				sp.inventory.add((originals[did] as ItemState).duplicate_item())
+
+
+func _is_equipped(inv: PlayerInventory, it: ItemState) -> bool:
+	for slot in ["weapon", "armor", "charm"]:
+		if inv.equipped_for(slot) == it:
+			return true
+	return false
 
 
 ## Practice instances: a player who dies leaves for the overworld (the
@@ -1434,7 +1457,8 @@ func _no_living_player_inside(inst: HostInstance) -> bool:
 
 ## Rebuilds a reset-when-empty instance in place: same instance id and id
 ## block, a fresh slice (rooms, boss, exit) from the creation transfer, and
-## entity ids that keep counting up. Occupants (none living) are carried.
+## entity ids that keep counting up. Any remaining (dead) occupants are sent
+## to the overworld with their entry state, never revived inside.
 func _reset_instance(record: PortalRecord) -> bool:
 	var inst := record.instance
 	var def: DungeonDef = catalog.dungeon(inst.dungeon_id) if catalog != null else null
@@ -1536,7 +1560,7 @@ func _create_loadtest_instance(i: int) -> void:
 		var at: Vector2 = def.arrival_point()
 		xfer.arrival_x = at.x
 		xfer.arrival_y = at.y
-	var inst := _create_dungeon_instance(xfer)
+	var inst := _create_dungeon_instance(xfer, true)
 	if inst != null:
 		inst.portal_key = "loadtest:%d" % i
 		inst.capacity = 1 << 30

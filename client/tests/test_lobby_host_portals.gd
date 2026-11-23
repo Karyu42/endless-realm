@@ -791,7 +791,7 @@ func test_persistent_late_arrivals_get_nothing_after_clear() -> void:
 	assert_eq(inst.sim.enemy_count(), 0)
 
 
-func test_persistent_is_not_rebuilt_by_settings_and_freed_on_stop() -> void:
+func test_persistent_is_not_rebuilt_by_settings_and_reopens_after_restart() -> void:
 	_host = _new_host()
 	_set_practice_flag("reset_when_empty", false)
 	var portal := _open_portal(true)
@@ -815,14 +815,17 @@ func test_persistent_is_not_rebuilt_by_settings_and_freed_on_stop() -> void:
 	_host.stop()
 	assert_eq(_host._portal_records.size(), 0, "record freed on stop")
 	assert_eq(_host.instances.size(), 1, "instance freed on stop")
-	# The same host object never rebuilds that entrance afterwards.
-	var b := _join_near_portal(portal)
-	_rejections = []
-	_enter(b, portal)
-	_host.run_tick()
-	assert_true(_instance_of(b).is_overworld())
-	assert_eq(_host.instances.size(), 1)
-	assert_eq(_rejections[0][1], PB.ErrorCode.INSTANCE_NOT_FOUND)
+	# Restarting the same host reopens the door as a fresh record.
+	assert_eq(_host.start(), OK)
+	var portal2 := _open_portal(true)
+	var b := _join_near_portal(portal2)
+	_enter(b, portal2)
+	var inst2 := _instance_of(b)
+	assert_false(inst2.is_overworld(), "door open after restart")
+	var rec2: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	assert_ne(rec2, rec, "fresh record")
+	assert_false(rec2.closed)
+	assert_eq(_host.instances.size(), 2)
 
 
 func test_persistent_flag_comes_only_from_host_data() -> void:
@@ -926,7 +929,7 @@ func _grant_inside(id: int) -> ItemState:
 func _progress(id: int) -> Dictionary:
 	var sp := _host.sim.get_player(id)
 	return {"level": sp.level, "xp": sp.xp_tenths, "glint": sp.pending_glint,
-			"items": sp.inventory.live_items().size()}
+			"items": sp.inventory.live_items().size(), "riftstone": sp.pending_riftstone}
 
 
 func test_practice_vault_rewards_are_reverted_on_exit() -> void:
@@ -935,7 +938,7 @@ func test_practice_vault_rewards_are_reverted_on_exit() -> void:
 	var a := _join_near_portal(portal)
 	var before := _progress(a)
 	_enter(a, portal)
-	assert_true(_instance_of(a).no_persistent_rewards)
+	assert_false(_instance_of(a).grants_persistent)
 	_grant_inside(a)
 	_exit_here(a, 5)
 	assert_true(_instance_of(a).is_overworld())
@@ -1009,7 +1012,7 @@ func test_normal_portal_keeps_rewards() -> void:
 	var a := _join_near_portal(portal)
 	var before := _progress(a)
 	_enter(a, portal)
-	assert_false(_instance_of(a).no_persistent_rewards)
+	assert_true(_instance_of(a).grants_persistent)
 	_grant_inside(a)
 	_exit_here(a, 5)
 	var after := _progress(a)
@@ -1031,22 +1034,22 @@ func test_reward_and_reset_flags_come_only_from_host_data() -> void:
 	fake.base_level = 1
 	fake.content_level = 1
 	fake.persistent = true
-	fake.set_meta("no_persistent_rewards", true)
+	fake.grants_persistent = false  # packed claim is ignored; host data decides
 	_host.sim.add_portal(fake)
 	_host.run_tick()
 	var recs := {}
 	for rec: LobbyHost.PortalRecord in _host._portal_records.values():
 		recs[rec.portal_id] = rec
-	assert_true(recs[practice.id].no_persistent_rewards)
+	assert_false(recs[practice.id].grants_persistent)
 	assert_true(recs[practice.id].reset_when_empty)
-	assert_false(recs[fake.id].no_persistent_rewards)
+	assert_true(recs[fake.id].grants_persistent, "real dungeon data grants")
 	assert_false(recs[fake.id].reset_when_empty)
-	assert_false("no_persistent_rewards" in PortalTransfer.new())
+	assert_false("persistent" in PortalTransfer.new())
 	assert_false("reset_when_empty" in PortalTransfer.new())
-	# Reset is never enabled without the reward isolation in host data.
+	# Reset is never enabled unless host data says the instance grants nothing.
 	_host.stop()
 	_host = _new_host()
-	_set_practice_flag("no_persistent_rewards", false)
+	_set_practice_flag("grants_persistent", true)
 	var p2 := _open_portal(true)
 	_host.run_tick()
 	var rec2: LobbyHost.PortalRecord = _host._portal_records.values()[0]
@@ -1092,16 +1095,28 @@ func test_practice_one_instance_id_for_host_lifetime() -> void:
 
 
 ## 2. Next entry after it empties rebuilds trash, boss and exit.
+func _bosses_alive(sim: LocalSim) -> int:
+	var n := 0
+	for e in sim._enemies:
+		if e.is_boss() and e.hp > 0:
+			n += 1
+	return n
+
+
 func test_practice_reset_rebuilds_trash_boss_and_exit() -> void:
 	_host = _new_host()
 	var portal := _open_portal(true)
 	var a := _join_near_portal(portal)
 	_enter(a, portal)
 	var inst := _instance_of(a)
-	var boss_markers := _placeholders(inst.sim)
-	assert_gt(boss_markers, 0)
+	assert_false(inst.sim.boss_defeated())
+	var p := _host._find_player(a)
+	inst.sim.place_player(p.sim_id, 40.0, 6.0)
+	_ticks(2)
+	assert_eq(_bosses_alive(inst.sim), 1, "Warden is up")
 	assert_gt(_clear_vault(a), 0)
 	_ticks(3)
+	assert_true(inst.sim.boss_defeated(), "Warden down")
 	assert_eq(_exit_portals(inst.sim), 1, "cleared: exit open")
 	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
 	rec.cleared = true
@@ -1110,11 +1125,14 @@ func test_practice_reset_rebuilds_trash_boss_and_exit() -> void:
 	_enter_persistent(a, portal, 6)
 	assert_same(_instance_of(a), inst)
 	assert_ne(inst.sim, old_sim, "slice rebuilt")
+	assert_false(inst.sim.boss_defeated(), "Warden state reset")
 	assert_eq(_exit_portals(inst.sim), 0, "exit closed again")
-	assert_eq(_placeholders(inst.sim), boss_markers, "boss back")
 	assert_false(rec.cleared, "cleared flag reset")
+	p = _host._find_player(a)
+	inst.sim.place_player(p.sim_id, 40.0, 6.0)
+	_ticks(2)
+	assert_eq(_bosses_alive(inst.sim), 1, "Warden back")
 	assert_gt(_clear_vault(a), 0, "trash back")
-	var p := _host._find_player(a)
 	assert_gt(p.sim_id, old_sim.alloc_player_id() - 2, "ids keep counting up in the block")
 	assert_lt(p.sim_id, (inst.index + 1) * LobbyHost.INSTANCE_ID_BLOCK)
 
@@ -1463,3 +1481,112 @@ func test_practice_piles_wiped_on_reset() -> void:
 	_enter_persistent(a, portal, 6)
 	assert_eq(inst.sim.ground_drops().size(), 0, "reset leaves no piles")
 	assert_false(_all_item_ids().has("pile"))
+
+
+# --- death, carry HP, save snapshot, riftstone --------------------------------
+
+func _inside(id: int) -> SimPlayerState:
+	var p := _host._find_player(id)
+	return p.instance.sim.get_player(p.sim_id)
+
+
+func test_carry_with_zero_hp_never_means_full_hp() -> void:
+	var sim := LocalSim.new(SimConfig.new())
+	var pid: int = 1  # LocalSim's built-in player
+	var carry := PlayerCarry.from_sim(sim.get_player(pid), null)
+	carry.hp = 0
+	sim.apply_carried_player(carry, 1.0, 1.0)
+	assert_eq(sim.get_player(pid).hp, 0)
+	carry.hp = -5
+	sim.apply_carried_player(carry, 1.0, 1.0)
+	assert_eq(sim.get_player(pid).hp, 0)
+	carry.hp = 3
+	sim.apply_carried_player(carry, 1.0, 1.0)
+	assert_eq(sim.get_player(pid).hp, 3)
+
+
+func test_death_inside_practice_goes_to_hearth_with_entry_state() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_host.sim.get_player(a).hp = 7
+	var before := _progress(a)
+	_enter(a, portal)
+	_grant_inside(a)
+	_inside(a).hp = 0
+	_host.run_tick()
+	assert_true(_instance_of(a).is_overworld())
+	var sp := _host.sim.get_player(a)
+	assert_eq(sp.hp, 7, "entry HP, not full and not dead")
+	assert_eq(_progress(a), before)
+
+
+func test_dead_occupant_at_reset_is_not_revived() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_host.sim.get_player(a).hp = 6
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	_inside(a).hp = 0
+	assert_true(_host._reset_instance(rec))
+	assert_true(_instance_of(a).is_overworld(), "dead occupant leaves")
+	assert_eq(_host.sim.get_player(a).hp, 6)
+	for p in _host.players:
+		assert_ne(p.instance, inst, "no one revived inside")
+
+
+func test_effective_character_uses_entry_snapshot_inside_practice() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	var outside := _host.effective_character(a)
+	assert_not_null(outside)
+	var before := _progress(a)
+	_enter(a, portal)
+	_grant_inside(a)
+	_inside(a).pending_riftstone += 5
+	var eff := _host.effective_character(a)
+	assert_eq(eff.xp_tenths, before["xp"])
+	assert_eq(eff.pending_glint, before["glint"])
+	assert_eq(eff.pending_riftstone, before["riftstone"])
+	assert_eq(eff.inventory.live_items().size(), before["items"])
+	assert_ne(eff.inventory, _inside(a).inventory, "a copy, not live state")
+	assert_null(_host.effective_character(999999))
+
+
+func test_hosted_riftstone_reverts_in_practice_and_stays_from_real_vault() -> void:
+	_host = _new_host()
+	var practice := _open_portal(true)
+	var a := _join_near_portal(practice)
+	_host.sim.get_player(a).pending_riftstone = 4
+	_enter(a, practice)
+	_inside(a).pending_riftstone += 5
+	_exit_here(a, 5)
+	assert_true(_instance_of(a).is_overworld())
+	assert_eq(_host.sim.get_player(a).pending_riftstone, 4, "practice: outside value kept")
+	var real := _open_portal(false)
+	_host.sim.place_player(a, real.x + 0.5, real.y)
+	_enter(a, real, 7)
+	assert_true(_instance_of(a).grants_persistent)
+	_inside(a).pending_riftstone += 5
+	_exit_here(a, 9)
+	assert_eq(_host.sim.get_player(a).pending_riftstone, 9, "real vault keeps it")
+
+
+func test_practice_strips_copies_and_unlabelled_items() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	var before := _progress(a)
+	_enter(a, portal)
+	var sp := _inside(a)
+	var own: Array[ItemState] = sp.inventory.live_items()
+	if not own.is_empty():
+		assert_true(sp.inventory.add(own[0].duplicate_item()))
+	var blank := ItemState.new()
+	blank.tier = 3
+	assert_true(sp.inventory.add(blank))
+	_host.run_tick()
+	assert_eq(_inside(a).inventory.live_items().size(), before["items"], "only what was brought in")
