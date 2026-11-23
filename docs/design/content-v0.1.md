@@ -2,7 +2,7 @@
 
 Status: draft for review · Owner: Game Design · Audience: Gameplay Engineer, QA · Depends on: [`vision.md`](vision.md) (PR #1)
 
-This spec turns `vision.md` into numbers the engineer can put straight into `data/`. `vision.md` stays the source of truth for every formula. This doc only adds base values, patterns and the few rules `vision.md` leaves open. Where the two overlap, it cites a vision section instead of restating the rule. If they ever disagree, `vision.md` wins and this doc gets a fix. Engine, netcode and persistence follow [`docs/tech/stack.md`](../tech/stack.md): Godot 4.7.2 client, Go server, Postgres, 20 Hz ticks.
+This spec turns `vision.md` into numbers the engineer can put straight into `data/`. `vision.md` stays the source of truth for every formula. This doc only adds base values, patterns and the few rules `vision.md` leaves open. Where the two overlap, it cites a vision section instead of restating the rule. If they ever disagree, `vision.md` wins and this doc gets a fix. Engine, netcode and persistence follow [`docs/tech/stack.md`](../tech/stack.md): Godot 4.7.2 client, the Godot game as the lobby host (listen server or `--headless`, vision §11 and the PR #14 amendment), host-local saves, 20 Hz ticks.
 
 All names and content are original. All numbers are starting values that Design can tune after playtests (vision §10, tuning ownership).
 
@@ -414,7 +414,7 @@ The only bonus rolls in v0.1 are the vision §6 extra boss rolls for M > 1. A pl
 
 ## 5. Data format
 
-JSON under `data/`, with a JSON Schema next to each file, as `docs/tech/stack.md` recommends. Both the Go server and the Godot client load the same files. Times are stored in **ticks**, angles in **degrees**, and distances in **tiles**. Formulas stay in code and read their coefficients from `scaling.json`.
+JSON under `data/`, with a JSON Schema next to each file, as `docs/tech/stack.md` recommends. Both the Godot host and the Godot client (one shared sim) load the same files, as does the Go reference harness while it exists. Times are stored in **ticks**, angles in **degrees**, and distances in **tiles**. Formulas stay in code and read their coefficients from `scaling.json`.
 
 ```
 data/
