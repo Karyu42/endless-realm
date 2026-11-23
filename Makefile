@@ -15,7 +15,7 @@ export PATH
 # Raw `docker compose up` still works: the compose file keeps `:-` defaults.
 COMPOSE   ?= docker compose --env-file tools/versions.env
 
-.PHONY: dev test proto proto-check run vet smoke wait-healthz
+.PHONY: dev test proto proto-check run vet smoke wait-healthz client-test
 
 # Starts Postgres and the game server. Connect the Godot client to
 # ws://localhost:8080/ws (configure the address; do not hard-code localhost
@@ -36,6 +36,22 @@ test: vet
 
 run:
 	cd server && $(GO) run ./cmd/server
+
+# Headless GUT 9.7.1 for the Godot client. Installs the addon if missing.
+# Override the binary with GODOT=/path/to/godot if it is not on PATH.
+GODOT ?= godot
+client-test:
+	@if [ ! -f client/project.godot ]; then echo "client/project.godot not found" >&2; exit 1; fi
+	@if [ ! -f client/addons/gut/gut_cmdln.gd ]; then \
+		.github/scripts/install-gut.sh client $(GUT_VERSION) $(GUT_SHA256); \
+	fi
+	@mkdir -p client/test_results
+	$(GODOT) --headless --path client --import
+	$(GODOT) --headless --path client -s addons/gut/gut_cmdln.gd \
+		-gdir=res://tests -ginclude_subdirs -gexit \
+		-gjunit_xml_file=res://test_results/junit.xml
+	python3 .github/scripts/check-junit.py client/test_results/junit.xml
+
 
 # Regenerates server/internal/protocol/v1/protocol.pb.go from proto/v1.
 # Generated Go is committed so `go test` does not require protoc.

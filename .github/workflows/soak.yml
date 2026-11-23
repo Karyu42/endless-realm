@@ -102,14 +102,15 @@ jobs:
         if: steps.inputs.outputs.present == 'true'
         env:
           COMPOSE_FILE: ${{ steps.inputs.outputs.compose }}
-        run: docker compose up --build --detach --wait --wait-timeout 300
+        run: docker compose --env-file tools/versions.env up --build --detach --wait --wait-timeout 300
       - name: Wait for server /healthz
         if: steps.inputs.outputs.present == 'true'
         env:
           COMPOSE_FILE: ${{ steps.inputs.outputs.compose }}
         run: |
-          # The server service has no compose healthcheck yet, so `up --wait` only proves the
-          # container started. Poll the Go listener directly.
+          # `up --wait` already waits on the server's compose healthcheck (`/server -healthcheck`,
+          # run inside the container). This also proves the published port answers from the runner,
+          # which is the address the bot uses.
           for i in $(seq 1 60); do
             if curl -sf --max-time 2 "$HEALTHZ_URL" > /dev/null; then
               echo "server healthy after ${i} attempt(s)"
@@ -118,8 +119,8 @@ jobs:
             sleep 2
           done
           echo "::error::$HEALTHZ_URL did not return 2xx within ~120 s"
-          docker compose ps --all
-          docker compose logs --no-color --timestamps --tail=200
+          docker compose --env-file tools/versions.env ps --all
+          docker compose --env-file tools/versions.env logs --no-color --timestamps --tail=200
           exit 1
       - name: Soak (${{ matrix.clients }} clients)
         if: steps.inputs.outputs.present == 'true'
@@ -147,9 +148,9 @@ jobs:
         env:
           COMPOSE_FILE: ${{ steps.inputs.outputs.compose }}
         run: |
-          docker compose ps --all | tee ci-logs/compose-ps.txt
+          docker compose --env-file tools/versions.env ps --all | tee ci-logs/compose-ps.txt
           # Every service that was up must still be running (no crash / restart loop during the soak).
-          bad="$(docker compose ps --all --format '{{.Service}} {{.State}}' | awk '$2 != "running" {print}')"
+          bad="$(docker compose --env-file tools/versions.env ps --all --format '{{.Service}} {{.State}}' | awk '$2 != "running" {print}')"
           if [ -n "$bad" ]; then echo "::error::services not running after soak: $bad"; exit 1; fi
       - name: Collect compose logs
         if: always() && steps.inputs.outputs.present == 'true'
@@ -157,13 +158,13 @@ jobs:
           COMPOSE_FILE: ${{ steps.inputs.outputs.compose }}
         run: |
           mkdir -p ci-logs
-          docker compose logs --no-color --timestamps > ci-logs/compose.log 2>&1 || echo "compose logs failed" >> ci-logs/compose.log
+          docker compose --env-file tools/versions.env logs --no-color --timestamps > ci-logs/compose.log 2>&1 || echo "compose logs failed" >> ci-logs/compose.log
           docker stats --no-stream > ci-logs/docker-stats.txt 2>&1 || echo "docker stats failed" >> ci-logs/docker-stats.txt
       - name: docker compose down -v
         if: always() && steps.inputs.outputs.present == 'true'
         env:
           COMPOSE_FILE: ${{ steps.inputs.outputs.compose }}
-        run: docker compose down -v --remove-orphans
+        run: docker compose --env-file tools/versions.env down -v --remove-orphans
       - name: Upload soak logs
         if: always() && steps.inputs.outputs.present == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
