@@ -96,12 +96,8 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
-      - id: godobuf
-        if: steps.target.outputs.present == 'true'
-        run: |
-          if grep -qi godobuf Makefile; then echo "needed=true" >> "$GITHUB_OUTPUT"; else echo "needed=false" >> "$GITHUB_OUTPUT"; fi
       - name: Set up Godot (godobuf GDScript codegen)
-        if: steps.target.outputs.present == 'true' && steps.godobuf.outputs.needed == 'true'
+        if: steps.target.outputs.present == 'true'
         uses: ./.github/actions/setup-godot
         with:
           version: ${{ env.GODOT_VERSION }}
@@ -112,15 +108,32 @@ jobs:
           # The pinned toolchain lives in tools/versions.env; `make proto` installs protoc and
           # protoc-gen-go itself. A separate `tools` target is optional.
           if .github/scripts/has-make-target.sh tools; then make tools; fi
-      - name: make proto
+      - name: make proto (Go)
         if: steps.target.outputs.present == 'true'
-        run: make proto GODOT="${GODOT:-godot}"
+        run: make proto
+      - name: make proto-gdscript (godobuf, sha256-pinned in tools/proto/gen-gdscript-proto.sh)
+        if: steps.target.outputs.present == 'true'
+        run: make proto-gdscript GODOT="$GODOT"
+      - name: Generated GDScript codecs must be committed
+        if: steps.target.outputs.present == 'true'
+        run: |
+          gen_paths=(client/src/net/proto client/src/net/host/loadtest_state_pb.gd)
+          untracked="$(git ls-files --others --exclude-standard -- "${gen_paths[@]}")"
+          if [ -n "$untracked" ]; then
+            echo "::error::make proto-gdscript added untracked files. Run 'make proto-gdscript' and commit the result."
+            echo "$untracked"
+            exit 1
+          fi
+          if ! git diff --exit-code -- "${gen_paths[@]}"; then
+            echo "::error::make proto-gdscript changed committed GDScript codecs. Run 'make proto-gdscript' and commit the result (never hand-edit *_pb.gd)."
+            exit 1
+          fi
       - name: Generated code must be committed
         if: steps.target.outputs.present == 'true'
         run: |
           git status --porcelain
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
-            echo "::error::make proto changed or added files. Run 'make proto' and commit the result."
+            echo "::error::make proto or make proto-gdscript changed or added files. Run both and commit the result."
             git diff
             exit 1
           fi

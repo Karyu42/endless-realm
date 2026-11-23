@@ -2,7 +2,7 @@
 # Regenerates the committed GDScript protobuf codecs with the pinned godobuf.
 #   proto/v1/protocol.proto                   -> client/src/net/proto/protocol_v1_pb.gd
 #   client/src/net/host/loadtest_state.proto  -> client/src/net/host/loadtest_state_pb.gd (load test only)
-# Not wired into `make proto` / proto-codegen-check yet (follow-up).
+# CI: proto-codegen-check runs `make proto-gdscript` and fails if the output differs from what is committed.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck disable=SC1091
