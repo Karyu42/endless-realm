@@ -19,6 +19,9 @@ var _hp: Label
 var _shot_views: Dictionary = {} # projectile id -> Polygon2D
 var _pattern_views: Dictionary = {}
 var _enemy_views: Dictionary = {}
+var _shot_free: Array[Polygon2D] = []
+var _pattern_free: Array[Polygon2D] = []
+var _enemy_free: Array[Polygon2D] = []
 var _hint_touch: bool = false
 
 
@@ -136,17 +139,52 @@ func _diamond(radius_px: float) -> PackedVector2Array:
 	])
 
 
-func _sync_pool(parent: Node2D, pool: Dictionary, live: Dictionary) -> void:
+func _enemy_shape(radius_px: float) -> PackedVector2Array:
+	return PackedVector2Array([
+		Vector2(radius_px * 1.15, 0.0), Vector2(0.0, radius_px * 0.85),
+		Vector2(-radius_px * 0.7, radius_px * 0.7),
+		Vector2(-radius_px * 0.7, -radius_px * 0.7), Vector2(0.0, -radius_px * 0.85),
+	])
+
+
+func _acquire_view(
+	parent: Node2D,
+	pool: Dictionary,
+	free: Array[Polygon2D],
+	id: int,
+	color: Color,
+	radius_px: float,
+	kind: String
+) -> Polygon2D:
+	var view: Polygon2D
+	if pool.has(id):
+		view = pool[id]
+	elif not free.is_empty():
+		view = free.pop_back()
+		view.visible = true
+		pool[id] = view
+	else:
+		view = Polygon2D.new()
+		view.color = color
+		parent.add_child(view)
+		pool[id] = view
+	if not view.has_meta("r") or float(view.get_meta("r")) != radius_px:
+		if kind == "enemy":
+			view.polygon = _enemy_shape(radius_px)
+		else:
+			view.polygon = _diamond(radius_px)
+		view.color = color
+		view.set_meta("r", radius_px)
+	return view
+
+
+func _release_unused(pool: Dictionary, free: Array[Polygon2D], live: Dictionary) -> void:
 	for id in pool.keys():
 		if not live.has(id):
-			var node: Node = pool[id]
-			node.queue_free()
+			var view: Polygon2D = pool[id]
+			view.visible = false
+			free.append(view)
 			pool.erase(id)
-	for id in live.keys():
-		if not pool.has(id):
-			var view := Polygon2D.new()
-			parent.add_child(view)
-			pool[id] = view
 
 
 func _update_shot_views() -> void:
@@ -159,37 +197,30 @@ func _update_shot_views() -> void:
 		if shot.distance_at_time(time) >= shot.range_tiles:
 			continue
 		live[shot.id] = shot
-	_sync_pool(_shots, _shot_views, live)
+	_release_unused(_shot_views, _shot_free, live)
 	for id in live.keys():
 		var shot: SimProjectile = live[id]
-		var view: Polygon2D = _shot_views[id]
 		var r: float = shot.radius_tiles * SimConstants.TILE_PX
-		view.polygon = _diamond(r)
-		view.color = SHOT_COLOR
-		view.position = shot.position_at_time(time).to_pixels()
+		var view := _acquire_view(_shots, _shot_views, _shot_free, id, SHOT_COLOR, r, "diamond")
+		view.position = shot.pixel_position_at_time(time)
 
 
 func _update_pattern_views() -> void:
 	var time := GameSession.render_time_ticks()
 	var live: Dictionary = {}
 	for b in GameSession.curr_snapshot.pattern_bullets:
-		if not b.is_alive_at(GameSession.curr_snapshot.tick) and time >= float(b.spawn_tick + b.lifetime_ticks):
-			continue
 		var elapsed: float = time - float(b.spawn_tick)
 		if elapsed < 0.0 or elapsed >= float(b.lifetime_ticks):
 			continue
-		var dist: float = b.speed * elapsed * SimConstants.TICK_DT
-		if dist >= b.range_tiles:
+		if b.speed * elapsed * SimConstants.TICK_DT >= b.range_tiles:
 			continue
 		live[b.id] = b
-	_sync_pool(_patterns, _pattern_views, live)
+	_release_unused(_pattern_views, _pattern_free, live)
 	for id in live.keys():
 		var b: PatternBullet = live[id]
-		var view: Polygon2D = _pattern_views[id]
 		var r: float = b.radius_tiles * SimConstants.TILE_PX
-		view.polygon = _diamond(r)
-		view.color = PATTERN_COLOR
-		view.position = b.position_at_time(time).to_pixels()
+		var view := _acquire_view(_patterns, _pattern_views, _pattern_free, id, PATTERN_COLOR, r, "diamond")
+		view.position = b.pixel_position_at_time(time)
 
 
 func _update_enemy_views() -> void:
@@ -202,16 +233,11 @@ func _update_enemy_views() -> void:
 	var live: Dictionary = {}
 	for e in curr.enemies:
 		live[e.id] = e
-	_sync_pool(_enemies, _enemy_views, live)
+	_release_unused(_enemy_views, _enemy_free, live)
 	for id in live.keys():
 		var e: EnemySnapshot = live[id]
-		var view: Polygon2D = _enemy_views[id]
 		var r: float = e.radius * SimConstants.TILE_PX
-		view.polygon = PackedVector2Array([
-			Vector2(r * 1.15, 0.0), Vector2(0.0, r * 0.85),
-			Vector2(-r * 0.7, r * 0.7), Vector2(-r * 0.7, -r * 0.7), Vector2(0.0, -r * 0.85),
-		])
-		view.color = ENEMY_COLOR
+		var view := _acquire_view(_enemies, _enemy_views, _enemy_free, id, ENEMY_COLOR, r, "enemy")
 		var x: float = e.x
 		var y: float = e.y
 		if prev_by_id.has(id):

@@ -141,11 +141,11 @@ func TestPatternFixtures(t *testing.T) {
 }
 
 func TestSweptHitCatchesTunneling(t *testing.T) {
-	// A bullet travelling 2 tiles in one tick through a 0.35-radius target at the midpoint.
-	if !MovingCircles(0, 0, 2, 0, 0.12, 1, 0, 1, 0, 0.35) {
+	// A size-S bullet travelling 2 tiles in one tick through a 0.30-radius target at the midpoint.
+	if !MovingCircles(0, 0, 2, 0, 0.15, 1, 0, 1, 0, 0.30) {
 		t.Fatal("expected a hit on a target sitting on the path")
 	}
-	if MovingCircles(0, 0, 2, 0, 0.12, 1, 3, 1, 3, 0.35) {
+	if MovingCircles(0, 0, 2, 0, 0.15, 1, 3, 1, 3, 0.30) {
 		t.Fatal("did not expect a hit far off the path")
 	}
 }

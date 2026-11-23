@@ -1,9 +1,10 @@
 class_name DataCatalog
 extends RefCounted
-## Loads the shared data/ pack from the repo root (sibling of client/).
+## Loads the shared data pack. Editor and export both read `res://data/*.json`
+## (synced from repo-root `data/`). The repo-root path is a fallback for tests
+## or a checkout that has not been synced yet.
 
-var patterns: Dictionary = {} # String -> PatternDef
-var enemies: Dictionary = {} # String -> EnemyDef
+const PACKED_DATA_DIR := "res://data"
 
 
 static func repo_root() -> String:
@@ -12,14 +13,23 @@ static func repo_root() -> String:
 
 
 static func load_default() -> DataCatalog:
-	return load_from(repo_root())
+	if FileAccess.file_exists(PACKED_DATA_DIR.path_join("enemies.json")) \
+			and FileAccess.file_exists(PACKED_DATA_DIR.path_join("patterns.json")):
+		return load_from(PACKED_DATA_DIR)
+	return load_from(repo_root().path_join("data"))
 
 
-static func load_from(root: String) -> DataCatalog:
+static func load_from(data_dir: String) -> DataCatalog:
 	var cat := DataCatalog.new()
-	cat._load_patterns(root.path_join("data/patterns.json"))
-	cat._load_enemies(root.path_join("data/enemies.json"))
+	cat.patterns = {}
+	cat.enemies = {}
+	cat._load_patterns(data_dir.path_join("patterns.json"))
+	cat._load_enemies(data_dir.path_join("enemies.json"))
 	return cat
+
+
+var patterns: Dictionary = {} # String -> PatternDef
+var enemies: Dictionary = {} # String -> EnemyDef
 
 
 func pattern(id: String) -> PatternDef:

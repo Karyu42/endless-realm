@@ -9,9 +9,9 @@ func test_burr_spit_lifetime_is_twenty() -> void:
 
 
 func test_size_radii() -> void:
-	assert_almost_eq(PatternDef.size_radius("S"), 0.12, 0.0)
-	assert_almost_eq(PatternDef.size_radius("M"), 0.18, 0.0)
-	assert_almost_eq(PatternDef.size_radius("L"), 0.26, 0.0)
+	assert_almost_eq(PatternDef.size_radius("S"), 0.15, 0.0)
+	assert_almost_eq(PatternDef.size_radius("M"), 0.25, 0.0)
+	assert_almost_eq(PatternDef.size_radius("L"), 0.40, 0.0)
 
 
 func test_pattern_fixtures() -> void:

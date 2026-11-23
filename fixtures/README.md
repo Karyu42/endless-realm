@@ -49,7 +49,7 @@ this list so existing fixtures stay stable.
 ## Patterns
 
 JSON in `data/patterns.json`. `lifetime_ticks = ceil(range / speed * 20)`.
-Bullet size radii (tiles), defined once in code as `S=0.12`, `M=0.18`, `L=0.26`.
+Bullet size radii (tiles), defined once in code as `S=0.15`, `M=0.25`, `L=0.40` (content-v0.1 §0.1). The player hit radius is 0.30.
 
 Closed form, for each emitted bullet:
 

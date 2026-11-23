@@ -21,13 +21,13 @@ func _cfg() -> SimConfig:
 
 
 func test_swept_hit_catches_tunneling() -> void:
-	# A bullet travelling 2 tiles in one tick through a 0.35-radius target.
-	assert_true(SweepHit.moving_circles(0, 0, 2, 0, 0.12, 1, 0, 1, 0, 0.35))
-	assert_false(SweepHit.moving_circles(0, 0, 2, 0, 0.12, 1, 3, 1, 3, 0.35))
+	# A size-S bullet travelling 2 tiles in one tick through a 0.30-radius player.
+	assert_true(SweepHit.moving_circles(0, 0, 2, 0, 0.15, 1, 0, 1, 0, 0.30))
+	assert_false(SweepHit.moving_circles(0, 0, 2, 0, 0.15, 1, 3, 1, 3, 0.30))
 
 
 func test_stationary_overlap_is_a_hit() -> void:
-	assert_true(SweepHit.moving_circles(0, 0, 0, 0, 0.35, 0.2, 0, 0.2, 0, 0.35))
+	assert_true(SweepHit.moving_circles(0, 0, 0, 0, 0.30, 0.2, 0, 0.2, 0, 0.30))
 
 
 func test_player_shots_damage_and_despawn_burrmite() -> void:
@@ -42,15 +42,18 @@ func test_player_shots_damage_and_despawn_burrmite() -> void:
 	var id := sim.spawn_enemy_from_def(def, 2.0, 0.0)
 	assert_gt(id, 0)
 	assert_eq(sim.enemy_count(), 1)
-	# Six shots of 10 damage; fire_rate 20 means a shot each tick from tick 1.
+	# Six shots of 10 damage; fire-on-press at 20/s starts on tick 0.
+	var death_tick: int = -1
 	for i in range(20):
 		sim.submit_input(InputIntent.from_raw(i + 1, 0.0, 0.0, 0.0, true))
 		sim.step()
 		if sim.enemy_count() == 0:
+			death_tick = i
 			break
 	assert_eq(sim.enemy_count(), 0, "Burrmite should have despawned on death")
-	# Still in the 60 HP / 10 dmg range: not instantaneous on the first tick.
-	assert_gte(sim.tick(), 4)
+	# First shot (tick 0) reaches the Burrmite on tick 3; the sixth hits on tick 8.
+	assert_eq(death_tick, 8)
+	assert_eq(sim.tick(), 9)
 
 
 func test_existing_movement_is_unchanged_without_an_enemy() -> void:
@@ -79,20 +82,23 @@ func test_pattern_shot_damages_player_and_flashes() -> void:
 	var sim := LocalSim.new(cfg, 0.0, 0.0, _catalog())
 	sim.spawn_enemy_from_def(def, 3.0, 0.0)
 	var start_hp := sim.snapshot().player_hp
-	# First tick: aggro and emit. Spit travels 0.3 tiles/tick; 3 tiles takes 10 ticks.
+	# First spit is 30 ticks after aggro (§2.3), not on the aggro tick.
+	# Speed 6 tiles/s = 0.3 tiles/tick; radii 0.15 + 0.30, so the swept hit lands on tick 39.
 	var saw_flash := false
-	for i in range(20):
+	var hit_tick: int = -1
+	for i in range(50):
 		sim.submit_input(InputIntent.from_raw(i + 1, 0.0, 0.0, 0.0, false))
 		sim.step()
 		var snap := sim.snapshot()
 		if snap.player_flash_ticks > 0:
 			saw_flash = true
 		if snap.player_hp < start_hp:
+			hit_tick = i
 			assert_eq(snap.player_hp, start_hp - 10)
 			assert_gt(snap.player_flash_ticks, 0)
 			assert_true(saw_flash)
-			return
-	fail_test("player was never hit by burr_spit")
+			break
+	assert_eq(hit_tick, 39, "burr_spit should first hit on tick 39")
 
 
 func test_contact_damage_applies_with_cooldown() -> void:
@@ -119,3 +125,26 @@ func test_contact_damage_applies_with_cooldown() -> void:
 		sim.submit_input(InputIntent.from_raw(3 + i, 0.0, 0.0, 0.0, false))
 		sim.step()
 	assert_eq(sim.snapshot().player_hp, 184)
+
+
+
+func test_burr_spit_fires_thirty_ticks_after_aggro() -> void:
+	# content-v0.1 §2.3: first attack comes 1.5 s (30 ticks) after aggro, then every 30.
+	var def := _catalog().enemy("burrmite")
+	assert_not_null(def)
+	def.move_speed = 0.0
+	def.wander_speed = 0.0
+	def.contact_damage = 0
+	def.aggro_radius = 20.0
+	def.hover_radius = 20.0
+	var sim := LocalSim.new(_cfg(), 0.0, 0.0, _catalog())
+	sim.set_world_seed(1)
+	sim.spawn_enemy_from_def(def, 5.0, 0.0)
+	var emits: Array[int] = []
+	for i in range(91):
+		sim.submit_input(InputIntent.from_raw(i + 1, 0.0, 0.0, 0.0, false))
+		sim.step()
+		for b in sim.snapshot().pattern_bullets:
+			if b.spawn_tick not in emits:
+				emits.append(b.spawn_tick)
+	assert_eq(emits, [30, 60, 90])

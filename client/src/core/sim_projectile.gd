@@ -36,9 +36,25 @@ func is_alive_at(tick: int) -> bool:
 	return distance_at_time(float(tick)) < range_tiles
 
 
-func position_at_time(time_ticks: float) -> SimVec2:
+func write_position_at_time(time_ticks: float, out: SimVec2) -> void:
 	var elapsed: float = time_ticks - float(spawn_tick)
 	if elapsed < 0.0:
 		elapsed = 0.0
 	var dist: float = speed * elapsed * SimConstants.TICK_DT
-	return SimVec2.from_xy(origin_x + dir_x * dist, origin_y + dir_y * dist)
+	out.x = origin_x + dir_x * dist
+	out.y = origin_y + dir_y * dist
+
+
+func position_at_time(time_ticks: float) -> SimVec2:
+	var out := SimVec2.new()
+	write_position_at_time(time_ticks, out)
+	return out
+
+
+func pixel_position_at_time(time_ticks: float) -> Vector2:
+	var elapsed: float = time_ticks - float(spawn_tick)
+	if elapsed < 0.0:
+		elapsed = 0.0
+	var dist: float = speed * elapsed * SimConstants.TICK_DT
+	var px := SimConstants.TILE_PX
+	return Vector2((origin_x + dir_x * dist) * px, (origin_y + dir_y * dist) * px)

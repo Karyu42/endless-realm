@@ -28,6 +28,8 @@ var _fire_blocked: bool = false
 var _projectiles: Array[SimProjectile] = []
 var _enemies: Array[EnemyState] = []
 var _pattern_bullets: Array[PatternBullet] = []
+var _hit_p0: SimVec2 = SimVec2.new()
+var _hit_p1: SimVec2 = SimVec2.new()
 var _has_bounds: bool = false
 var _bound_min_x: float = 0.0
 var _bound_min_y: float = 0.0
@@ -279,15 +281,17 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 	var home_dx: float = e.x - e.home_x
 	var home_dy: float = e.y - e.home_y
 	var home_dist: float = sqrt(home_dx * home_dx + home_dy * home_dy)
+	var was_aggro: bool = e.aggro
 	if e.aggro:
 		if home_dist > e.def.leash:
 			e.aggro = false
 	elif dist <= e.def.aggro_radius and home_dist <= e.def.leash:
 		e.aggro = true
+	# content-v0.1 §2.3: first attack comes fire_interval after aggro (and re-aggro).
+	if e.aggro and not was_aggro:
+		e.fire_cooldown = e.def.fire_interval_ticks
 	if e.contact_cooldown > 0:
 		e.contact_cooldown -= 1
-	if e.fire_cooldown > 0:
-		e.fire_cooldown -= 1
 	var mx: float = 0.0
 	var my: float = 0.0
 	var speed: float = e.def.wander_speed
@@ -317,6 +321,8 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 			e.wander_ticks = e.def.strafe_switch_ticks
 		mx = cos(e.wander_angle)
 		my = sin(e.wander_angle)
+	if e.fire_cooldown > 0:
+		e.fire_cooldown -= 1
 	var step: float = speed * SimConstants.TICK_DT
 	e.x += mx * step
 	e.y += my * step
@@ -362,13 +368,13 @@ func _player_shots_vs_enemies(sim_tick: int) -> void:
 	for shot in _projectiles:
 		if not shot.is_alive_at(sim_tick):
 			continue
-		var p0 := shot.position_at_time(float(sim_tick - 1) if sim_tick > 0 else 0.0)
-		var p1 := shot.position_at_time(float(sim_tick))
+		shot.write_position_at_time(float(sim_tick - 1) if sim_tick > 0 else 0.0, _hit_p0)
+		shot.write_position_at_time(float(sim_tick), _hit_p1)
 		for e in _enemies:
 			if not e.alive:
 				continue
 			if SweepHit.moving_circles(
-				p0.x, p0.y, p1.x, p1.y, shot.radius_tiles,
+				_hit_p0.x, _hit_p0.y, _hit_p1.x, _hit_p1.y, shot.radius_tiles,
 				e.prev_x, e.prev_y, e.x, e.y, e.radius()
 			):
 				e.hp -= _config.player_projectile_damage
@@ -385,10 +391,10 @@ func _pattern_shots_vs_player(sim_tick: int) -> void:
 	for b in _pattern_bullets:
 		if not b.is_alive_at(sim_tick):
 			continue
-		var p0 := b.position_at_time(float(sim_tick - 1) if sim_tick > 0 else 0.0)
-		var p1 := b.position_at_time(float(sim_tick))
+		b.write_position_at_time(float(sim_tick - 1) if sim_tick > 0 else 0.0, _hit_p0)
+		b.write_position_at_time(float(sim_tick), _hit_p1)
 		if SweepHit.moving_circles(
-			p0.x, p0.y, p1.x, p1.y, b.radius_tiles,
+			_hit_p0.x, _hit_p0.y, _hit_p1.x, _hit_p1.y, b.radius_tiles,
 			_prev_px, _prev_py, _px, _py, _config.player_radius_tiles
 		):
 			var dmg: int = 0
@@ -434,24 +440,27 @@ func _enemy_by_id(id: int) -> EnemyState:
 
 
 func _cull_projectiles(sim_tick: int) -> void:
-	var live: Array[SimProjectile] = []
+	var write: int = 0
 	for shot in _projectiles:
 		if shot.is_alive_at(sim_tick):
-			live.append(shot)
-	_projectiles = live
+			_projectiles[write] = shot
+			write += 1
+	_projectiles.resize(write)
 
 
 func _cull_pattern_bullets(sim_tick: int) -> void:
-	var live: Array[PatternBullet] = []
+	var write: int = 0
 	for b in _pattern_bullets:
 		if b.is_alive_at(sim_tick):
-			live.append(b)
-	_pattern_bullets = live
+			_pattern_bullets[write] = b
+			write += 1
+	_pattern_bullets.resize(write)
 
 
 func _cull_enemies() -> void:
-	var live: Array[EnemyState] = []
+	var write: int = 0
 	for e in _enemies:
 		if e.alive:
-			live.append(e)
-	_enemies = live
+			_enemies[write] = e
+			write += 1
+	_enemies.resize(write)

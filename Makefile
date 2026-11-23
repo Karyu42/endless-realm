@@ -15,7 +15,7 @@ export PATH
 # Raw `docker compose up` still works: the compose file keeps `:-` defaults.
 COMPOSE   ?= docker compose --env-file tools/versions.env
 
-.PHONY: dev test proto proto-check run vet smoke wait-healthz client-test fixtures-parity data-validate
+.PHONY: dev test proto proto-check run vet smoke wait-healthz client-test fixtures-parity data-validate sync-client-data check-client-data
 
 # Starts Postgres and the game server. Connect the Godot client to
 # ws://localhost:8080/ws (configure the address; do not hard-code localhost
@@ -52,9 +52,22 @@ client-test:
 		-gjunit_xml_file=res://test_results/junit.xml
 	python3 .github/scripts/check-junit.py client/test_results/junit.xml
 
-# Shared data pack: JSON parse + schema checks (requires check-jsonschema).
+# Keep a packed copy of the shared data pack under client/data (res://data)
+# so editor and export load the same files. data/ remains the source of truth.
+CLIENT_DATA_FILES := enemies.json patterns.json
+
+sync-client-data:
+	@mkdir -p client/data
+	@cp -f $(addprefix data/,$(CLIENT_DATA_FILES)) client/data/
+
+check-client-data:
+	@for f in $(CLIENT_DATA_FILES); do 		if [ ! -f "client/data/$$f" ] || ! cmp -s "data/$$f" "client/data/$$f"; then 			echo "client/data/$$f is out of sync with data/$$f. Run 'make sync-client-data' and commit the copy." >&2; 			exit 1; 		fi; 	done
+
+# Shared data pack: JSON parse + schema checks (requires check-jsonschema),
+# pattern-reference and damage_key checks (content-v0.1 §5), and packed-copy sync.
 data-validate:
 	python3 .github/scripts/validate-data.py
+	@$(MAKE) check-client-data
 
 # Go and GDScript must agree on fixtures/pcg32 and fixtures/patterns.
 # Runs server/internal/sim tests (including the golden fixtures) and the

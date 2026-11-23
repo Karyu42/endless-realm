@@ -12,9 +12,9 @@ const (
 	TickHz = 20
 	TickDT = 1.0 / 20.0
 	// Bullet radii in tiles, one place for both languages.
-	RadiusS = 0.12
-	RadiusM = 0.18
-	RadiusL = 0.26
+	RadiusS = 0.15
+	RadiusM = 0.25
+	RadiusL = 0.40
 	Eps     = 1e-12
 )
 

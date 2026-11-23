@@ -2,9 +2,9 @@ class_name PatternDef
 extends RefCounted
 ## Closed-form bullet pattern. Mirrors server/internal/sim and data/patterns.json.
 
-const RADIUS_S: float = 0.12
-const RADIUS_M: float = 0.18
-const RADIUS_L: float = 0.26
+const RADIUS_S: float = 0.15
+const RADIUS_M: float = 0.25
+const RADIUS_L: float = 0.40
 
 var id: String = ""
 var type: String = "fan"
@@ -74,9 +74,9 @@ static func from_json(d: Dictionary) -> PatternDef:
 
 
 func emit(seed: int, origin_x: float, origin_y: float, aim_rad: float, volley_index: int) -> Array[PatternBullet]:
-	var rng := PCG32.new(seed, 1)
 	var base: float = _base_angle(aim_rad, volley_index)
 	if type == "ring":
+		var rng: PCG32 = PCG32.new(seed, 1) if skip_start_rng else null
 		return _emit_ring(rng, origin_x, origin_y, base)
 	return _emit_fan(origin_x, origin_y, base)
 
@@ -107,7 +107,7 @@ func _emit_fan(ox: float, oy: float, base: float) -> Array[PatternBullet]:
 
 func _emit_ring(rng: PCG32, ox: float, oy: float, base: float) -> Array[PatternBullet]:
 	var start_i: int = skip_start
-	if skip_start_rng:
+	if skip_start_rng and rng != null:
 		start_i = int(rng.uint32() % (count as int))
 	var step: float = TAU / float(count)
 	var out: Array[PatternBullet] = []

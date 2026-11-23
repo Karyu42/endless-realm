@@ -11,9 +11,12 @@ between ticks. `TILE_PX = 16` is defined once, in `src/core/sim_constants.gd`.
 1.0 sim unit is one tile. Angles use the Godot 2D convention (+X = 0, +Y down,
 clockwise positive). Deterministic randomness is **PCG32 only**.
 
-The practice yard loads the shared pack from repo-root [`data/`](../data/)
-(sibling of `client/`). A Burrmite wanders the yard and fires `burr_spit`.
-There is no network code in this project yet, and no Godot MultiplayerAPI.
+The practice yard loads the shared pack from [`res://data/`](data/), a packed
+copy of repo-root [`data/`](../data/) (`make sync-client-data` keeps them
+equal). Editor and export both use that `res://` path, so the Burrmite ships
+in the desktop and Android builds. A Burrmite wanders the yard and fires
+`burr_spit`. There is no network code in this project yet, and no Godot
+MultiplayerAPI.
 
 ## Run the practice yard
 
@@ -61,8 +64,9 @@ The tests cover 8-dir movement and diagonal normalization, fire-on-press
 timing from `docs/design/content-v0.1.md` §1 (float64 `next_ready` in seconds,
 Driftrunner golden ticks 0/6/12/18/23/29, Thornguard 0/10/20, no tap-burst),
 projectile lifetime and range, tick stepping, the `NetClient` stub, official
-PCG32 known vectors, golden pattern positions, swept hits, and Burrmite
-damage / death.
+PCG32 known vectors, golden pattern positions, swept hits, Burrmite
+damage / death, packed `res://data` loading, and the burr_spit cadence
+(first spit 30 ticks after aggro).
 
 Shared fixtures live in [`fixtures/`](../fixtures/). From the repo root, Go and
 GDScript must agree:
