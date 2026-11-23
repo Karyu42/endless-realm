@@ -10,6 +10,10 @@ const PATTERN_COLOR := Color(0.92, 0.62, 0.28)
 const BAG_BROWN := Color(0.55, 0.38, 0.22)
 const BAG_TEAL := Color(0.28, 0.72, 0.70)
 const BAG_GOLD := Color(0.92, 0.74, 0.28)
+const SHOT_OUTLINE := Color(0.06, 0.08, 0.10, 0.95)
+const PATTERN_OUTLINE := Color(0.18, 0.08, 0.04, 0.95)
+const DAMAGE_COLOR := Color(0.95, 0.35, 0.28)
+const HEAL_COLOR := Color(0.45, 0.85, 0.55)
 
 var _sticks: VirtualSticks
 var _player: Polygon2D
@@ -27,6 +31,10 @@ var _bags: Node2D
 var _bag_views: Dictionary = {}
 var _bag_free: Array[Polygon2D] = []
 var _loot_btn: Button
+var _ability: Label
+var _floats: Node2D
+var _last_player_hp: int = -1
+var _last_enemy_hp: Dictionary = {}
 var _shot_views: Dictionary = {} # projectile id -> Polygon2D
 var _pattern_views: Dictionary = {}
 var _enemy_views: Dictionary = {}
@@ -91,11 +99,18 @@ func _ready() -> void:
 	_inv.name = "Inventory"
 	_inv.add_theme_font_size_override("font_size", 14)
 	_inv.add_theme_color_override("font_color", Color(0.82, 0.9, 0.88))
+	_ability = Label.new()
+	_ability.name = "Ability"
+	_ability.add_theme_font_size_override("font_size", 14)
+	_ability.add_theme_color_override("font_color", Color(0.82, 0.9, 0.88))
 	_loot_btn = Button.new()
 	_loot_btn.name = "LootButton"
 	_loot_btn.text = "Loot"
 	_loot_btn.visible = false
 	_loot_btn.pressed.connect(_on_loot_pressed)
+	_floats = Node2D.new()
+	_floats.name = "Floaters"
+	add_child(_floats)
 	var layer := CanvasLayer.new()
 	layer.layer = 5
 	var margin := MarginContainer.new()
@@ -109,6 +124,7 @@ func _ready() -> void:
 	vbox.add_child(_xp)
 	vbox.add_child(_xp_bar)
 	vbox.add_child(_inv)
+	vbox.add_child(_ability)
 	vbox.add_child(_loot_btn)
 	margin.add_child(vbox)
 	layer.add_child(margin)
@@ -138,6 +154,8 @@ func _process(_delta: float) -> void:
 	_update_pattern_views()
 	_update_bag_views()
 	_update_hud()
+	_update_combat_floaters()
+	_update_floaters()
 	if _hint_touch != _sticks.using_touch:
 		_refresh_hint()
 
@@ -145,9 +163,9 @@ func _process(_delta: float) -> void:
 func _refresh_hint() -> void:
 	_hint_touch = _sticks.using_touch
 	if _hint_touch:
-		_hint.text = "Left stick moves · right stick aims and fires · Loot when a bag is in range · a Burrmite wanders the yard"
+		_hint.text = "Left stick moves · right stick aims and fires · ability button above the right stick · Loot when a bag is in range · a Burrmite wanders the yard"
 	else:
-		_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · E to loot · 1–8 equip · a Burrmite wanders the yard"
+		_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · Space or right-click for ability · E to loot · 1–8 equip · a Burrmite wanders the yard"
 
 
 func _sample_input() -> void:
@@ -156,10 +174,14 @@ func _sample_input() -> void:
 		GameSession.move_y = _sticks.move_y
 		GameSession.aim = _sticks.aim
 		GameSession.fire_held = _sticks.fire_held
+		if _sticks.consume_ability_pressed():
+			GameSession.ability_pressed = true
 		return
 	GameSession.move_x = Input.get_axis("move_left", "move_right")
 	GameSession.move_y = Input.get_axis("move_up", "move_down")
 	GameSession.fire_held = Input.is_action_pressed("fire")
+	if Input.is_action_just_pressed("ability"):
+		GameSession.ability_pressed = true
 	if Input.is_action_just_pressed("interact"):
 		GameSession.interact_pressed = true
 		GameSession.interact_target_id = _nearest_prompt_interactable_id()
@@ -226,6 +248,7 @@ func _acquire_view(
 			view.polygon = _diamond(radius_px)
 		view.color = color
 		view.set_meta("r", radius_px)
+	_ensure_shot_outline(view, parent, radius_px)
 	return view
 
 
@@ -297,6 +320,7 @@ func _update_enemy_views() -> void:
 			y = lerpf(p.y, e.y, alpha)
 		view.position = Vector2(x * SimConstants.TILE_PX, y * SimConstants.TILE_PX)
 		view.rotation = e.aim
+		view.color = FLASH_COLOR if e.flash_ticks > 0 else ENEMY_COLOR
 
 func _on_loot_pressed() -> void:
 	GameSession.interact_pressed = true
@@ -353,6 +377,13 @@ func _update_hud() -> void:
 	_inv.text = " ".join(parts) + "  " + eq
 	if snap.pending_glint > 0:
 		_inv.text += "  Glint %d (pending)" % snap.pending_glint
+	var focus_show: int = int(snap.player_focus)
+	var ability_name: String = snap.ability_name if snap.ability_name != "" else "Ability"
+	if snap.ability_cooldown_ticks > 0:
+		var secs: float = float(snap.ability_cooldown_ticks) * SimConstants.TICK_DT
+		_ability.text = "%s  %.1fs  Focus %d / %d" % [ability_name, secs, focus_show, snap.player_focus_max]
+	else:
+		_ability.text = "%s  Ready  Focus %d / %d" % [ability_name, focus_show, snap.player_focus_max]
 	_loot_btn.visible = _sticks.using_touch and _bag_in_range()
 
 
@@ -380,3 +411,76 @@ func _update_bag_views() -> void:
 		var view := _acquire_view(_bags, _bag_views, _bag_free, id, _bag_color(kind), 6.0, "diamond")
 		view.position = Vector2(bag.x * SimConstants.TILE_PX, bag.y * SimConstants.TILE_PX)
 
+
+
+func _ensure_shot_outline(view: Polygon2D, parent: Node2D, radius_px: float) -> void:
+	if parent != _shots and parent != _patterns:
+		return
+	var outline: Polygon2D = view.get_node_or_null("Outline")
+	if outline == null:
+		outline = Polygon2D.new()
+		outline.name = "Outline"
+		outline.show_behind_parent = true
+		outline.color = SHOT_OUTLINE if parent == _shots else PATTERN_OUTLINE
+		view.add_child(outline)
+	outline.polygon = _diamond(radius_px + 1.5)
+
+
+func _update_combat_floaters() -> void:
+	var curr := GameSession.curr_snapshot
+	var prev := GameSession.prev_snapshot
+	if curr.tick <= 0:
+		_last_player_hp = curr.player_hp
+		_last_enemy_hp.clear()
+		for e in curr.enemies:
+			_last_enemy_hp[e.id] = e.hp
+		return
+	if _last_player_hp >= 0 and curr.player_hp != _last_player_hp:
+		_spawn_floater(GameSession.interpolated_player_pixels(), curr.player_hp - _last_player_hp)
+	_last_player_hp = curr.player_hp
+	var seen: Dictionary = {}
+	for e in curr.enemies:
+		seen[e.id] = true
+		var prev_hp: int = int(_last_enemy_hp.get(e.id, e.hp))
+		for p in prev.enemies:
+			if p.id == e.id:
+				prev_hp = p.hp
+				break
+		if e.hp != prev_hp:
+			_spawn_floater(Vector2(e.x * SimConstants.TILE_PX, e.y * SimConstants.TILE_PX), e.hp - prev_hp)
+		_last_enemy_hp[e.id] = e.hp
+	for id in _last_enemy_hp.keys():
+		if not seen.has(id):
+			_last_enemy_hp.erase(id)
+
+
+func _spawn_floater(pos: Vector2, delta: int) -> void:
+	if delta == 0 or _floats == null:
+		return
+	var lab := Label.new()
+	lab.text = ("+%d" % delta) if delta > 0 else str(delta)
+	lab.add_theme_font_size_override("font_size", 14)
+	lab.add_theme_color_override("font_color", HEAL_COLOR if delta > 0 else DAMAGE_COLOR)
+	lab.position = pos + Vector2(-8.0, -18.0)
+	lab.set_meta("age", 0.0)
+	lab.set_meta("origin", lab.position)
+	_floats.add_child(lab)
+
+
+func _update_floaters() -> void:
+	if _floats == null:
+		return
+	var dt: float = get_process_delta_time()
+	for child in _floats.get_children():
+		var lab := child as Label
+		if lab == null:
+			continue
+		var age: float = float(lab.get_meta("age", 0.0)) + dt
+		lab.set_meta("age", age)
+		var origin: Vector2 = lab.get_meta("origin", lab.position)
+		lab.position = origin + Vector2(0.0, -28.0 * age)
+		var col: Color = lab.get_theme_color("font_color")
+		col.a = clampf(1.0 - age / 0.7, 0.0, 1.0)
+		lab.add_theme_color_override("font_color", col)
+		if age >= 0.7:
+			lab.queue_free()

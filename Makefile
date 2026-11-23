@@ -54,7 +54,7 @@ client-test:
 
 # Keep a packed copy of the shared data pack under client/data (res://data)
 # so editor and export load the same files. data/ remains the source of truth.
-CLIENT_DATA_FILES := enemies.json patterns.json classes.json loot.json scaling.json
+CLIENT_DATA_FILES := enemies.json patterns.json classes.json loot.json scaling.json abilities.json
 
 sync-client-data:
 	@mkdir -p client/data

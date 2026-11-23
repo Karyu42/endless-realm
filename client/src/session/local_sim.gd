@@ -52,6 +52,14 @@ var _instance_m100: int = 100
 var _in_portal: bool = false
 var _practice_yard: bool = false
 var _last_interact_seq: int = -1
+## Per-player ability state (id -> PlayerAbilityState). Not LocalSim singletons,
+## so a later shared-world merge stays small.
+var _ability_by_player: Dictionary = {}
+## Extra players for Kindle Pulse (id -> {x, y, hp, max_hp}). Combat stays
+## against the authority player only until LocalSim is multi-player.
+var _allies: Dictionary = {}
+## Test / later dungeon walls: tile (tx, ty) -> true is blocking for Slipstep.
+var _blocking_tiles: Dictionary = {}
 
 
 func _init(config: SimConfig = null, start_x: float = 0.0, start_y: float = 0.0, catalog: DataCatalog = null) -> void:
@@ -94,6 +102,11 @@ func set_catalog(catalog: DataCatalog) -> void:
 
 func set_world_seed(seed: int) -> void:
 	_world_seed = seed
+	var ids: Array = _ability_by_player.keys()
+	ids.sort()
+	for pid in ids:
+		var st: PlayerAbilityState = _ability_by_player[pid]
+		st.reseed(_world_seed, int(pid))
 
 
 func config() -> SimConfig:
@@ -155,10 +168,19 @@ func step() -> void:
 	_aim = _intent.aim
 	if _player_flash_ticks > 0:
 		_player_flash_ticks -= 1
+	for e in _enemies:
+		if e.flash_ticks > 0:
+			e.flash_ticks -= 1
 	_apply_movement()
+	_apply_ability(_player_id, _intent, sim_tick)
 	_apply_fire(sim_tick)
 	_step_enemies(sim_tick)
 	_apply_combat(sim_tick)
+	_tick_ability_clocks()
+	_regen_focus()
+	# One-shot: ability_pressed is consumed on the tick it is applied and
+	# cleared after that tick, so a held intent never casts twice.
+	_intent.ability_pressed = false
 	_expire_ground_drops(sim_tick)
 	_apply_interact(sim_tick)
 	_apply_inventory_hotkey()
@@ -212,8 +234,19 @@ func snapshot() -> WorldSnapshot:
 		es.max_hp = e.max_hp()
 		es.radius = e.radius()
 		es.content_level = e.content_level
+		es.flash_ticks = e.flash_ticks
 		enemy_snaps.append(es)
 	snap.enemies = enemy_snaps
+	var ast := _ability_of(_player_id)
+	snap.player_focus = ast.focus
+	snap.player_focus_max = ast.focus_max()
+	if ast.ability_def != null:
+		snap.ability_id = ast.ability_def.id
+		snap.ability_name = ast.ability_def.display_name
+		snap.ability_cooldown_max = ast.ability_def.cooldown_ticks
+	snap.ability_cooldown_ticks = ast.cooldown_ticks
+	snap.ward_ticks = ast.ward_ticks
+	snap.invuln_ticks = ast.invuln_ticks
 	return snap
 
 
@@ -236,7 +269,7 @@ func next_ready() -> float:
 ## Hook for a later ability lock (Kindle Pulse, PR #19). A blocked tick breaks
 ## the continuous hold and does not reset next_ready, so there is no catch-up.
 func is_fire_blocked() -> bool:
-	return _fire_blocked
+	return _fire_blocked or _ability_of(_player_id).cast_lock_ticks > 0
 
 
 func set_fire_blocked(blocked: bool) -> void:
@@ -430,6 +463,7 @@ func _player_shots_vs_enemies(sim_tick: int) -> void:
 			):
 				e.hp -= _config.player_projectile_damage
 				e.damaged_by[_player_id] = true
+				e.flash_ticks = _config.player_flash_ticks
 				shot.consumed = true
 				if e.hp <= 0:
 					e.hp = 0
@@ -454,8 +488,8 @@ func _pattern_shots_vs_player(sim_tick: int) -> void:
 			var src := _enemy_by_id(b.source_id)
 			if src != null and src.def != null:
 				dmg = src.def.damage_for(b.damage_key)
-			_hurt_player(dmg)
-			b.consumed = true
+			if _hurt_player(dmg):
+				b.consumed = true
 			if _player_hp <= 0:
 				return
 
@@ -470,19 +504,32 @@ func _contact_vs_player() -> void:
 			_prev_px, _prev_py, _px, _py, _config.player_radius_tiles,
 			e.prev_x, e.prev_y, e.x, e.y, e.radius()
 		):
-			_hurt_player(e.def.contact_damage if e.def != null else 0)
-			e.contact_cooldown = _config.contact_cooldown_ticks
+			if _hurt_player(e.def.contact_damage if e.def != null else 0):
+				e.contact_cooldown = _config.contact_cooldown_ticks
 			if _player_hp <= 0:
 				return
 
 
-func _hurt_player(amount: int) -> void:
+func _hurt_player(amount: int) -> bool:
 	if amount <= 0 or _player_hp <= 0:
-		return
+		return false
+	var ast := _ability_of(_player_id)
+	if ast.invuln_ticks > 0:
+		return false
+	if ast.ward_ticks > 0:
+		var cut: float = 0.5
+		if ast.ability_def != null:
+			cut = ast.ability_def.damage_taken_mult
+		# vision §2: the cut multiplies final damage after mitigation and D.
+		# Incoming amounts are still raw until those land in _hurt_player.
+		amount = SimScaling.round_half_up(float(amount) * cut)
+		if amount < 1:
+			amount = 1
 	_player_hp -= amount
 	if _player_hp < 0:
 		_player_hp = 0
 	_player_flash_ticks = _config.player_flash_ticks
+	return true
 
 
 func _enemy_by_id(id: int) -> EnemyState:
@@ -552,11 +599,25 @@ func ground_drop_count() -> int:
 
 
 func set_player_class(class_id: String) -> void:
-	_player_class_id = class_id
-	_class_def = null
+	set_player_class_for(_player_id, class_id)
+
+
+func set_player_class_for(player_id: int, class_id: String) -> void:
+	var st := _ability_of(player_id)
+	var cdef: ClassDef = null
+	var adef: AbilityDef = null
+	if player_id == _player_id:
+		_player_class_id = class_id
+		_class_def = null
 	if _catalog != null and class_id != "":
-		_class_def = _catalog.class_def(class_id)
-	_recompute_player_stats(true)
+		cdef = _catalog.class_def(class_id)
+		if cdef != null and cdef.ability_id != "":
+			adef = _catalog.ability(cdef.ability_id)
+	if player_id == _player_id:
+		_class_def = cdef
+	st.reset_for_class(cdef, adef)
+	if player_id == _player_id:
+		_recompute_player_stats(true)
 
 
 func set_instance_multiplier_hundredths(m100: int) -> void:
@@ -662,10 +723,24 @@ func _apply_max_hp_delta(old_max: int) -> void:
 		_player_hp = 0
 
 
+func apply_class_motion() -> void:
+	# Copies stride and tempo from the current class onto SimConfig. Callers
+	# that already set custom fire rates (tests) should not use this.
+	if _class_def != null:
+		_config.move_speed_tiles_per_s = _class_def.stride
+		_config.fire_rate_shots_per_s = _class_def.tempo
+
+
 func _recompute_player_stats(fill: bool) -> void:
 	# fill: spawn or class change, reset to full.
 	if fill:
 		_player_hp = _current_max_hp()
+		var st := _ability_of(_player_id)
+		st.focus = float(st.focus_max())
+		st.cooldown_ticks = 0
+		st.cast_lock_ticks = 0
+		st.ward_ticks = 0
+		st.invuln_ticks = 0
 
 
 func _is_eligible(e: EnemyState, player_id: int, px: float, py: float) -> bool:
@@ -750,6 +825,247 @@ func _bag_by_id(id: int) -> GroundDrop:
 		if bag.id == id:
 			return bag
 	return null
+
+
+func _ability_of(player_id: int) -> PlayerAbilityState:
+	if not _ability_by_player.has(player_id):
+		var st := PlayerAbilityState.new()
+		st.reseed(_world_seed, player_id)
+		_ability_by_player[player_id] = st
+	return _ability_by_player[player_id] as PlayerAbilityState
+
+
+func focus(player_id: int) -> float:
+	return _ability_of(player_id).focus
+
+
+func set_focus(player_id: int, value: float) -> void:
+	var st := _ability_of(player_id)
+	st.focus = clampf(value, 0.0, float(st.focus_max()))
+
+
+func focus_max(player_id: int) -> int:
+	return _ability_of(player_id).focus_max()
+
+
+func ability_cooldown_ticks(player_id: int) -> int:
+	return _ability_of(player_id).cooldown_ticks
+
+
+func set_ability_cooldown_ticks(player_id: int, ticks: int) -> void:
+	_ability_of(player_id).cooldown_ticks = maxi(0, ticks)
+
+
+func ward_ticks(player_id: int) -> int:
+	return _ability_of(player_id).ward_ticks
+
+
+func invuln_ticks(player_id: int) -> int:
+	return _ability_of(player_id).invuln_ticks
+
+
+func ally_ability_heals(player_id: int) -> int:
+	return _ability_of(player_id).ally_ability_heals
+
+
+## Next value from this player's ability PCG32 stream (instance seed + id).
+func ability_rng_uint32(player_id: int) -> int:
+	return _ability_of(player_id).rng_uint32()
+
+
+func place_ally(id: int, x: float, y: float, hp: int, max_hp: int) -> void:
+	if id == _player_id:
+		_px = x
+		_py = y
+		_player_hp = hp
+		return
+	_allies[id] = {"x": x, "y": y, "hp": hp, "max_hp": max_hp}
+	_ability_of(id)
+
+
+func ally_hp(id: int) -> int:
+	if id == _player_id:
+		return _player_hp
+	if not _allies.has(id):
+		return 0
+	return int(_allies[id]["hp"])
+
+
+func set_blocking_tile(tx: int, ty: int, blocked: bool = true) -> void:
+	var key := Vector2i(tx, ty)
+	if blocked:
+		_blocking_tiles[key] = true
+	else:
+		_blocking_tiles.erase(key)
+
+
+func _regen_focus() -> void:
+	var ids: Array = _ability_by_player.keys()
+	ids.sort()
+	for pid in ids:
+		var st: PlayerAbilityState = _ability_by_player[pid]
+		st.regen(SimConstants.TICK_DT)
+
+
+func _tick_ability_clocks() -> void:
+	var ids: Array = _ability_by_player.keys()
+	ids.sort()
+	for pid in ids:
+		var st: PlayerAbilityState = _ability_by_player[pid]
+		st.tick_clocks()
+
+
+func _apply_ability(player_id: int, intent: InputIntent, _sim_tick: int) -> void:
+	if intent == null or not intent.ability_pressed:
+		return
+	# seq 0 is never applied (host-api rejects it; game_session skips 0 on wrap).
+	if intent.seq == 0:
+		return
+	var st := _ability_of(player_id)
+	if intent.seq == st.last_ability_seq:
+		return
+	st.last_ability_seq = intent.seq
+	if st.ability_def == null:
+		return
+	if player_id == _player_id and _player_hp <= 0:
+		return
+	if st.cooldown_ticks > 0:
+		return
+	if st.focus + 1e-9 < float(st.ability_def.focus_cost):
+		return
+	st.focus -= float(st.ability_def.focus_cost)
+	st.cooldown_ticks = st.ability_def.cooldown_ticks
+	var aid: String = st.ability_def.id
+	if aid == "thorn_ward":
+		# Recast refreshes the duration and does not stack (vision §2).
+		st.ward_ticks = st.ability_def.duration_ticks
+	elif aid == "kindle_pulse":
+		st.cast_lock_ticks = st.ability_def.cast_lock_ticks
+		_apply_kindle_pulse(player_id, st)
+	elif aid == "slipstep":
+		_apply_slipstep(player_id, st)
+		st.invuln_ticks = st.ability_def.invuln_ticks
+
+
+func _apply_kindle_pulse(player_id: int, st: PlayerAbilityState) -> void:
+	var healed_ally: bool = false
+	var origin := Vector2(_px, _py)
+	if player_id == _player_id:
+		_heal_target(player_id, origin.x, origin.y, _current_max_hp(), true, st)
+	var radius: float = st.ability_def.heal_radius_tiles if st.ability_def != null else 0.0
+	for id in _allies.keys():
+		var entry: Dictionary = _allies[id]
+		var ax: float = float(entry["x"])
+		var ay: float = float(entry["y"])
+		var hp: int = int(entry["hp"])
+		if hp <= 0:
+			continue
+		var dx: float = ax - origin.x
+		var dy: float = ay - origin.y
+		if dx * dx + dy * dy > radius * radius:
+			continue
+		var before: int = hp
+		_heal_target(int(id), ax, ay, int(entry["max_hp"]), false, st)
+		if ally_hp(int(id)) > before:
+			healed_ally = true
+	if healed_ally:
+		st.ally_ability_heals += 1
+
+
+func _heal_target(id: int, _x: float, _y: float, max_hp: int, is_self: bool, st: PlayerAbilityState) -> void:
+	if st.ability_def == null or max_hp <= 0:
+		return
+	var raw: float = st.ability_def.heal_max_hp_frac * float(max_hp)
+	var heal: int = SimScaling.round_half_up(raw)
+	if heal <= 0:
+		return
+	if is_self:
+		_player_hp = mini(_current_max_hp(), _player_hp + heal)
+		return
+	if not _allies.has(id):
+		return
+	var cap: int = int(_allies[id]["max_hp"])
+	var hp: int = int(_allies[id]["hp"])
+	_allies[id]["hp"] = mini(cap, hp + heal)
+
+
+func _apply_slipstep(player_id: int, st: PlayerAbilityState) -> void:
+	var dist: float = st.ability_def.blink_tiles if st.ability_def != null else 0.0
+	if dist <= 0.0:
+		return
+	# Only the authority player has movement state today; the API still
+	# takes player_id so a later shared world can blink any player.
+	if player_id != _player_id:
+		return
+	var mx: float = _intent.move_x
+	var my: float = _intent.move_y
+	var move_len: float = sqrt(mx * mx + my * my)
+	var dx: float
+	var dy: float
+	if move_len > SimConstants.MOVE_EPS:
+		dx = mx / move_len
+		dy = my / move_len
+	else:
+		dx = cos(_aim)
+		dy = sin(_aim)
+	var dest := _blink_destination(_px, _py, dx, dy, dist)
+	_px = dest[0]
+	_py = dest[1]
+	# Teleport: do not sweep contact or bullets along the path.
+	_prev_px = _px
+	_prev_py = _py
+
+
+func _blink_destination(sx: float, sy: float, dx: float, dy: float, dist: float) -> PackedFloat64Array:
+	# PackedFloat64Array, not Vector2: Godot's Vector2 is float32 and would
+	# coarsen the sim's float64 positions.
+	var ex: float = sx + dx * dist
+	var ey: float = sy + dy * dist
+	var t_end: float = 1.0
+	if _has_bounds:
+		var r: float = _config.player_radius_tiles
+		t_end = _clip_segment_t(sx, ex, _bound_min_x + r, _bound_max_x - r, t_end)
+		t_end = _clip_segment_t(sy, ey, _bound_min_y + r, _bound_max_y - r, t_end)
+	t_end = _clip_blocked_tiles_t(sx, sy, ex, ey, t_end)
+	return PackedFloat64Array([sx + (ex - sx) * t_end, sy + (ey - sy) * t_end])
+
+
+func _clip_segment_t(start: float, dest: float, lo: float, hi: float, t_end: float) -> float:
+	var span: float = dest - start
+	if abs(span) <= SimConstants.MOVE_EPS:
+		return t_end
+	if dest > hi:
+		t_end = minf(t_end, (hi - start) / span)
+	elif dest < lo:
+		t_end = minf(t_end, (lo - start) / span)
+	return maxf(0.0, t_end)
+
+
+func _clip_blocked_tiles_t(sx: float, sy: float, ex: float, ey: float, t_end: float) -> float:
+	# March tile boundaries along the segment and stop at the first blocked tile.
+	var steps: int = 128
+	var last_ok: float = 0.0
+	for i in range(1, steps + 1):
+		var t: float = t_end * float(i) / float(steps)
+		var x: float = sx + (ex - sx) * t
+		var y: float = sy + (ey - sy) * t
+		# Nudge onto the incoming side of a boundary so floor() is stable.
+		if _tile_is_blocked(int(floor(x)), int(floor(y))):
+			return last_ok
+		last_ok = t
+	return t_end
+
+
+func _tile_is_blocked(tx: int, ty: int) -> bool:
+	if _blocking_tiles.has(Vector2i(tx, ty)):
+		return true
+	if not _has_bounds:
+		return false
+	if tx < int(floor(_bound_min_x)) or ty < int(floor(_bound_min_y)):
+		return true
+	if tx >= int(ceil(_bound_max_x)) or ty >= int(ceil(_bound_max_y)):
+		return true
+	return false
 
 
 func _apply_interact(_sim_tick: int) -> void:
