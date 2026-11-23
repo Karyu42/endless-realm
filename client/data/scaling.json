@@ -1,0 +1,39 @@
+{
+  "m_intercept": 1.0,
+  "m_per_level": 0.05,
+  "g_intercept": 1.0,
+  "g_per_tier": 0.25,
+  "xp": {
+    "kill_xp_coef": 10,
+    "kills_to_level_base": 10,
+    "kills_to_level_coef": 2,
+    "kills_to_level_exp": 0.75,
+    "type_mult": {
+      "normal": 1,
+      "elite": 5,
+      "boss": 50
+    },
+    "under_level_cap": 10,
+    "over_level_penalty_per_level": 0.05,
+    "over_level_penalty_min": 0.1
+  },
+  "d": {
+    "per_level": 0.02,
+    "min": 0.60,
+    "max": 1.30
+  },
+  "sync_plus": 5,
+  "group_hp": {
+    "kink": 8,
+    "n_max": 50,
+    "normal": { "k": 60, "t": 30 },
+    "boss": { "k": 75, "t": 38 }
+  },
+  "riftstone": {
+    "yield_coef": 4,
+    "deposit_coef": 5
+  },
+  "interact_prompt_range_tiles": 1.5,
+  "interact_accept_range_tiles": 2.0,
+  "practice_yard_content_level": 1
+}

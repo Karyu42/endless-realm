@@ -6,7 +6,8 @@ and converted to radians (Godot 2D convention) at load. Distances are **tiles**.
 
 This pack has the first practice-yard enemy (`burrmite`) and its `burr_spit`
 pattern, plus a `fixture_gap_ring` pattern used only by golden tests
-(to cover PCG32 `skip.start = "rng"`). Names and numbers follow
+(to cover PCG32 `skip.start = "rng"`), class bases, vision scaling
+coefficients, and v0.1 loot tables. Names and numbers follow
 [`docs/design/content-v0.1.md`](../docs/design/content-v0.1.md).
 
 The Godot client ships a copy under [`client/data/`](../client/data/) so the

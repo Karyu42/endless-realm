@@ -8,3 +8,9 @@ const TICK_DT: float = 1.0 / 20.0
 const TILE_PX: float = 16.0
 const PROTOCOL_VERSION: int = 1
 const MOVE_EPS: float = 1e-12
+
+
+static func interact_distance(ax: float, ay: float, bx: float, by: float) -> float:
+	var dx: float = ax - bx
+	var dy: float = ay - by
+	return sqrt(dx * dx + dy * dy)

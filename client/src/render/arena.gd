@@ -7,6 +7,9 @@ const FLASH_COLOR := Color(1.0, 0.55, 0.45)
 const ENEMY_COLOR := Color(0.78, 0.42, 0.38)
 const SHOT_COLOR := Color(0.48, 0.82, 0.78)
 const PATTERN_COLOR := Color(0.92, 0.62, 0.28)
+const BAG_BROWN := Color(0.55, 0.38, 0.22)
+const BAG_TEAL := Color(0.28, 0.72, 0.70)
+const BAG_GOLD := Color(0.92, 0.74, 0.28)
 
 var _sticks: VirtualSticks
 var _player: Polygon2D
@@ -16,6 +19,14 @@ var _enemies: Node2D
 var _camera: Camera2D
 var _hint: Label
 var _hp: Label
+var _level: Label
+var _xp: Label
+var _xp_bar: ProgressBar
+var _inv: Label
+var _bags: Node2D
+var _bag_views: Dictionary = {}
+var _bag_free: Array[Polygon2D] = []
+var _loot_btn: Button
 var _shot_views: Dictionary = {} # projectile id -> Polygon2D
 var _pattern_views: Dictionary = {}
 var _enemy_views: Dictionary = {}
@@ -35,6 +46,9 @@ func _ready() -> void:
 	_enemies = Node2D.new()
 	_enemies.name = "Enemies"
 	add_child(_enemies)
+	_bags = Node2D.new()
+	_bags.name = "LootBags"
+	add_child(_bags)
 	_player = Polygon2D.new()
 	_player.name = "Player"
 	_player.polygon = PackedVector2Array([
@@ -58,6 +72,30 @@ func _ready() -> void:
 	_hp.name = "HP"
 	_hp.add_theme_font_size_override("font_size", 16)
 	_hp.add_theme_color_override("font_color", Color(0.91, 0.76, 0.48))
+	_level = Label.new()
+	_level.name = "Level"
+	_level.add_theme_font_size_override("font_size", 16)
+	_level.add_theme_color_override("font_color", Color(0.91, 0.76, 0.48))
+	_xp = Label.new()
+	_xp.name = "XP"
+	_xp.add_theme_font_size_override("font_size", 14)
+	_xp.add_theme_color_override("font_color", Color(0.82, 0.9, 0.88))
+	_xp_bar = ProgressBar.new()
+	_xp_bar.name = "XPBar"
+	_xp_bar.min_value = 0.0
+	_xp_bar.max_value = 1.0
+	_xp_bar.value = 0.0
+	_xp_bar.show_percentage = false
+	_xp_bar.custom_minimum_size = Vector2(220, 8)
+	_inv = Label.new()
+	_inv.name = "Inventory"
+	_inv.add_theme_font_size_override("font_size", 14)
+	_inv.add_theme_color_override("font_color", Color(0.82, 0.9, 0.88))
+	_loot_btn = Button.new()
+	_loot_btn.name = "LootButton"
+	_loot_btn.text = "Loot"
+	_loot_btn.visible = false
+	_loot_btn.pressed.connect(_on_loot_pressed)
 	var layer := CanvasLayer.new()
 	layer.layer = 5
 	var margin := MarginContainer.new()
@@ -67,6 +105,11 @@ func _ready() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.add_child(_hint)
 	vbox.add_child(_hp)
+	vbox.add_child(_level)
+	vbox.add_child(_xp)
+	vbox.add_child(_xp_bar)
+	vbox.add_child(_inv)
+	vbox.add_child(_loot_btn)
 	margin.add_child(vbox)
 	layer.add_child(margin)
 	add_child(layer)
@@ -93,6 +136,8 @@ func _process(_delta: float) -> void:
 	_update_enemy_views()
 	_update_shot_views()
 	_update_pattern_views()
+	_update_bag_views()
+	_update_hud()
 	if _hint_touch != _sticks.using_touch:
 		_refresh_hint()
 
@@ -100,9 +145,9 @@ func _process(_delta: float) -> void:
 func _refresh_hint() -> void:
 	_hint_touch = _sticks.using_touch
 	if _hint_touch:
-		_hint.text = "Left stick moves · right stick aims and fires · a Burrmite wanders the yard"
+		_hint.text = "Left stick moves · right stick aims and fires · Loot when a bag is in range · a Burrmite wanders the yard"
 	else:
-		_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · a Burrmite wanders the yard"
+		_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · E to loot · 1–8 equip · a Burrmite wanders the yard"
 
 
 func _sample_input() -> void:
@@ -115,6 +160,12 @@ func _sample_input() -> void:
 	GameSession.move_x = Input.get_axis("move_left", "move_right")
 	GameSession.move_y = Input.get_axis("move_up", "move_down")
 	GameSession.fire_held = Input.is_action_pressed("fire")
+	if Input.is_action_just_pressed("interact"):
+		GameSession.interact_pressed = true
+		GameSession.interact_target_id = _nearest_prompt_interactable_id()
+	for i in range(1, 9):
+		if Input.is_action_just_pressed("inventory_%d" % i):
+			GameSession.inventory_slot = i
 	var player_px := GameSession.interpolated_player_pixels()
 	var mouse := get_global_mouse_position()
 	GameSession.aim = atan2(mouse.y - player_px.y, mouse.x - player_px.x)
@@ -246,3 +297,86 @@ func _update_enemy_views() -> void:
 			y = lerpf(p.y, e.y, alpha)
 		view.position = Vector2(x * SimConstants.TILE_PX, y * SimConstants.TILE_PX)
 		view.rotation = e.aim
+
+func _on_loot_pressed() -> void:
+	GameSession.interact_pressed = true
+	GameSession.interact_target_id = _nearest_prompt_interactable_id()
+
+
+func _prompt_range() -> float:
+	if GameSession.catalog != null and GameSession.catalog.scaling != null:
+		return GameSession.catalog.scaling.interact_prompt_range_tiles
+	return 0.0
+
+
+func _nearest_prompt_interactable_id() -> int:
+	var snap := GameSession.curr_snapshot
+	var best_id: int = 0
+	var best_d: float = _prompt_range()
+	for bag in snap.ground_drops:
+		var d: float = SimConstants.interact_distance(snap.player_x, snap.player_y, bag.x, bag.y)
+		if GameSession.catalog.scaling.in_prompt_range(d) and d <= best_d:
+			best_d = d
+			best_id = bag.id
+	return best_id
+
+
+func _bag_in_range() -> bool:
+	return _nearest_prompt_interactable_id() != 0
+
+
+func _update_hud() -> void:
+	var snap := GameSession.curr_snapshot
+	_hp.text = "HP %d / %d" % [snap.player_hp, snap.player_max_hp]
+	_level.text = "Lv %d" % snap.player_level
+	var need: int = snap.xp_to_next_tenths
+	var have: int = snap.xp_tenths
+	var frac: float = 0.0
+	if need > 0:
+		frac = clampf(float(have) / float(need), 0.0, 1.0)
+	_xp.text = "XP %.1f / %.1f" % [float(have) / 10.0, float(need) / 10.0]
+	_xp_bar.value = frac
+	var parts: PackedStringArray = PackedStringArray()
+	for i in range(snap.inventory.size()):
+		var it: ItemState = snap.inventory[i]
+		if it != null:
+			parts.append("%d:%s" % [i + 1, it.display_name()])
+		else:
+			parts.append("%d:—" % [i + 1])
+	var eq: String = "eq:"
+	if snap.equipped_weapon != null:
+		eq += " " + snap.equipped_weapon.display_name()
+	if snap.equipped_armor != null:
+		eq += " " + snap.equipped_armor.display_name()
+	if snap.equipped_charm != null:
+		eq += " " + snap.equipped_charm.display_name()
+	_inv.text = " ".join(parts) + "  " + eq
+	if snap.pending_glint > 0:
+		_inv.text += "  Glint %d (pending)" % snap.pending_glint
+	_loot_btn.visible = _sticks.using_touch and _bag_in_range()
+
+
+func _bag_color(kind: String) -> Color:
+	match kind:
+		"teal":
+			return BAG_TEAL
+		"gold":
+			return BAG_GOLD
+		_:
+			return BAG_BROWN
+
+
+func _update_bag_views() -> void:
+	var snap := GameSession.curr_snapshot
+	var live: Dictionary = {}
+	for bag in snap.ground_drops:
+		live[bag.id] = bag
+	_release_unused(_bag_views, _bag_free, live)
+	for id in live.keys():
+		var bag: GroundDrop = live[id]
+		var kind: String = "brown"
+		if bag.item != null:
+			kind = bag.item.bag_color_kind(bag.t_star)
+		var view := _acquire_view(_bags, _bag_views, _bag_free, id, _bag_color(kind), 6.0, "diamond")
+		view.position = Vector2(bag.x * SimConstants.TILE_PX, bag.y * SimConstants.TILE_PX)
+
