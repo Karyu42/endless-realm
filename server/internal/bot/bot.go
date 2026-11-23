@@ -41,6 +41,7 @@ type Config struct {
 	Mult         string
 	Duration     time.Duration
 	StallTimeout time.Duration
+	Input        string
 }
 
 // Result is filled by a successful or failed Run. Summary is for exit 0.
@@ -67,6 +68,7 @@ func parseFlags(eh flag.ErrorHandling, args []string) (Config, error) {
 		Seed:         1,
 		Mult:         "1.0",
 		StallTimeout: DefaultStallTimeout,
+		Input:        InputStatic,
 	}
 	fs.StringVar(&cfg.URL, "url", "", "WebSocket URL (env "+EnvSmokeURL+"; default "+DefaultURL+")")
 	fs.IntVar(&cfg.Clients, "clients", cfg.Clients, "number of concurrent clients")
@@ -74,6 +76,7 @@ func parseFlags(eh flag.ErrorHandling, args []string) (Config, error) {
 	fs.StringVar(&cfg.Mult, "mult", cfg.Mult, "expected level multiplier, decimal or hundredths (must match Welcome)")
 	fs.DurationVar(&cfg.Duration, "duration", 0, "soak length (e.g. 10m); if set, the bot exits 0 after this long once every client has a snapshot")
 	fs.DurationVar(&cfg.StallTimeout, "stall-timeout", cfg.StallTimeout, "fail a soak if no new snapshot arrives for this long")
+	fs.StringVar(&cfg.Input, "input", cfg.Input, "input pattern: static (move +X, fire) or wander (per-client turning walk, fire)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -91,6 +94,9 @@ func parseFlags(eh flag.ErrorHandling, args []string) (Config, error) {
 	}
 	if _, err := instance.ParseMultiplier(cfg.Mult); err != nil {
 		return Config{}, fmt.Errorf("-mult: %w", err)
+	}
+	if err := validInputMode(cfg.Input); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -123,9 +129,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	)
 	for i := 0; i < cfg.Clients; i++ {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			n, err := runOne(ctx, cfg, m100)
+			n, err := runOne(ctx, cfg, m100, i)
 			snaps.Add(n)
 			if err != nil {
 				once.Do(func() {
@@ -133,7 +139,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 					cancel()
 				})
 			}
-		}()
+		}(i)
 	}
 	wg.Wait()
 	res.Snapshots = snaps.Load()
@@ -141,7 +147,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	return res, first
 }
 
-func runOne(ctx context.Context, cfg Config, wantM100 int) (uint64, error) {
+func runOne(ctx context.Context, cfg Config, wantM100, idx int) (uint64, error) {
 	conn, _, err := websocket.Dial(ctx, cfg.URL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("dial %s: %w", cfg.URL, err)
@@ -192,7 +198,7 @@ func runOne(ctx context.Context, cfg Config, wantM100 int) (uint64, error) {
 	go track.read(ctx, conn)
 
 	var seq uint32 = 1
-	if err := writeMsg(ctx, conn, inputMsg(seq)); err != nil {
+	if err := writeMsg(ctx, conn, inputFor(cfg.Input, idx, seq)); err != nil {
 		return 0, fmt.Errorf("send input: %w", err)
 	}
 
@@ -230,7 +236,7 @@ func runOne(ctx context.Context, cfg Config, wantM100 int) (uint64, error) {
 				return 0, fmt.Errorf("no new snapshot for %s (last tick %d)", forAgo, track.tick())
 			}
 			seq++
-			if err := writeMsg(ctx, conn, inputMsg(seq)); err != nil {
+			if err := writeMsg(ctx, conn, inputFor(cfg.Input, idx, seq)); err != nil {
 				return 0, fmt.Errorf("soak input: %w", err)
 			}
 		}

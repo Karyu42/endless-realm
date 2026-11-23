@@ -1,0 +1,299 @@
+extends GutTest
+## LobbyHost player cap, deadline tick, and connection limits.
+
+const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
+
+var _host: LobbyHost
+var _clients: Array[WebSocketPeer] = []
+
+
+func after_each() -> void:
+	for ws in _clients:
+		ws.close()
+	_clients.clear()
+	if _host != null:
+		_host.stop()
+		_host = null
+
+
+func _start_host(max_players: int = LobbyHost.DEFAULT_MAX_PLAYERS, clock: Callable = Callable()) -> LobbyHost:
+	var host := LobbyHost.new(SimConfig.new())
+	host.port = 0
+	host.emitter_count = 1
+	host.max_players = max_players
+	if clock.is_valid():
+		host.clock = clock
+	assert_eq(host.start(), OK, "host listens")
+	return host
+
+
+func _connect() -> WebSocketPeer:
+	var ws := WebSocketPeer.new()
+	assert_eq(ws.connect_to_url("ws://127.0.0.1:%d/ws" % _host.port), OK)
+	_clients.append(ws)
+	return ws
+
+
+## Runs host ticks and polls every client until `pred` is true or ~5 s pass.
+func _pump(pred: Callable, max_iters: int = 500) -> bool:
+	for i in range(max_iters):
+		_host.run_tick()
+		for ws in _clients:
+			ws.poll()
+		if pred.call():
+			return true
+		OS.delay_msec(10)
+	return false
+
+
+func _open(ws: WebSocketPeer) -> bool:
+	return _pump(func() -> bool: return ws.get_ready_state() == WebSocketPeer.STATE_OPEN)
+
+
+func _hello() -> PackedByteArray:
+	var msg = PB.ClientMessage.new()
+	msg.new_hello().set_protocol_version(SimConstants.PROTOCOL_VERSION)
+	return msg.to_bytes()
+
+
+func _open_portal() -> PackedByteArray:
+	var msg = PB.ClientMessage.new()
+	msg.new_open_portal().set_m100(100)
+	return msg.to_bytes()
+
+
+## Reads queued server messages; returns [welcomes, snapshots, errors, error_codes].
+func _drain(ws: WebSocketPeer, counts: Dictionary) -> void:
+	while ws.get_available_packet_count() > 0:
+		var m = PB.ServerMessage.new()
+		if m.from_bytes(ws.get_packet()) != PB.PB_ERR.NO_ERRORS:
+			counts["bad"] = counts.get("bad", 0) + 1
+			continue
+		if m.has_welcome():
+			counts["welcome"] = counts.get("welcome", 0) + 1
+		elif m.has_snapshot():
+			counts["snapshot"] = counts.get("snapshot", 0) + 1
+		elif m.has_error():
+			counts["error"] = counts.get("error", 0) + 1
+			counts["last_code"] = m.get_error().get_code()
+
+
+func _closed(ws: WebSocketPeer) -> bool:
+	var s := ws.get_ready_state()
+	return s == WebSocketPeer.STATE_CLOSED or s == WebSocketPeer.STATE_CLOSING
+
+
+# --- player cap -------------------------------------------------------------
+
+func test_max_players_default_is_50() -> void:
+	var host := LobbyHost.new()
+	assert_eq(LobbyHost.DEFAULT_MAX_PLAYERS, 50)
+	assert_eq(host.max_players, 50)
+	assert_eq(host.max_connections(), 50 + LobbyHost.CONNECTION_SLACK)
+
+
+func test_parse_max_players_accepts_1_to_50_and_never_clamps() -> void:
+	assert_eq(LobbyHost.parse_max_players("1"), 1)
+	assert_eq(LobbyHost.parse_max_players("50"), 50)
+	assert_eq(LobbyHost.parse_max_players(" 8 "), 8)
+	for bad in ["0", "51", "-1", "100", "abc", "5.5", "", "1e3"]:
+		assert_eq(LobbyHost.parse_max_players(bad), -1, "rejects %s" % bad)
+
+
+func test_loadtest_override_has_its_own_parser() -> void:
+	assert_eq(LobbyHost.parse_loadtest_unsafe_max_players("100"), 100)
+	assert_eq(LobbyHost.parse_loadtest_unsafe_max_players("0"), -1)
+	assert_eq(LobbyHost.parse_loadtest_unsafe_max_players(str(LobbyHost.LOADTEST_UNSAFE_MAX_PLAYERS_LIMIT + 1)), -1)
+
+
+func _run_host_main(user_args: PackedStringArray) -> int:
+	var args := PackedStringArray(["--headless", "--path", ProjectSettings.globalize_path("res://"),
+		"-s", "res://src/net/host/host_main.gd", "--", "--host", "--port", "0", "--run-seconds", "0.2"])
+	args.append_array(user_args)
+	var out: Array = []
+	return OS.execute(OS.get_executable_path(), args, out, true)
+
+
+func test_host_main_exits_nonzero_on_out_of_range_max_players() -> void:
+	assert_eq(_run_host_main(PackedStringArray(["--max-players", "51"])), 2, "--max-players 51")
+	assert_eq(_run_host_main(PackedStringArray(["--max-players", "0"])), 2, "--max-players 0")
+	OS.set_environment("ER_MAX_PLAYERS", "99")
+	var env_code := _run_host_main(PackedStringArray())
+	OS.unset_environment("ER_MAX_PLAYERS")
+	assert_eq(env_code, 2, "ER_MAX_PLAYERS=99")
+	assert_eq(_run_host_main(PackedStringArray(["--max-players", "50"])), 0, "50 is accepted")
+
+
+func test_full_lobby_replies_instance_full_and_closes() -> void:
+	_host = _start_host(1)
+	var a := _connect()
+	var b := _connect()
+	assert_true(_open(a) and _open(b))
+	a.put_packet(_hello())
+	var ca := {}
+	assert_true(_pump(func() -> bool:
+		_drain(a, ca)
+		return ca.get("welcome", 0) == 1), "first player joins")
+	b.put_packet(_hello())
+	var cb := {}
+	assert_true(_pump(func() -> bool:
+		_drain(b, cb)
+		return cb.get("error", 0) >= 1), "second player gets an Error")
+	assert_eq(cb.get("last_code", -1), PB.ErrorCode.INSTANCE_FULL)
+	assert_eq(cb.get("welcome", 0), 0)
+	assert_true(_pump(func() -> bool: return _closed(b)), "full connection is closed")
+	assert_eq(_host.players.size(), 1)
+
+
+# --- deadline tick ----------------------------------------------------------
+
+func test_on_time_service_runs_one_tick() -> void:
+	var now := [1_000_000]
+	_host = _start_host(LobbyHost.DEFAULT_MAX_PLAYERS, func() -> int: return now[0])
+	_host.service()
+	assert_eq(_host.tick, 0, "nothing due before the first deadline")
+	now[0] += LobbyHost.PERIOD_USEC
+	_host.service()
+	assert_eq(_host.tick, 1)
+	assert_eq(_host.skipped_ticks, 0)
+
+
+func test_catch_up_is_capped_at_five_and_the_rest_are_skipped() -> void:
+	var now := [1_000_000]
+	_host = _start_host(LobbyHost.DEFAULT_MAX_PLAYERS, func() -> int: return now[0])
+	var start: int = now[0]
+	# Ten ticks are due (deadlines 1..10); only MAX_CATCH_UP run.
+	now[0] = start + 10 * LobbyHost.PERIOD_USEC + 1
+	_host.service()
+	assert_eq(LobbyHost.MAX_CATCH_UP, 5)
+	assert_eq(_host.tick, 5, "ran exactly the catch-up cap")
+	assert_eq(_host.skipped_ticks, 5, "the other five are counted as skipped")
+	assert_eq(_host.next_deadline_usec(), start + 11 * LobbyHost.PERIOD_USEC, "next deadline stays on the grid")
+	# Back on schedule: one more period runs one tick and skips none.
+	now[0] = start + 11 * LobbyHost.PERIOD_USEC
+	_host.service()
+	assert_eq(_host.tick, 6)
+	assert_eq(_host.skipped_ticks, 5)
+
+
+func test_small_lag_catches_up_without_skipping() -> void:
+	var now := [1_000_000]
+	_host = _start_host(LobbyHost.DEFAULT_MAX_PLAYERS, func() -> int: return now[0])
+	var start: int = now[0]
+	now[0] = start + 3 * LobbyHost.PERIOD_USEC
+	_host.service()
+	assert_eq(_host.tick, 3)
+	assert_eq(_host.skipped_ticks, 0)
+
+
+# --- connection limits ------------------------------------------------------
+
+func test_flooding_client_is_budgeted_and_disconnected_without_starving_others() -> void:
+	_host = _start_host()
+	var observer := _connect()
+	var flooder := _connect()
+	assert_true(_open(observer) and _open(flooder))
+	observer.put_packet(_hello())
+	flooder.put_packet(_hello())
+	var co := {}
+	var cf := {}
+	assert_true(_pump(func() -> bool:
+		_drain(observer, co)
+		_drain(flooder, cf)
+		return co.get("welcome", 0) == 1 and cf.get("welcome", 0) == 1))
+	co["snapshot"] = 0
+	var ticks: int = 0
+	var worst_tick_usec: int = 0
+	for i in range(60):
+		if flooder.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			for j in range(LobbyHost.MAX_MESSAGES_PER_TICK * 10):
+				flooder.put_packet(_open_portal())
+		flooder.poll()
+		OS.delay_msec(5)
+		var t0 := Time.get_ticks_usec()
+		_host.run_tick()
+		worst_tick_usec = maxi(worst_tick_usec, Time.get_ticks_usec() - t0)
+		ticks += 1
+		observer.poll()
+		flooder.poll()
+		_drain(observer, co)
+		_drain(flooder, cf)
+	# Let the last snapshots arrive.
+	for i in range(20):
+		OS.delay_msec(5)
+		observer.poll()
+		_drain(observer, co)
+	assert_gt(_host.dropped_messages, 0, "excess messages are dropped")
+	assert_eq(_host.budget_disconnects, 1, "sustained excess disconnects the flooder")
+	assert_true(_closed(flooder), "flooder is closed")
+	assert_eq(_host.players.size(), 1, "flooder's player is removed")
+	assert_eq(co.get("snapshot", 0), ticks, "observer got a snapshot every tick")
+	assert_lt(worst_tick_usec, LobbyHost.PERIOD_USEC, "flood does not blow the tick budget")
+	assert_lte(cf.get("error", 0), LobbyHost.MAX_ERROR_REPLIES_PER_WINDOW * (ticks / LobbyHost.ERROR_WINDOW_TICKS + 1),
+		"Error replies stay rate limited")
+
+
+func test_error_replies_are_rate_limited_per_connection() -> void:
+	_host = _start_host()
+	var ws := _connect()
+	assert_true(_open(ws))
+	ws.put_packet(_hello())
+	var c := {}
+	assert_true(_pump(func() -> bool:
+		_drain(ws, c)
+		return c.get("welcome", 0) == 1))
+	# Two bad requests per tick stays inside the message budget, so only the
+	# Error rate limit applies. Stay inside one error window.
+	var sent: int = 0
+	for i in range(LobbyHost.ERROR_WINDOW_TICKS - 2):
+		ws.put_packet(_open_portal())
+		ws.put_packet(_open_portal())
+		sent += 2
+		ws.poll()
+		OS.delay_msec(5)
+		_host.run_tick()
+		ws.poll()
+		_drain(ws, c)
+	for i in range(10):
+		OS.delay_msec(5)
+		ws.poll()
+		_drain(ws, c)
+	assert_eq(c.get("error", 0), LobbyHost.MAX_ERROR_REPLIES_PER_WINDOW, "only the first few get an Error")
+	assert_gt(_host.suppressed_errors, 0)
+	assert_eq(ws.get_ready_state(), WebSocketPeer.STATE_OPEN, "rate limiting alone does not disconnect")
+
+
+func test_idle_connection_without_hello_is_closed_after_timeout() -> void:
+	var now := [1_000_000]
+	_host = _start_host(LobbyHost.DEFAULT_MAX_PLAYERS, func() -> int: return now[0])
+	var idle := _connect()
+	var late := _connect()
+	assert_true(_open(idle) and _open(late))
+	now[0] += LobbyHost.HANDSHAKE_TIMEOUT_USEC - 1_000_000
+	late.put_packet(_hello())
+	var cl := {}
+	assert_true(_pump(func() -> bool:
+		_drain(late, cl)
+		return cl.get("welcome", 0) == 1), "Hello inside the timeout is welcomed")
+	now[0] += 2_000_000
+	assert_true(_pump(func() -> bool: return _closed(idle)), "idle connection is closed")
+	assert_eq(_host.handshake_timeouts, 1)
+	assert_eq(late.get_ready_state(), WebSocketPeer.STATE_OPEN, "joined player is unaffected")
+
+
+func test_connections_over_the_cap_are_refused() -> void:
+	_host = _start_host(1)
+	var cap := _host.max_connections()
+	assert_eq(cap, 1 + LobbyHost.CONNECTION_SLACK)
+	var accepted: Array[WebSocketPeer] = []
+	for i in range(cap):
+		accepted.append(_connect())
+	assert_true(_pump(func() -> bool:
+		for ws in accepted:
+			if ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
+				return false
+		return true), "connections up to the cap open")
+	var extra := _connect()
+	assert_true(_pump(func() -> bool: return extra.get_ready_state() == WebSocketPeer.STATE_CLOSED), "extra connection is refused")
+	assert_eq(_host.refused_connections, 1)
+	assert_eq(_host.connection_count(), cap)

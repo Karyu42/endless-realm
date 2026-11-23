@@ -1,0 +1,44 @@
+// LOADTEST-ONLY projection of a full-state snapshot. This is NOT the wire
+// protocol (proto/v1 is). The Godot host load test encodes one of these per
+// tick, in addition to the real proto/v1 Snapshot it sends, so the measured
+// tick time and the reported "projected" bytes include what a real snapshot
+// with positions and closed-form spawn events would cost. When proto/v1 grows
+// these fields for real, delete this file and its generated loadtest_state_pb.gd.
+syntax = "proto3";
+
+package endless.loadtest;
+
+message PlayerState {
+  uint32 id = 1;
+  uint32 applied_seq = 2;
+  float x = 3;
+  float y = 4;
+  float aim = 5;
+  uint32 hp = 6;
+}
+
+// Closed-form enemy pattern: clients rebuild every bullet from these fields.
+message PatternSpawn {
+  uint32 emitter_id = 1;
+  uint32 pattern_id = 2;
+  uint64 seed = 3;
+  uint32 spawn_tick = 4;
+  float x = 5;
+  float y = 6;
+}
+
+// Closed-form player shot.
+message ShotSpawn {
+  uint32 owner = 1;
+  uint32 spawn_tick = 2;
+  float x = 3;
+  float y = 4;
+  float angle = 5;
+}
+
+message FullSnapshot {
+  uint32 tick = 1;
+  repeated PlayerState players = 2;
+  repeated PatternSpawn spawns = 3;
+  repeated ShotSpawn shots = 4;
+}

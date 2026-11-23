@@ -9,3 +9,7 @@ server/bin/
 client/addons/gut/
 client/test_results/
 *.translation
+
+# Load test output (tools/loadtest)
+loadtest-results/
+__pycache__/

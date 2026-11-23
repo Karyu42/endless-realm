@@ -45,8 +45,8 @@ These fill gaps in `vision.md` and don't change any of its formulas:
 - **Scaled HP rounding:** max HP is computed in exact integer math and rounded half-up once, at spawn (or at the seal for the boss):
   `HP = (baseHP × m100(E) × s100(n) + 5000) div 10000`, where `m100(E) = 100 + 5 × (E − 1)` and `s100(n)` is the vision §3.5 curve (`100 + 60 × (n − 1)` for normal enemies and `100 + 75 × (n − 1)` for the boss up to n = 8, then +30 and +38 per extra player). When `n_peak` rises, max HP is recomputed and current HP keeps its fraction (vision §3.5). Phase thresholds compare current HP against `max HP × threshold` in the same integer math. Example: Tallow Warden at E=10, n=8 → `(5500 × 145 × 625 + 5000) div 10000 = 49,844`.
 - **Fire on press (all weapons):** the first shot fires on the tick fire is pressed, if the weapon is off cooldown. The cooldown is `1 / (Tempo × (1 + tempoBonus))` seconds, counted from that shot, and it keeps running after release. Tapping can therefore never beat the fire rate. The exact rule is in §1.
-- **Vault Sigil binding:** a Sigil is bound to the character who bought it (§3.5). This is consistent with vision §5 "not tradeable" and doesn't change it. If the buyer is **Fallen** (hardcore) or **deleted**, every Sigil bound to them, in inventory or in the stash, is tombstoned in the same transaction. The tombstone reason is `CONSUMED`, so there is no refund and no unusable leftovers. Vision §8.2 defines a tombstone as only `state`, `reason` and timestamp, and this spec adds **no item field**. As a content-level extension, the cause (`owner_fallen` or `owner_deleted`) is recorded as reason metadata in the audit entry of the transaction that tombstones the Sigils, not on the item row.
-  - **Incident revert:** if a hardcore death is reverted inside an incident window (vision §7.3), the Sigils tombstoned in that death's transaction are un-tombstoned and restored to their owner with the same `item_uid` and location, as part of the same audited revert. Deleting a character is never reverted by an incident window. A pointer to this rule goes into vision §5 the next time `vision.md` is edited.
+- **Vault Sigil binding:** a Sigil is bound to the character who bought it (§3.5). This is consistent with vision §5 "not tradeable" and doesn't change it. If the buyer is **Fallen** (hardcore) or **deleted**, every Sigil bound to them, in inventory or in the stash, is tombstoned in the same transaction. The tombstone reason is `CONSUMED`, so there is no refund and no unusable leftovers. Vision §8.2 defines a tombstone as only `state`, `reason` and timestamp, and this spec adds **no item field**. As a content-level extension, the cause (`owner_fallen` or `owner_deleted`) is recorded as reason metadata in one **host audit-log row**, not on the item row. It goes in the same audit log as the incident-revert rows of vision §7.3, under the retention row "Host-admin, import, incident, revert and Sigil-tombstone audit rows (including the tombstone cause, `owner_fallen` / `owner_deleted`)" in vision §8.3. That row is written in the same transaction that tombstones the Sigils, with the transaction id, the character, the tombstoned `item_uid`s, reason `CONSUMED`, the cause and a UTC timestamp. The server writes it there, and QA can assert on it there.
+  - **Incident revert:** if a hardcore death is reverted inside an incident window (vision §7.3), the Sigils tombstoned in that death's transaction are un-tombstoned and restored to their owner with the same `item_uid` and location, as part of the same audited revert. Deleting a character is never reverted by an incident window. Vision §5 points to this rule.
 - **Hazard timing:** a hazard's `duration_ticks` does **not** include its telegraph. The telegraph runs first for `telegraph_ticks`, then the hazard is active for `duration_ticks` (details in §5).
 - **Spiral emits and defaults:** see `spiral` in §5.
 
@@ -60,7 +60,7 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 - If fire has been held on every tick since the previous volley (one continuous hold), set `next_ready = next_ready + cd`. This keeps the long-run rate exact even though `cd` isn't a whole number of ticks.
 - Otherwise (the first volley after a press), set `next_ready = now + cd`.
 - Releasing fire never resets `next_ready`. The cooldown keeps running, so a re-press fires only once `now ≥ next_ready`.
-- **Blocked ticks (no catch-up):** a tick where firing is blocked (for example the Kindle Pulse 5-tick cast lock, §1.2) **breaks the continuous hold**. When the block ends, the next volley fires on the first tick where `now ≥ max(next_ready, block end)`, and the schedule restarts from that shot (`next_ready = now + cd`). There is never a catch-up burst.
+- **Blocked ticks (no catch-up):** a tick where firing is blocked (for example the Kindle Pulse 5-tick cast lock, §1.2) **breaks the continuous hold**. When the block ends, the next volley fires on the first tick where `now ≥ max(next_ready, block_end)`. `block_end` is the **first tick where firing is no longer blocked**, not the last blocked tick. In the Gleamwright golden value, a 5-tick lock on ticks 14–18 gives `block_end` = 19. Then the schedule restarts from that shot (`next_ready = now + cd`). There is never a catch-up burst.
 - **Rate change mid-hold** (for example a charm swap changing `tempoBonus`): `cd` is recomputed at once, but it applies from the next scheduled shot. The pending `next_ready` stays as it is, and the new `cd` is added after the next volley fires.
 
 Golden values:
@@ -158,6 +158,10 @@ With vision §3.5 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 - **Desktop:** WASD to move, mouse to aim, hold the left button to fire, Space or the right button for the ability, E to interact or loot, 1–8 for inventory slots, Enter for chat.
 - **Android:** twin-stick (left stick moves, right stick aims and fires while held), an ability button above the right stick, a tap-to-loot prompt, and an optional auto-fire toggle.
 - **Input frame:** the tech stack's `(move, aim, fire_held, seq)` plus one `ability_pressed` bit and an optional `interact_target_id`. The ability fires on the tick the server receives it, if Focus and the cooldown allow.
+- **Interact range:** one range applies to every interactable: loot bags, portals, the portal board, vendors and the stash.
+  - The **client** uses **1.5 tiles**, center to center, for the "E to interact" / tap prompt and for auto-selecting the target.
+  - The **server** accepts an `interact_target_id` up to **2.0 tiles** away, center to center, measured on the tick it processes the input. The extra 0.5 tiles is latency tolerance only.
+  - Beyond 2.0 tiles, the server **silently drops** the request: nothing happens and no error is sent.
 
 ---
 
@@ -198,7 +202,7 @@ With vision §3.5 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 - **Contact damage** is applied at most once per 0.5 s per enemy–player pair.
 
 ### 2.3 Behaviors and patterns
-"Every X s" is measured from the end of the previous attack, and the first attack comes X s after aggro. **AI `fire` steps don't block.** A `fire` step starts the pattern and the AI goes straight to its next step, while multi-emit patterns (bursts, spirals) keep emitting on their own. Any wait after an attack is an explicit `wait` step measured from the `fire` step. For the AI-step enemies below, the listed waits already include this, so an Acolyte cross (emits on ticks 0 and 10) starts every 48 ticks, which is 38 ticks after its last emit. Aggro radius is 8 tiles unless stated otherwise. The target is the nearest player in aggro range, re-picked every 1 s.
+For **timer-triggered patterns** (`trigger: timer`), "every X s" is measured from the end of the previous attack, and the first attack comes X s after aggro. For example, `wisp_spiral` pauses 2.0 s after its 2.0 s spiral ends. AI-step enemies follow only the `fire`/`wait` rule below, so each enemy has exactly one timing rule. **AI `fire` steps don't block.** A `fire` step starts the pattern and the AI goes straight to its next step, while multi-emit patterns (bursts, spirals) keep emitting on their own. Any wait after an attack is an explicit `wait` step measured from the `fire` step. For the AI-step enemies below, the listed waits already include this, so an Acolyte cross (emits on ticks 0 and 10) starts every 48 ticks, which is 38 ticks after its last emit. Aggro radius is 8 tiles unless stated otherwise. The target is the nearest player in aggro range, re-picked every 1 s.
 
 **Burrmite** (skittering beetle, packs of 3)
 - AI: wanders at 1.5 tiles/s. On aggro it closes to 3 tiles, then strafes around the target at 3 tiles, switching direction every 2 s.
@@ -243,6 +247,12 @@ With vision §3.5 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
   4. A 1.5 s pause.
 - **Portal drop:** on death, there is a 10% chance a found Hollowmere Vault portal appears where she died (vision §6, and §3.5 here).
 - **Loot:** she uses the normal-enemy rules of vision §4.2 (4%, Normal row) and Glint rule of vision §5. Her XP is the vision §3.4 elite ×5.
+
+### 2.4 Practice yard
+A small tutorial space, separate from the Wilds. Its layout belongs to the client build.
+- **Enemy level:** every enemy in the yard has a **fixed `E = 1`**. The Wilds distance formula (§2.1) doesn't apply there.
+- **Rewards:** each kill gives `killXP(1)`, `ceil(m(1))` = **1 Glint**, and loot rolled at `T* = 0` with the normal enemy rules (§4.2–4.3, vision §4.2).
+- Every other rule (enemy stats at E = 1, patterns, banking, death) is the same as in the Wilds.
 
 ---
 
