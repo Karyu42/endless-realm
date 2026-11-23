@@ -211,6 +211,11 @@ jobs:
             args+=("-gdir=$(IFS=,; echo "${dirs[*]}")" -ginclude_subdirs)
           fi
           godot --headless --path client -s res://addons/gut/gut_cmdln.gd "${args[@]}" 2>&1 | tee "${RUNNER_TEMP}/gut/gut.log"
+      - name: Fail on test scripts that did not load (GUT log backstop)
+        # The post-run hook in client/.gutconfig.json already fails the GUT step;
+        # this scan also runs when that step failed, so the offending lines are shown.
+        if: ${{ !cancelled() && steps.inputs.outputs.present == 'true' }}
+        run: .github/scripts/check-gut-log.sh "${RUNNER_TEMP}/gut/gut.log" client/tests
       - name: Require JUnit XML with >0 tests
         if: steps.inputs.outputs.present == 'true'
         run: python3 .github/scripts/check-junit.py "${RUNNER_TEMP}/gut/junit.xml"
