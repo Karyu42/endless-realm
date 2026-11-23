@@ -455,12 +455,10 @@ type LootBag struct {
 	X             float32                `protobuf:"fixed32,2,opt,name=x,proto3" json:"x,omitempty"`
 	Y             float32                `protobuf:"fixed32,3,opt,name=y,proto3" json:"y,omitempty"`
 	OwnerPlayerId uint64                 `protobuf:"varint,4,opt,name=owner_player_id,json=ownerPlayerId,proto3" json:"owner_player_id,omitempty"`
-	// Tier reference (T*) the bag color is relative to.
+	// Tier reference (T*); the client derives the bag color from it.
 	TStar uint32 `protobuf:"varint,5,opt,name=t_star,json=tStar,proto3" json:"t_star,omitempty"`
-	// 0 = unknown, 1 = brown (tier <= T*), 2 = teal (T*+1), 3 = gold (T*+2 or higher).
-	BagColorKind uint32 `protobuf:"varint,6,opt,name=bag_color_kind,json=bagColorKind,proto3" json:"bag_color_kind,omitempty"`
 	// Server tick the bag dropped on.
-	SpawnTick     uint32 `protobuf:"varint,7,opt,name=spawn_tick,json=spawnTick,proto3" json:"spawn_tick,omitempty"`
+	SpawnTick     uint32 `protobuf:"varint,6,opt,name=spawn_tick,json=spawnTick,proto3" json:"spawn_tick,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -526,13 +524,6 @@ func (x *LootBag) GetOwnerPlayerId() uint64 {
 func (x *LootBag) GetTStar() uint32 {
 	if x != nil {
 		return x.TStar
-	}
-	return 0
-}
-
-func (x *LootBag) GetBagColorKind() uint32 {
-	if x != nil {
-		return x.BagColorKind
 	}
 	return 0
 }
@@ -1398,16 +1389,15 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\bSnapshot\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\rR\x04tick\x120\n" +
 	"\aplayers\x18\x02 \x03(\v2\x16.endless.v1.PlayerStubR\aplayers\x12'\n" +
-	"\x04bags\x18\x03 \x03(\v2\x13.endless.v1.LootBagR\x04bags\"\xb9\x01\n" +
+	"\x04bags\x18\x03 \x03(\v2\x13.endless.v1.LootBagR\x04bags\"\x93\x01\n" +
 	"\aLootBag\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\f\n" +
 	"\x01x\x18\x02 \x01(\x02R\x01x\x12\f\n" +
 	"\x01y\x18\x03 \x01(\x02R\x01y\x12&\n" +
 	"\x0fowner_player_id\x18\x04 \x01(\x04R\rownerPlayerId\x12\x15\n" +
-	"\x06t_star\x18\x05 \x01(\rR\x05tStar\x12$\n" +
-	"\x0ebag_color_kind\x18\x06 \x01(\rR\fbagColorKind\x12\x1d\n" +
+	"\x06t_star\x18\x05 \x01(\rR\x05tStar\x12\x1d\n" +
 	"\n" +
-	"spawn_tick\x18\a \x01(\rR\tspawnTick\"=\n" +
+	"spawn_tick\x18\x06 \x01(\rR\tspawnTick\"=\n" +
 	"\n" +
 	"PlayerStub\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1f\n" +

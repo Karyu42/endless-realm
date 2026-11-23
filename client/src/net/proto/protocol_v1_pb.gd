@@ -1224,12 +1224,7 @@ class LootBag:
 		service.field = __t_star
 		data[__t_star.tag] = service
 		
-		__bag_color_kind = PBField.new("bag_color_kind", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
-		service = PBServiceField.new()
-		service.field = __bag_color_kind
-		data[__bag_color_kind.tag] = service
-		
-		__spawn_tick = PBField.new("spawn_tick", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 7, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		__spawn_tick = PBField.new("spawn_tick", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
 		service = PBServiceField.new()
 		service.field = __spawn_tick
 		data[__spawn_tick.tag] = service
@@ -1301,19 +1296,6 @@ class LootBag:
 	func set_t_star(value : int) -> void:
 		__t_star.value = value
 	
-	var __bag_color_kind: PBField
-	func has_bag_color_kind() -> bool:
-		if __bag_color_kind.value != null:
-			return true
-		return false
-	func get_bag_color_kind() -> int:
-		return __bag_color_kind.value
-	func clear_bag_color_kind() -> void:
-		data[6].state = PB_SERVICE_STATE.UNFILLED
-		__bag_color_kind.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
-	func set_bag_color_kind(value : int) -> void:
-		__bag_color_kind.value = value
-	
 	var __spawn_tick: PBField
 	func has_spawn_tick() -> bool:
 		if __spawn_tick.value != null:
@@ -1322,7 +1304,7 @@ class LootBag:
 	func get_spawn_tick() -> int:
 		return __spawn_tick.value
 	func clear_spawn_tick() -> void:
-		data[7].state = PB_SERVICE_STATE.UNFILLED
+		data[6].state = PB_SERVICE_STATE.UNFILLED
 		__spawn_tick.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
 	func set_spawn_tick(value : int) -> void:
 		__spawn_tick.value = value

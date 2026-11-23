@@ -10,7 +10,7 @@ const GOLDEN_WELCOME := "0801108780808010180c2001300338c801"
 const GOLDEN_ERROR := "3a0a0804120666756c6c2121"
 const GOLDEN_SNAP := "1a0c080512080887808080101004"
 const GOLDEN_INPUT := "120f080915000080bf2801308780808010"
-const GOLDEN_SNAP_BAGS := "1a2208051204080210041a18088780808010150000c03f1d000010402002280130023828"
+const GOLDEN_SNAP_BAGS := "1a2008051204080210041a16088780808010150000c03f1d00001040200228013028"
 
 
 func test_welcome_instance_and_uint64_player_id_match_go() -> void:
@@ -91,7 +91,6 @@ func test_snapshot_loot_bags_match_go() -> void:
 	b.set_y(2.25)
 	b.set_owner_player_id(2)
 	b.set_t_star(1)
-	b.set_bag_color_kind(2)
 	b.set_spawn_tick(40)
 	assert_eq(m.to_bytes().hex_encode(), GOLDEN_SNAP_BAGS, "encodes like Go")
 	var d = PB.ServerMessage.new()
@@ -103,7 +102,6 @@ func test_snapshot_loot_bags_match_go() -> void:
 	assert_almost_eq(bags[0].get_y(), 2.25, 1e-6)
 	assert_eq(bags[0].get_owner_player_id(), 2)
 	assert_eq(bags[0].get_t_star(), 1)
-	assert_eq(bags[0].get_bag_color_kind(), 2)
 	assert_eq(bags[0].get_spawn_tick(), 40)
 	# Old snapshot bytes decode with no bags.
 	var o = PB.ServerMessage.new()

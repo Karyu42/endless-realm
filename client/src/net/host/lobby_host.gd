@@ -37,8 +37,6 @@ const START_HP: int = 100
 ## Class for remote players until the host-lobby protocol carries one.
 ## TODO(host-lobby protocol PR): take the class from the joining client.
 const DEFAULT_CLASS_ID := "thornguard"
-## Snapshot.LootBag.bag_color_kind values (proto/v1). 0 = unknown.
-const BAG_COLOR_KINDS := {"brown": 1, "teal": 2, "gold": 3}
 const EMITTER_RADIUS: float = 0.6
 ## Matches the Go server's instance.DefaultInstanceID (the smoke instance).
 const DEFAULT_INSTANCE_ID: int = 1
@@ -152,6 +150,7 @@ var on_interact: Callable = Callable()
 ## The shared world: every player, enemy, projectile and loot bag.
 var sim: LocalSim
 var catalog: DataCatalog
+var _sim_stepped: bool = false
 
 # State
 var tick: int = 0
@@ -657,6 +656,11 @@ static func _finite_or_zero(v: float) -> float:
 
 func _add_player(character: Variant = null) -> HostPlayer:
 	var p := HostPlayer.new()
+	# Sim-only players (e.g. LocalSim.place_ally) share the sim roster but are
+	# not host players: they never count toward max_players, get no socket or
+	# Snapshot stub, and their ids are never reused for a joining player.
+	while _sim_id_taken(_next_player_id):
+		_next_player_id += 1
 	p.id = _next_player_id
 	_next_player_id += 1
 	# Spread spawns over the arena deterministically by id.
@@ -668,7 +672,7 @@ func _add_player(character: Variant = null) -> HostPlayer:
 	p.x = float(rec["x"])
 	p.y = float(rec["y"])
 	if sim.get_player(p.id) != null:
-		# Only LocalSim's built-in player 1 before the first step: keep it
+		# LocalSim's built-in player 1 before the first step: keep it
 		# (add_player cancels its pending removal) and set it up in place.
 		sim.add_player(p.id)
 		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if rec.has("hp") else -1)
@@ -678,6 +682,16 @@ func _add_player(character: Variant = null) -> HostPlayer:
 	p.join_tick = tick
 	players.append(p)
 	return p
+
+
+## True if `id` is already a sim player the host does not own. LocalSim's
+## built-in player 1 is free until the first step removes it.
+func _sim_id_taken(id: int) -> bool:
+	if _find_player(id) != null:
+		return true
+	if sim.get_player(id) == null:
+		return false
+	return not (id == 1 and not _sim_stepped)
 
 
 ## Character record for LocalSim.add_player: class (default for remote and
@@ -725,6 +739,7 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			p.ability_pressed = false  # one-shot
 		sim.apply_input(p.id, intent)
 	sim.step()
+	_sim_stepped = true
 	var px := PackedFloat64Array()
 	var py := PackedFloat64Array()
 	var hp := PackedInt32Array()
@@ -820,7 +835,6 @@ func _encode_snapshot_for(bags: Array) -> PackedByteArray:
 		b.set_y(bag.y)
 		b.set_owner_player_id(bag.item.owner_player_id)
 		b.set_t_star(maxi(bag.t_star, 0))
-		b.set_bag_color_kind(int(BAG_COLOR_KINDS.get(bag.item.bag_color_kind(bag.t_star), 0)))
 		b.set_spawn_tick(maxi(bag.spawn_tick, 0))
 	return msg.to_bytes()
 
