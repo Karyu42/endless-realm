@@ -47,6 +47,152 @@
         "pattern": "spore_ring",
         "fire_interval_ticks": 40
       }
+    },
+    {
+      "id": "waxen_acolyte",
+      "name": "Waxen Acolyte",
+      "rank": "normal",
+      "base": {
+        "hp": 150,
+        "ward": 8,
+        "contact": 12,
+        "damage": {
+          "cross": 18
+        }
+      },
+      "move_speed": 2.5,
+      "radius": 0.45,
+      "aggro_radius": 8.0,
+      "hover_radius": 5.0,
+      "leash": 16.0,
+      "strafe_switch_ticks": 40,
+      "ai": {
+        "type": "chase_hover",
+        "pattern": "acolyte_cross",
+        "fire_interval_ticks": 48
+      }
+    },
+    {
+      "id": "tallow_warden",
+      "name": "the Tallow Warden",
+      "rank": "boss",
+      "party_scaling": "boss",
+      "target_rule": "living_in_arena",
+      "base": {
+        "hp": 5500,
+        "ward": 20,
+        "contact": 40,
+        "damage": {
+          "p1_ring": 22,
+          "p1_drip": 28,
+          "p2_spiral": 20,
+          "p2_lunge": 30,
+          "p2_pool": 15,
+          "p3_spiral": 22,
+          "p3_ring": 26
+        }
+      },
+      "move_speed": 1.5,
+      "radius": 1.2,
+      "aggro_radius": 16.0,
+      "deaggro_radius": 24.0,
+      "no_leash": true,
+      "ai": {
+        "type": "boss"
+      },
+      "phases": [
+        {
+          "id": "p1",
+          "hp_above": 0.66,
+          "move_speed": 1.5,
+          "move": "drift_center",
+          "loops": [
+            {
+              "pattern": "warden_wickring",
+              "every_ticks": 32,
+              "offset_ticks": 0
+            },
+            {
+              "pattern": "warden_drip",
+              "every_ticks": 20,
+              "offset_ticks": 10
+            }
+          ]
+        },
+        {
+          "id": "t1",
+          "transition": true,
+          "ticks": 40,
+          "invulnerable": true,
+          "on_enter": [
+            {
+              "summon": "waxen_acolyte",
+              "at": "corners",
+              "count": 4,
+              "loot": false
+            }
+          ]
+        },
+        {
+          "id": "p2",
+          "hp_above": 0.33,
+          "move_speed": 1.0,
+          "move": "drift_center",
+          "loop_ticks": 120,
+          "loops": [
+            {
+              "pattern": "warden_spiral",
+              "window_start_ticks": 0,
+              "window_end_ticks": 80
+            },
+            {
+              "pattern": "warden_pools",
+              "at_loop_start": true
+            },
+            {
+              "pattern": "warden_lunge_fan",
+              "window_start_ticks": 80,
+              "window_end_ticks": 120,
+              "once_per_loop": true
+            }
+          ]
+        },
+        {
+          "id": "t2",
+          "transition": true,
+          "ticks": 60,
+          "invulnerable": true,
+          "move_to": "center"
+        },
+        {
+          "id": "p3",
+          "hp_above": 0.0,
+          "move_speed": 0,
+          "move": "anchor_center",
+          "enrage": {
+            "timer_start": "seal",
+            "after_ticks": 4800,
+            "interval_mult": 0.8
+          },
+          "loops": [
+            {
+              "pattern": "warden_twinspiral_a",
+              "every_ticks": 3,
+              "offset_ticks": 0
+            },
+            {
+              "pattern": "warden_twinspiral_b",
+              "every_ticks": 3,
+              "offset_ticks": 0
+            },
+            {
+              "pattern": "warden_gapring",
+              "every_ticks": 60,
+              "offset_ticks": 0
+            }
+          ]
+        }
+      ]
     }
   ]
 }

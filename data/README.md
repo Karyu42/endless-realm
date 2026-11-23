@@ -5,10 +5,11 @@ Versioned JSON loaded by both the Godot client and the Go server. Schemas live i
 and converted to radians (Godot 2D convention) at load. Distances are **tiles**.
 
 This pack has the practice-yard enemies `burrmite` (`burr_spit`) and
-`driftcap_spore` (`spore_ring`), class bases and the three v0.1 class
-abilities, vision scaling coefficients, v0.1 loot tables, and a first tiny
-slice of **the Hollowmere Vault** (`data/dungeons/hollowmere_vault.json`,
-validated by `dungeons.schema.json`).
+`driftcap_spore` (`spore_ring`), the **Tallow Warden** boss and its Waxen
+Acolyte adds, class bases and the three v0.1 class abilities, vision scaling
+coefficients, v0.1 loot tables, and a first tiny slice of **the Hollowmere
+Vault** (`data/dungeons/hollowmere_vault.json`, validated by
+`dungeons.schema.json`). Defeating the Warden opens the vault exit.
 The `fixture_gap_ring` pattern used only by golden tests (to cover PCG32
 `skip.start = "rng"`) lives in `fixtures/patterns/defs.json`, not in the
 shipped game pack. Names and numbers follow

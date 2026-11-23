@@ -1,0 +1,199 @@
+{
+  "cases": [
+    {
+      "name": "warden_spiral_emit0_aimed0_t10",
+      "pattern_id": "warden_spiral",
+      "seed": "1",
+      "spawn_tick": 0,
+      "origin": [
+        0,
+        0
+      ],
+      "aim_rad": 0,
+      "volley_index": 0,
+      "ticks": [
+        10
+      ],
+      "notes": "4 arms, 90° apart; emit 0 at aim 0. Positions at tick 10 (speed 4).",
+      "expected": {
+        "10": [
+          {
+            "x": 2,
+            "y": 0,
+            "index": 0
+          },
+          {
+            "x": 1.2246467991473515e-16,
+            "y": 2,
+            "index": 1
+          },
+          {
+            "x": -2,
+            "y": 2.449293598294703e-16,
+            "index": 2
+          },
+          {
+            "x": -3.6739403974420544e-16,
+            "y": -2,
+            "index": 3
+          }
+        ]
+      }
+    },
+    {
+      "name": "warden_spiral_emit1_plus9deg_t10",
+      "pattern_id": "warden_spiral",
+      "seed": "1",
+      "spawn_tick": 0,
+      "origin": [
+        0,
+        0
+      ],
+      "aim_rad": 0,
+      "volley_index": 1,
+      "ticks": [
+        10
+      ],
+      "notes": "Emit 1 rotates +9° from emit 0.",
+      "expected": {
+        "10": [
+          {
+            "x": 1.9753766811902753,
+            "y": 0.31286893008046174,
+            "index": 0
+          },
+          {
+            "x": -0.3128689300804616,
+            "y": 1.9753766811902753,
+            "index": 1
+          },
+          {
+            "x": -1.9753766811902755,
+            "y": -0.3128689300804615,
+            "index": 2
+          },
+          {
+            "x": 0.31286893008046135,
+            "y": -1.9753766811902755,
+            "index": 3
+          }
+        ]
+      }
+    },
+    {
+      "name": "acolyte_cross_repeat0_tick8",
+      "pattern_id": "acolyte_cross",
+      "seed": "1",
+      "spawn_tick": 0,
+      "origin": [
+        0,
+        0
+      ],
+      "aim_rad": 0,
+      "volley_index": 0,
+      "ticks": [
+        8
+      ],
+      "notes": "First cross: 4 bullets at 0/90/180/270.",
+      "expected": {
+        "8": [
+          {
+            "x": 2,
+            "y": 0,
+            "index": 0
+          },
+          {
+            "x": 1.2246467991473515e-16,
+            "y": 2,
+            "index": 1
+          },
+          {
+            "x": -2,
+            "y": 2.449293598294703e-16,
+            "index": 2
+          },
+          {
+            "x": -3.6739403974420544e-16,
+            "y": -2,
+            "index": 3
+          }
+        ]
+      }
+    },
+    {
+      "name": "acolyte_cross_repeat1_plus45_tick8",
+      "pattern_id": "acolyte_cross",
+      "seed": "1",
+      "spawn_tick": 0,
+      "origin": [
+        0,
+        0
+      ],
+      "aim_rad": 0,
+      "volley_index": 1,
+      "ticks": [
+        8
+      ],
+      "notes": "Second repeat rotates +45° (the ×).",
+      "expected": {
+        "8": [
+          {
+            "x": 1.4142135623730951,
+            "y": 1.414213562373095,
+            "index": 0
+          },
+          {
+            "x": -1.414213562373095,
+            "y": 1.4142135623730951,
+            "index": 1
+          },
+          {
+            "x": -1.4142135623730954,
+            "y": -1.414213562373095,
+            "index": 2
+          },
+          {
+            "x": 1.414213562373095,
+            "y": -1.4142135623730954,
+            "index": 3
+          }
+        ]
+      }
+    },
+    {
+      "name": "warden_twinspiral_a_emit2_t5",
+      "pattern_id": "warden_twinspiral_a",
+      "seed": "1",
+      "spawn_tick": 0,
+      "origin": [
+        0,
+        0
+      ],
+      "aim_rad": 0,
+      "volley_index": 2,
+      "ticks": [
+        5
+      ],
+      "notes": "3 arms, +8° per emit; emit 2 is +16° from start 0.",
+      "expected": {
+        "5": [
+          {
+            "x": 1.0814194079306085,
+            "y": 0.31009202529412405,
+            "index": 0
+          },
+          {
+            "x": -0.8092572753809824,
+            "y": 0.7814906667663721,
+            "index": 1
+          },
+          {
+            "x": -0.2721621325496263,
+            "y": -1.091582692060496,
+            "index": 2
+          }
+        ]
+      }
+    }
+  ]
+}

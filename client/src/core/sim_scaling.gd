@@ -33,6 +33,15 @@ var portal_join_floor_numer: int = 0
 var portal_join_floor_denom: int = 0
 var portal_entrance_lifetime_ticks: int = 0
 var _portal_present: Dictionary = {}
+## Vision §3.5 group HP curve. 0 means the packed field was missing.
+var group_kink: int = 0
+var group_n_max: int = 0
+var group_normal_k: int = 0
+var group_normal_t: int = 0
+var group_boss_k: int = 0
+var group_boss_t: int = 0
+## Vision §6 Riftstone yield coefficient (4 in the v0.1 pack).
+var riftstone_yield_coef: int = 0
 
 
 static func from_json(d: Dictionary) -> SimScaling:
@@ -77,6 +86,21 @@ static func from_json(d: Dictionary) -> SimScaling:
 			s.portal_join_floor_denom = int(pd["join_floor_denom"])
 		if pd.has("entrance_lifetime_ticks"):
 			s.portal_entrance_lifetime_ticks = int(pd["entrance_lifetime_ticks"])
+	var gh: Variant = d.get("group_hp", {})
+	if gh is Dictionary:
+		s.group_kink = int(gh.get("kink", 0))
+		s.group_n_max = int(gh.get("n_max", 0))
+		var normal: Variant = gh.get("normal", {})
+		if normal is Dictionary:
+			s.group_normal_k = int(normal.get("k", 0))
+			s.group_normal_t = int(normal.get("t", 0))
+		var boss: Variant = gh.get("boss", {})
+		if boss is Dictionary:
+			s.group_boss_k = int(boss.get("k", 0))
+			s.group_boss_t = int(boss.get("t", 0))
+	var rs: Variant = d.get("riftstone", {})
+	if rs is Dictionary:
+		s.riftstone_yield_coef = int(rs.get("yield_coef", 0))
 	return s
 
 
@@ -212,3 +236,36 @@ func below_join_floor(lp: int, content_level: int) -> bool:
 	if portal_join_floor_denom <= 0:
 		return true
 	return lp * portal_join_floor_denom < portal_join_floor_numer * content_level
+
+
+## m100(E) = 100 + 5 × (E − 1) at the packed m coefficients, in integer hundredths.
+func m100_of_level(content_level: int) -> int:
+	return round_half_up(m(content_level) * 100.0)
+
+
+## s100(n) for a normal or boss encounter (vision §3.5).
+func s100(n: int, kind: String) -> int:
+	var cap: int = group_n_max if group_n_max > 0 else 1
+	var count: int = clampi(n, 1, cap)
+	var k: int = group_boss_k if kind == "boss" else group_normal_k
+	var t_coef: int = group_boss_t if kind == "boss" else group_normal_t
+	var kink: int = group_kink if group_kink > 0 else 8
+	if count <= kink:
+		return 100 + k * (count - 1)
+	return 100 + k * (kink - 1) + t_coef * (count - kink)
+
+
+## Encounter max HP: (baseHP × m100(E) × s100(n) + 5000) div 10000.
+func encounter_hp(base_hp: int, content_level: int, n: int, kind: String) -> int:
+	return (base_hp * m100_of_level(content_level) * s100(n, kind) + 5000) / 10000
+
+
+## Threshold HP: max HP × fraction, rounded half-up in hundredths.
+func hp_threshold(max_hp: int, fraction: float) -> int:
+	var hundredths: int = round_half_up(fraction * 100.0)
+	return (max_hp * hundredths + 50) / 100
+
+
+## Riftstone grant: (yield_coef × M100² + 5000) div 10000, i.e. round(4 × M²).
+func riftstone_yield(m100: int) -> int:
+	return (riftstone_yield_coef * m100 * m100 + 5000) / 10000

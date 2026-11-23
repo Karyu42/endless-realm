@@ -36,6 +36,97 @@
                 "interval_ticks"
               ]
             }
+          },
+          {
+            "if": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "spiral"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "required": [
+                "arms",
+                "emit_interval_ticks",
+                "rotate_per_emit_deg",
+                "duration_ticks",
+                "speed",
+                "range",
+                "size",
+                "damage_key"
+              ]
+            }
+          },
+          {
+            "if": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "burst"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "required": [
+                "repeats",
+                "interval_ticks",
+                "child"
+              ]
+            }
+          },
+          {
+            "if": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "hazard"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "required": [
+                "shape",
+                "radius",
+                "placement",
+                "duration_ticks",
+                "damage_key"
+              ]
+            }
+          },
+          {
+            "if": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "fan",
+                    "ring"
+                  ]
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "required": [
+                "speed",
+                "range",
+                "size",
+                "damage_key"
+              ]
+            }
           }
         ]
       }
@@ -47,10 +138,6 @@
       "required": [
         "id",
         "type",
-        "speed",
-        "range",
-        "size",
-        "damage_key",
         "trigger"
       ],
       "additionalProperties": false,
@@ -63,7 +150,10 @@
           "type": "string",
           "enum": [
             "fan",
-            "ring"
+            "ring",
+            "spiral",
+            "burst",
+            "hazard"
           ]
         },
         "count": {
@@ -152,6 +242,237 @@
         "interval_ticks": {
           "type": "integer",
           "minimum": 1
+        },
+        "arms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "emit_interval_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rotate_per_emit_deg": {
+          "type": "number"
+        },
+        "duration_ticks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repeats": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reaim": {
+          "type": "boolean"
+        },
+        "angle_offset_per_repeat_deg": {
+          "type": "number"
+        },
+        "child": {
+          "$ref": "#/$defs/child_pattern"
+        },
+        "shape": {
+          "type": "string",
+          "enum": [
+            "circle"
+          ]
+        },
+        "radius": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "placement": {
+          "type": "string",
+          "enum": [
+            "under_targets"
+          ]
+        },
+        "max_targets": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "telegraph_ticks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tick_interval_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "slow_pct": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "child_pattern": {
+      "type": "object",
+      "required": [
+        "type",
+        "trigger"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "fan",
+            "ring",
+            "spiral",
+            "burst",
+            "hazard"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "spread_deg": {
+          "type": "number"
+        },
+        "aim": {
+          "type": "string",
+          "enum": [
+            "aimed",
+            "fixed",
+            "heading"
+          ]
+        },
+        "start_angle_deg": {
+          "type": "number"
+        },
+        "rotate_per_fire_deg": {
+          "type": "number"
+        },
+        "angle_offset_cycle_deg": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1
+        },
+        "skip": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "consecutive",
+            "start"
+          ],
+          "properties": {
+            "consecutive": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "start": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "string",
+                  "const": "rng"
+                }
+              ]
+            }
+          }
+        },
+        "speed": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "range": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "S",
+            "M",
+            "L"
+          ]
+        },
+        "damage_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "timer",
+            "ai_step",
+            "on_death",
+            "phase_enter"
+          ]
+        },
+        "interval_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "arms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "emit_interval_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rotate_per_emit_deg": {
+          "type": "number"
+        },
+        "duration_ticks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repeats": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reaim": {
+          "type": "boolean"
+        },
+        "angle_offset_per_repeat_deg": {
+          "type": "number"
+        },
+        "child": {
+          "$ref": "#/$defs/child_pattern"
+        },
+        "shape": {
+          "type": "string",
+          "enum": [
+            "circle"
+          ]
+        },
+        "radius": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "placement": {
+          "type": "string",
+          "enum": [
+            "under_targets"
+          ]
+        },
+        "max_targets": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "telegraph_ticks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tick_interval_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "slow_pct": {
+          "type": "number",
+          "minimum": 0
         }
       }
     }

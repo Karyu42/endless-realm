@@ -73,6 +73,10 @@ var _opener_id: int = 0
 var _opener_lp: int = 0
 var _room_activated: Dictionary = {} # room id -> true
 var _exit_spawned: bool = false
+var _boss_defeated: bool = false
+var _n_peak: int = 0
+var _hazards: Array[HazardState] = []
+var _pattern_jobs: Array[PatternJob] = []
 var _lobby_settings: LobbySettings = null
 
 
@@ -345,7 +349,10 @@ func spawn_enemy_from_def(def: EnemyDef, x: float, y: float, content_level: int 
 	e.home_x = x
 	e.home_y = y
 	e.content_level = _scaling.practice_yard_content_level if _practice_yard else maxi(1, content_level)
-	e.hp = def.base_hp
+	e.n_peak = maxi(_n_peak, 1)
+	var kind: String = def.party_scaling if def.party_scaling != "" else "normal"
+	e.scaled_max_hp = _scaling.encounter_hp(def.base_hp, e.content_level, e.n_peak, kind)
+	e.hp = e.scaled_max_hp
 	e.strafe_ticks = def.strafe_switch_ticks
 	e.fire_cooldown = 0
 	_enemies.append(e)
@@ -364,6 +371,7 @@ func step() -> void:
 	# Time index of this tick (first processed tick is 0, now = tick × 0.05).
 	# tick() / snapshot.tick stay "completed ticks" (1 after the first step).
 	var sim_tick: int = _tick
+	_refresh_n_peak()
 	# Players are processed in ascending id order, never apply_input order.
 	# Ability is applied after movement (Slipstep starts from the post-move
 	# position) and before fire (Kindle Pulse's cast lock).
@@ -380,6 +388,8 @@ func step() -> void:
 		if e.flash_ticks > 0:
 			e.flash_ticks -= 1
 	_step_enemies(sim_tick)
+	_tick_pattern_jobs(sim_tick)
+	_tick_hazards(sim_tick)
 	_apply_combat(sim_tick)
 	_tick_ability_clocks()
 	# Focus regen is at the end of the tick, after any spend.
@@ -393,6 +403,8 @@ func step() -> void:
 		_clear_oneshots(p)
 	_cull_projectiles(sim_tick)
 	_cull_pattern_bullets(sim_tick)
+	_cull_hazards(sim_tick)
+	_cull_pattern_jobs()
 	_cull_enemies()
 	_maybe_spawn_exit()
 	_tick += 1
@@ -425,6 +437,7 @@ func world_view(player_id: int) -> WorldSnapshot:
 		snap.xp_tenths = viewer.xp_tenths
 		snap.xp_to_next_tenths = _scaling.xp_to_next_tenths(viewer.level)
 		snap.pending_glint = viewer.pending_glint
+		snap.pending_riftstone = viewer.pending_riftstone
 		snap.inventory = viewer.inventory.slots.duplicate()
 		snap.equipped_weapon = viewer.inventory.equipped_weapon
 		snap.equipped_armor = viewer.inventory.equipped_armor
@@ -453,9 +466,12 @@ func world_view(player_id: int) -> WorldSnapshot:
 		es.radius = e.radius()
 		es.content_level = e.content_level
 		es.flash_ticks = e.flash_ticks
+		es.phase_id = e.phase_id()
+		es.invulnerable = e.invulnerable
 		enemy_snaps.append(es)
 	snap.enemies = enemy_snaps
 	snap.portals = _portals.duplicate()
+	snap.hazards = _hazards.duplicate()
 	var plist: Array[PlayerSnapshot] = []
 	for id in _sorted_ids:
 		var p: SimPlayerState = _players[id]
@@ -539,7 +555,7 @@ func _apply_movement(p: SimPlayerState) -> void:
 	elif move_len <= SimConstants.MOVE_EPS:
 		mx = 0.0
 		my = 0.0
-	var step_len: float = _config.move_speed_tiles_per_s * SimConstants.TICK_DT
+	var step_len: float = _config.move_speed_tiles_per_s * _player_stride_mult(p) * SimConstants.TICK_DT
 	p.x += mx * step_len
 	p.y += my * step_len
 	if _has_bounds:
@@ -692,6 +708,9 @@ func _step_enemies(sim_tick: int) -> void:
 
 
 func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
+	if e.is_boss() and e.def != null and not e.def.phases.is_empty():
+		_step_boss(e, sim_tick)
+		return
 	var home_dx: float = e.x - e.home_x
 	var home_dy: float = e.y - e.home_y
 	var home_dist: float = sqrt(home_dx * home_dx + home_dy * home_dy)
@@ -791,13 +810,7 @@ func _emit_enemy_pattern(e: EnemyState, sim_tick: int) -> void:
 	var def := _catalog.pattern(e.def.pattern_id)
 	if def == null:
 		return
-	var seed: int = _mix_seed(_world_seed, e.id, sim_tick + e.volley_index)
-	var bullets := def.emit(seed, e.x, e.y, e.aim, e.volley_index)
-	for b in bullets:
-		b.id = _alloc_id()
-		b.spawn_tick = sim_tick
-		b.source_id = e.id
-		_pattern_bullets.append(b)
+	_fire_pattern(e, def, sim_tick, e.aim, e.volley_index)
 	e.volley_index += 1
 
 
@@ -827,15 +840,12 @@ func _player_shots_vs_enemies(sim_tick: int) -> void:
 				_hit_p0.x, _hit_p0.y, _hit_p1.x, _hit_p1.y, shot.radius_tiles,
 				e.prev_x, e.prev_y, e.x, e.y, e.radius()
 			):
-				e.hp -= _config.player_projectile_damage
+				if e.invulnerable:
+					# Transition: bullets already in flight continue and deal no damage.
+					continue
 				var owner: int = shot.owner_id if shot.owner_id != 0 else _default_player_id()
-				e.damaged_by[owner] = true
-				e.flash_ticks = _config.player_flash_ticks
+				_hurt_enemy(e, _config.player_projectile_damage, owner, sim_tick)
 				shot.consumed = true
-				if e.hp <= 0:
-					e.hp = 0
-					e.alive = false
-					_grant_kill_rewards(e, sim_tick)
 				break
 
 
@@ -1081,8 +1091,9 @@ func add_portal(portal: PortalSnapshot) -> void:
 
 func defeat_all_enemies() -> void:
 	for e in _enemies:
-		e.hp = 0
-		e.alive = false
+		if e.alive:
+			e.invulnerable = false
+			_kill_enemy(e, _tick)
 
 
 func instance_content_level() -> int:
@@ -1099,6 +1110,36 @@ func instance_m100() -> int:
 
 func dungeon_id() -> String:
 	return _dungeon.id if _dungeon != null else ""
+
+
+## Read-only view for the host's instance-lifetime code. Does not mutate sim state.
+func boss_defeated() -> bool:
+	return _boss_defeated
+
+
+## Read-only view for the host's instance-lifetime code. Does not mutate sim state.
+func vault_exit_open() -> bool:
+	return _exit_spawned
+
+
+## Read-only copy of boss-dead and vault-exit-open. Mutating the Dictionary
+## does not change sim state.
+func dungeon_state() -> Dictionary:
+	return {
+		"boss_defeated": _boss_defeated,
+		"vault_exit_open": _exit_spawned,
+	}
+
+
+func get_enemy(id: int) -> EnemyState:
+	return _enemy_by_id(id)
+
+
+## Test / tooling hook. Goes through invuln, the seal, phase thresholds and death.
+func hurt_enemy(enemy_id: int, amount: int, attacker_id: int = 0) -> void:
+	var e: EnemyState = _enemy_by_id(enemy_id)
+	if e != null:
+		_hurt_enemy(e, amount, attacker_id, _tick)
 
 
 func take_pending_transfers() -> Array[PortalTransfer]:
@@ -1166,10 +1207,14 @@ func configure_dungeon(
 	_opener_lp = opener_lp
 	_room_activated.clear()
 	_exit_spawned = false
+	_boss_defeated = false
+	_n_peak = 0
 	_portals.clear()
 	_enemies.clear()
 	_projectiles.clear()
 	_pattern_bullets.clear()
+	_hazards.clear()
+	_pattern_jobs.clear()
 	_ground_drops.clear()
 	_granted_drop_ids.clear()
 	_blocking_tiles.clear()
@@ -1193,6 +1238,7 @@ func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
 	p.level = carry.level
 	p.xp_tenths = carry.xp_tenths
 	p.pending_glint = carry.pending_glint
+	p.pending_riftstone = carry.pending_riftstone
 	p.aim = carry.aim
 	p.x = x
 	p.y = y
@@ -1352,6 +1398,8 @@ func _grant_kill_rewards(e: EnemyState, sim_tick: int) -> void:
 	if e.rewards_granted:
 		return
 	e.rewards_granted = true
+	if not e.drops_loot:
+		return
 	var rank: String = _reward_rank(e)
 	for id in _sorted_ids:
 		var p: SimPlayerState = _players[id]
@@ -1361,6 +1409,8 @@ func _grant_kill_rewards(e: EnemyState, sim_tick: int) -> void:
 		var xp: int = _scaling.credited_kill_tenths(e.content_level, le, rank)
 		_grant_xp_tenths_to(p, xp)
 		p.pending_glint += _loot.glint_for_kill(e.content_level, rank, _scaling)
+		if rank == "boss":
+			p.pending_riftstone += _scaling.riftstone_yield(_instance_m100)
 		var rolls: int = _loot.roll_count(rank, _instance_m100)
 		var looter_class: String = p.class_id if p.class_id != "" else "thornguard"
 		for i in range(rolls):
@@ -1876,20 +1926,13 @@ func _activate_rooms() -> void:
 
 
 func _maybe_spawn_exit() -> void:
-	# TODO: gate the exit on defeating the Tallow Warden once it is a real
-	# boss, not a KIND_PLACEHOLDER marker. Until then, the exit appears when
-	# combat rooms are activated and packed enemies are dead.
+	# The vault exit opens when the Tallow Warden is defeated (content-v0.1 §3.4).
 	if _dungeon == null or _exit_spawned:
 		return
-	for room in _dungeon.rooms:
-		var spawns: Variant = room.get("spawns", [])
-		if not (spawns is Array) or (spawns as Array).is_empty():
-			continue
-		var rid: String = String(room.get("id", ""))
-		if not _room_activated.has(rid):
-			return
+	if _dungeon_has_boss() and not _boss_defeated:
+		return
 	for e in _enemies:
-		if e.alive:
+		if e.alive and e.is_boss():
 			return
 	for room in _dungeon.rooms:
 		if not room.has("exit_portal"):
@@ -1963,3 +2006,563 @@ func _rebuild_ids() -> void:
 	keys.sort()
 	for id in keys:
 		_sorted_ids.append(int(id))
+
+
+func _refresh_n_peak() -> void:
+	var n: int = 0
+	for id in _sorted_ids:
+		var p: SimPlayerState = _players[id]
+		if p.hp > 0:
+			n += 1
+	if n <= _n_peak:
+		return
+	_n_peak = n
+	for e in _enemies:
+		if not e.alive or e.def == null:
+			continue
+		e.n_peak = _n_peak
+		var kind: String = e.def.party_scaling if e.def.party_scaling != "" else "normal"
+		var new_max: int = _scaling.encounter_hp(e.def.base_hp, e.content_level, e.n_peak, kind)
+		var old_max: int = e.max_hp()
+		if new_max == old_max or old_max <= 0:
+			e.scaled_max_hp = new_max
+			continue
+		if e.hp > 0:
+			e.hp = maxi(1, SimScaling.round_half_up(float(e.hp) * float(new_max) / float(old_max)))
+			if e.hp > new_max:
+				e.hp = new_max
+		e.scaled_max_hp = new_max
+
+
+func _player_stride_mult(p: SimPlayerState) -> float:
+	var slow: float = 0.0
+	for h in _hazards:
+		if h.is_active(_tick) and h.contains(p.x, p.y) and h.slow_pct > slow:
+			slow = h.slow_pct
+	if slow <= 0.0:
+		return 1.0
+	return maxf(0.0, 1.0 - slow / 100.0)
+
+
+func _hurt_enemy(e: EnemyState, amount: int, attacker_id: int, sim_tick: int) -> void:
+	if e == null or not e.alive or amount <= 0:
+		return
+	if e.invulnerable:
+		return
+	if e.is_boss() and e.seal_tick < 0:
+		e.seal_tick = sim_tick
+	e.hp -= amount
+	if attacker_id != 0:
+		e.damaged_by[attacker_id] = true
+	e.flash_ticks = _config.player_flash_ticks
+	if e.hp <= 0:
+		_kill_enemy(e, sim_tick)
+		return
+	_maybe_boss_transition(e)
+
+
+func _kill_enemy(e: EnemyState, sim_tick: int) -> void:
+	if e == null:
+		return
+	if not e.alive and e.rewards_granted:
+		return
+	e.hp = 0
+	e.alive = false
+	e.invulnerable = false
+	if e.is_boss() and not _boss_defeated:
+		_on_boss_defeated(e, sim_tick)
+	_grant_kill_rewards(e, sim_tick)
+
+
+func _on_boss_defeated(e: EnemyState, _sim_tick: int) -> void:
+	_boss_defeated = true
+	_pattern_bullets.clear()
+	_hazards.clear()
+	_cancel_jobs_from(e.id)
+	for other in _enemies:
+		if other.alive and other.summoned:
+			other.invulnerable = false
+			other.hp = 0
+			other.alive = false
+			other.rewards_granted = true
+
+
+func _maybe_boss_transition(e: EnemyState) -> void:
+	if not e.is_boss() or e.def == null:
+		return
+	var phase: Dictionary = e.current_phase()
+	if phase.is_empty() or bool(phase.get("transition", false)):
+		return
+	if not phase.has("hp_above"):
+		return
+	var threshold: int = _scaling.hp_threshold(e.max_hp(), float(phase["hp_above"]))
+	if e.hp > threshold:
+		return
+	if e.phase_index + 1 >= e.def.phases.size():
+		return
+	_enter_boss_phase(e, e.phase_index + 1)
+
+
+func _enter_boss_phase(e: EnemyState, index: int) -> void:
+	_cancel_jobs_from(e.id)
+	e.phase_index = index
+	e.phase_age = 0
+	e.loop_once_fired.clear()
+	var phase: Dictionary = e.current_phase()
+	e.invulnerable = bool(phase.get("invulnerable", false))
+	_run_phase_enter(e, phase)
+
+
+func _run_phase_enter(e: EnemyState, phase: Dictionary) -> void:
+	var actions: Variant = phase.get("on_enter", [])
+	if not (actions is Array):
+		return
+	for action in actions:
+		if not (action is Dictionary):
+			continue
+		var summon_id: String = String(action.get("summon", ""))
+		if summon_id == "":
+			continue
+		var at: String = String(action.get("at", ""))
+		var count: int = int(action.get("count", 0))
+		var loot: bool = bool(action.get("loot", true))
+		if at == "corners":
+			_summon_at_corners(e, summon_id, count, loot)
+
+
+func _summon_at_corners(boss: EnemyState, enemy_id: String, count: int, loot: bool) -> void:
+	var room: Dictionary = _room_containing(boss.x, boss.y)
+	if room.is_empty():
+		return
+	var origin: Variant = room.get("origin", [0.0, 0.0])
+	var size: Variant = room.get("size", [0.0, 0.0])
+	if not (origin is Array) or not (size is Array) or origin.size() < 2 or size.size() < 2:
+		return
+	var ox: float = float(origin[0])
+	var oy: float = float(origin[1])
+	var sx: float = float(size[0])
+	var sy: float = float(size[1])
+	var inset: float = 1.5
+	var corners: Array[Vector2] = [
+		Vector2(ox + inset, oy + inset),
+		Vector2(ox + sx - inset, oy + inset),
+		Vector2(ox + inset, oy + sy - inset),
+		Vector2(ox + sx - inset, oy + sy - inset),
+	]
+	var n: int = mini(count, corners.size())
+	for i in range(n):
+		var sid: int = spawn_enemy(enemy_id, corners[i].x, corners[i].y, boss.content_level)
+		var add: EnemyState = _enemy_by_id(sid)
+		if add == null:
+			continue
+		add.drops_loot = loot
+		add.summoned = true
+		add.n_peak = boss.n_peak
+		var kind: String = add.def.party_scaling if add.def != null and add.def.party_scaling != "" else "normal"
+		add.scaled_max_hp = _scaling.encounter_hp(add.def.base_hp, add.content_level, add.n_peak, kind)
+		add.hp = add.scaled_max_hp
+
+
+func _step_boss(e: EnemyState, sim_tick: int) -> void:
+	if e.contact_cooldown > 0:
+		e.contact_cooldown -= 1
+	var phase: Dictionary = e.current_phase()
+	if phase.is_empty():
+		return
+	if e.phase_age == 0 and e.phase_index == 0 and not bool(phase.get("transition", false)):
+		# First tick of P1: no special on_enter, but loops fire at age 0.
+		pass
+	_move_boss(e, phase)
+	_tick_boss_loops(e, phase, sim_tick)
+	if bool(phase.get("transition", false)):
+		var hold: int = int(phase.get("ticks", 0))
+		e.phase_age += 1
+		if e.phase_age >= hold and e.phase_index + 1 < e.def.phases.size():
+			_enter_boss_phase(e, e.phase_index + 1)
+		return
+	e.phase_age += 1
+
+
+func _move_boss(e: EnemyState, phase: Dictionary) -> void:
+	var speed: float = float(phase.get("move_speed", e.def.move_speed if e.def != null else 0.0))
+	var move: String = String(phase.get("move", ""))
+	if bool(phase.get("transition", false)) and String(phase.get("move_to", "")) == "center":
+		move = "anchor_center"
+		if speed <= 0.0 and e.def != null:
+			speed = e.def.move_speed
+	var center := _arena_center(e)
+	var dx: float = center.x - e.x
+	var dy: float = center.y - e.y
+	var dist: float = sqrt(dx * dx + dy * dy)
+	var mx: float = 0.0
+	var my: float = 0.0
+	if move == "anchor_center":
+		if dist > SimConstants.MOVE_EPS and speed > 0.0:
+			mx = dx / dist
+			my = dy / dist
+		elif dist <= SimConstants.MOVE_EPS:
+			e.x = center.x
+			e.y = center.y
+			speed = 0.0
+	elif move == "drift_center":
+		if dist > 2.0 and dist > SimConstants.MOVE_EPS:
+			mx = dx / dist
+			my = dy / dist
+		elif dist > SimConstants.MOVE_EPS:
+			mx = -dy / dist
+			my = dx / dist
+	if speed > 0.0 and (mx != 0.0 or my != 0.0):
+		var step: float = speed * SimConstants.TICK_DT
+		e.x += mx * step
+		e.y += my * step
+	if dist > SimConstants.MOVE_EPS:
+		e.aim = atan2(dy, dx)
+
+
+func _tick_boss_loops(e: EnemyState, phase: Dictionary, sim_tick: int) -> void:
+	var loops: Variant = phase.get("loops", [])
+	if not (loops is Array):
+		return
+	var loop_len: int = int(phase.get("loop_ticks", 0))
+	var clock: int = e.phase_age
+	if loop_len > 0:
+		clock = e.phase_age % loop_len
+		if clock == 0 and e.phase_age > 0:
+			e.loop_once_fired.clear()
+	for loop in loops:
+		if not (loop is Dictionary):
+			continue
+		if not _loop_is_due(e, loop, clock, phase, sim_tick):
+			continue
+		var pid: String = String(loop.get("pattern", ""))
+		if pid == "" or _catalog == null:
+			continue
+		var def: PatternDef = _catalog.pattern(pid)
+		if def == null:
+			continue
+		var key: String = pid
+		if bool(loop.get("once_per_loop", false)) or bool(loop.get("at_loop_start", false)):
+			if e.loop_once_fired.has(key):
+				continue
+			e.loop_once_fired[key] = true
+		if def.type == "spiral" or def.type == "burst":
+			if _has_live_job(e.id, def.id):
+				continue
+		var aim: float = _boss_aim(e, def, sim_tick)
+		_fire_pattern(e, def, sim_tick, aim, e.volley_index)
+		e.volley_index += 1
+
+
+func _loop_is_due(e: EnemyState, loop: Dictionary, clock: int, phase: Dictionary, sim_tick: int) -> bool:
+	if bool(loop.get("at_loop_start", false)):
+		return clock == 0
+	var window_start: int = int(loop.get("window_start_ticks", 0)) if loop.has("window_start_ticks") else 0
+	var has_end: bool = loop.has("window_end_ticks")
+	var window_end: int = int(loop.get("window_end_ticks", 0))
+	if loop.has("window_start_ticks") or has_end:
+		if clock < window_start:
+			return false
+		if has_end and clock >= window_end:
+			return false
+		if bool(loop.get("once_per_loop", false)):
+			return clock == window_start
+	var every: int = int(loop.get("every_ticks", 0))
+	if every <= 0 and _catalog != null:
+		var def: PatternDef = _catalog.pattern(String(loop.get("pattern", "")))
+		if def != null:
+			if def.emit_interval_ticks > 0:
+				every = def.emit_interval_ticks
+			elif def.interval_ticks > 0:
+				every = def.interval_ticks
+	if every <= 0:
+		# Windowed one-shot (burst) already handled above; nothing periodic.
+		return bool(loop.get("once_per_loop", false)) and clock == window_start
+	every = _boss_scaled_interval(e, phase, every, sim_tick)
+	var offset: int = int(loop.get("offset_ticks", 0))
+	if clock < offset:
+		return false
+	return (clock - offset) % every == 0
+
+
+func _boss_scaled_interval(e: EnemyState, phase: Dictionary, every: int, sim_tick: int) -> int:
+	var raw: Variant = phase.get("enrage", null)
+	if not (raw is Dictionary):
+		return every
+	var enrage: Dictionary = raw
+	var after: int = int(enrage.get("after_ticks", 0))
+	var mult: float = float(enrage.get("interval_mult", 1.0))
+	if e.seal_tick < 0 or after <= 0 or (sim_tick - e.seal_tick) < after:
+		return every
+	return maxi(1, SimScaling.round_half_up(float(every) * mult))
+
+
+func _boss_aim(e: EnemyState, def: PatternDef, sim_tick: int) -> float:
+	if def != null and def.aim == "fixed":
+		return e.aim
+	var tid: int = _pick_boss_aim_target(e, sim_tick)
+	if tid == 0:
+		return e.aim
+	var p: SimPlayerState = _players.get(tid, null) as SimPlayerState
+	if p == null:
+		return e.aim
+	var dx: float = p.x - e.x
+	var dy: float = p.y - e.y
+	if dx * dx + dy * dy <= SimConstants.MOVE_EPS * SimConstants.MOVE_EPS:
+		return e.aim
+	e.aim = atan2(dy, dx)
+	return e.aim
+
+
+func _pick_boss_aim_target(e: EnemyState, sim_tick: int) -> int:
+	var ids: Array[int] = _living_players_in_arena(e)
+	if ids.is_empty():
+		return 0
+	if ids.size() == 1:
+		e.last_aim_target_id = ids[0]
+		e.same_target_streak = 1
+		return ids[0]
+	var candidates: Array[int] = []
+	for id in ids:
+		if e.same_target_streak >= 2 and id == e.last_aim_target_id:
+			continue
+		candidates.append(id)
+	if candidates.is_empty():
+		candidates = ids
+	var rng := PCG32.new(_mix_seed(_world_seed, e.id, sim_tick + 7919), 1)
+	var pick: int = candidates[int(rng.uint32() % (candidates.size() as int))]
+	if pick == e.last_aim_target_id:
+		e.same_target_streak += 1
+	else:
+		e.last_aim_target_id = pick
+		e.same_target_streak = 1
+	return pick
+
+
+func _living_players_in_arena(e: EnemyState) -> Array[int]:
+	var room: Dictionary = _room_containing(e.x, e.y)
+	var out: Array[int] = []
+	for id in _sorted_ids:
+		var p: SimPlayerState = _players[id]
+		if p.hp <= 0:
+			continue
+		if room.is_empty() or (_dungeon != null and _dungeon.room_contains(room, p.x, p.y)):
+			out.append(id)
+	return out
+
+
+func _room_containing(x: float, y: float) -> Dictionary:
+	if _dungeon == null:
+		return {}
+	for room in _dungeon.rooms:
+		if _dungeon.room_contains(room, x, y):
+			return room
+	return {}
+
+
+func _arena_center(e: EnemyState) -> Vector2:
+	var room: Dictionary = _room_containing(e.x, e.y)
+	if room.is_empty():
+		return Vector2(e.home_x, e.home_y)
+	var origin: Variant = room.get("origin", [e.home_x, e.home_y])
+	var size: Variant = room.get("size", [0.0, 0.0])
+	if not (origin is Array) or not (size is Array) or origin.size() < 2 or size.size() < 2:
+		return Vector2(e.home_x, e.home_y)
+	return Vector2(float(origin[0]) + float(size[0]) * 0.5, float(origin[1]) + float(size[1]) * 0.5)
+
+
+func _fire_pattern(e: EnemyState, def: PatternDef, sim_tick: int, aim: float, volley: int) -> void:
+	if def == null:
+		return
+	if def.type == "hazard":
+		_spawn_hazards(e, def, sim_tick)
+		return
+	if def.type == "burst":
+		_start_burst_job(e, def, sim_tick, aim)
+		return
+	if def.type == "spiral":
+		_start_spiral_job(e, def, sim_tick, aim, volley)
+		return
+	_emit_pattern_now(e, def, sim_tick, aim, volley)
+
+
+func _emit_pattern_now(e: EnemyState, def: PatternDef, sim_tick: int, aim: float, volley: int) -> void:
+	var seed: int = _mix_seed(_world_seed, e.id, sim_tick + volley)
+	var bullets := def.emit(seed, e.x, e.y, aim, volley)
+	for b in bullets:
+		b.id = _alloc_id()
+		b.spawn_tick = sim_tick
+		b.source_id = e.id
+		_pattern_bullets.append(b)
+
+
+func _start_burst_job(e: EnemyState, def: PatternDef, sim_tick: int, aim: float) -> void:
+	var job := PatternJob.new()
+	job.source_id = e.id
+	job.def = def
+	job.start_tick = sim_tick
+	job.next_emit_tick = sim_tick
+	job.emit_index = 0
+	job.repeats_left = def.repeats if def.repeats > 0 else 1
+	job.reaim = def.reaim
+	job.aim = aim
+	job.interval = def.interval_ticks if def.interval_ticks > 0 else 1
+	job.live = true
+	_pattern_jobs.append(job)
+	_emit_job(job, e, sim_tick)
+
+
+func _start_spiral_job(e: EnemyState, def: PatternDef, sim_tick: int, aim: float, _volley: int) -> void:
+	# A spiral already in flight for this source is left running
+	# (phase changes cancel jobs first).
+	var job := PatternJob.new()
+	job.source_id = e.id
+	job.def = def
+	job.start_tick = sim_tick
+	job.next_emit_tick = sim_tick
+	job.emit_index = 0
+	job.repeats_left = -1
+	job.reaim = def.aim != "fixed"
+	job.aim = aim
+	job.interval = def.emit_interval_ticks if def.emit_interval_ticks > 0 else 1
+	if def.duration_ticks > 0:
+		job.end_tick = sim_tick + def.duration_ticks
+	job.live = true
+	_pattern_jobs.append(job)
+	_emit_job(job, e, sim_tick)
+
+
+func _tick_pattern_jobs(sim_tick: int) -> void:
+	for job in _pattern_jobs:
+		if not job.live:
+			continue
+		if job.end_tick >= 0 and sim_tick >= job.end_tick:
+			job.live = false
+			continue
+		if sim_tick < job.next_emit_tick:
+			continue
+		var src: EnemyState = _enemy_by_id(job.source_id)
+		if src == null or not src.alive:
+			job.live = false
+			continue
+		_emit_job(job, src, sim_tick)
+
+
+func _emit_job(job: PatternJob, e: EnemyState, sim_tick: int) -> void:
+	var aim: float = job.aim
+	if job.reaim:
+		aim = _boss_aim(e, job.def, sim_tick) if e.is_boss() else e.aim
+		job.aim = aim
+	if job.def.type == "burst":
+		# Parent emit applies per-repeat angle offset to the child volley.
+		var seed: int = _mix_seed(_world_seed, e.id, sim_tick + job.emit_index)
+		var bullets := job.def.emit(seed, e.x, e.y, aim, job.emit_index)
+		for b in bullets:
+			b.id = _alloc_id()
+			b.spawn_tick = sim_tick
+			b.source_id = e.id
+			_pattern_bullets.append(b)
+	else:
+		_emit_pattern_now(e, job.def, sim_tick, aim, job.emit_index)
+	job.emit_index += 1
+	if job.repeats_left > 0:
+		job.repeats_left -= 1
+		if job.repeats_left <= 0:
+			job.live = false
+			return
+	job.next_emit_tick = sim_tick + job.interval
+
+
+func _has_live_job(source_id: int, pattern_id: String) -> bool:
+	for job in _pattern_jobs:
+		if job.live and job.source_id == source_id and job.def != null and job.def.id == pattern_id:
+			return true
+	return false
+
+
+func _cancel_jobs_from(source_id: int) -> void:
+	for job in _pattern_jobs:
+		if job.source_id == source_id:
+			job.live = false
+
+
+func _cull_pattern_jobs() -> void:
+	var write: int = 0
+	for job in _pattern_jobs:
+		if job.live:
+			_pattern_jobs[write] = job
+			write += 1
+	_pattern_jobs.resize(write)
+
+
+func _spawn_hazards(e: EnemyState, def: PatternDef, sim_tick: int) -> void:
+	var ids: Array[int] = _living_players_in_arena(e)
+	if ids.is_empty():
+		return
+	var cap: int = def.max_targets if def.max_targets > 0 else ids.size()
+	var rng := PCG32.new(_mix_seed(_world_seed, e.id, sim_tick + 4243), 1)
+	var picked: Array[int] = []
+	var pool: Array[int] = ids.duplicate()
+	while picked.size() < cap and not pool.is_empty():
+		var i: int = int(rng.uint32() % (pool.size() as int))
+		picked.append(pool[i])
+		pool.remove_at(i)
+	for pid in picked:
+		var p: SimPlayerState = _players.get(pid, null) as SimPlayerState
+		if p == null:
+			continue
+		var h := HazardState.new()
+		h.id = _alloc_id()
+		h.x = p.x
+		h.y = p.y
+		h.radius = def.radius
+		h.telegraph_ticks = def.telegraph_ticks
+		h.duration_ticks = def.duration_ticks
+		h.tick_interval_ticks = def.tick_interval_ticks if def.tick_interval_ticks > 0 else 1
+		h.slow_pct = def.slow_pct
+		h.damage_key = def.damage_key
+		h.source_id = e.id
+		h.spawn_tick = sim_tick
+		_hazards.append(h)
+
+
+func _tick_hazards(sim_tick: int) -> void:
+	for h in _hazards:
+		if not h.should_damage(sim_tick):
+			continue
+		var src: EnemyState = _enemy_by_id(h.source_id)
+		var amount: int = 0
+		var attacker_level: int = 1
+		if src != null and src.def != null:
+			amount = src.def.damage_for(h.damage_key)
+			attacker_level = src.content_level
+		for id in _sorted_ids:
+			var p: SimPlayerState = _players[id]
+			if p.hp <= 0:
+				continue
+			if h.contains(p.x, p.y):
+				_hurt_player(p, amount, attacker_level)
+
+
+func _cull_hazards(sim_tick: int) -> void:
+	var write: int = 0
+	for h in _hazards:
+		if not h.expired(sim_tick):
+			_hazards[write] = h
+			write += 1
+	_hazards.resize(write)
+
+
+func _dungeon_has_boss() -> bool:
+	if _dungeon == null or _catalog == null:
+		return false
+	for room in _dungeon.rooms:
+		var spawns: Variant = room.get("spawns", [])
+		if not (spawns is Array):
+			continue
+		for spawn in spawns:
+			if not (spawn is Dictionary):
+				continue
+			var def: EnemyDef = _catalog.enemy(String(spawn.get("enemy_id", "")))
+			if def != null and def.is_boss():
+				return true
+	return false

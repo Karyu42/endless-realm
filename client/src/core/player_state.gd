@@ -24,6 +24,7 @@ var class_def: ClassDef = null
 var level: int = 1
 var xp_tenths: int = 0
 var pending_glint: int = 0
+var pending_riftstone: int = 0
 var inventory: PlayerInventory = PlayerInventory.new()
 var last_interact_seq: int = 0
 ## PCG32 stream derived from the instance seed and this player id. See

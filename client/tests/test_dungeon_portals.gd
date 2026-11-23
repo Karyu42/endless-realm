@@ -130,8 +130,9 @@ func test_entering_opens_a_seeded_dungeon_instance() -> void:
 	for item in start.portals:
 		if item.kind == PortalSnapshot.KIND_PLACEHOLDER:
 			placeholders += 1
-			assert_eq(item.marker_id, "tallow_warden")
-	assert_eq(placeholders, 1)
+	assert_eq(placeholders, 0, "the Warden is a real spawn, not a placeholder marker")
+	assert_false(dungeon.boss_defeated())
+	assert_false(dungeon.vault_exit_open())
 
 
 func test_rooms_activate_on_entry_and_exit_spawns_when_cleared() -> void:
@@ -158,8 +159,24 @@ func test_rooms_activate_on_entry_and_exit_spawns_when_cleared() -> void:
 	p.y = 6.0
 	sim.step()
 	var after_kennels := sim.snapshot()
-	assert_eq(after_kennels.enemies.size(), 1, "Wick Kennels Driftcap spawns")
-	assert_eq(after_kennels.enemies[0].def_id, "driftcap_spore")
+	var ids: PackedStringArray = PackedStringArray()
+	for e in after_kennels.enemies:
+		ids.append(e.def_id)
+	assert_eq(after_kennels.enemies.size(), 2, "Wick Kennels spawns a Driftcap and the Tallow Warden")
+	assert_true("driftcap_spore" in ids)
+	assert_true("tallow_warden" in ids)
+	assert_false(sim.boss_defeated())
+	assert_false(sim.vault_exit_open())
+	# Clear only the Driftcap: the exit stays closed while the Warden lives.
+	for e in after_kennels.enemies:
+		if e.def_id == "driftcap_spore":
+			var cap: EnemyState = sim.get_enemy(e.id)
+			if cap != null:
+				cap.invulnerable = false
+				sim.hurt_enemy(e.id, cap.hp, pid)
+	sim.step()
+	assert_false(sim.boss_defeated())
+	assert_false(sim.vault_exit_open(), "trash clear does not open the vault exit")
 	sim.defeat_all_enemies()
 	sim.step()
 	var exits := 0
@@ -169,7 +186,9 @@ func test_rooms_activate_on_entry_and_exit_spawns_when_cleared() -> void:
 			exits += 1
 			exit_id = item.id
 			assert_almost_eq(item.x, 44.0, 0.0001)
-	assert_eq(exits, 1, "exit portal appears once combat rooms are cleared")
+	assert_eq(exits, 1, "exit portal appears once the Tallow Warden is defeated")
+	assert_true(sim.boss_defeated())
+	assert_true(sim.vault_exit_open())
 	p.x = 44.0
 	p.y = 6.0
 	sim.apply_input(pid, _enter_intent(1, exit_id))

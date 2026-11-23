@@ -59,14 +59,13 @@
           "enemy_id": "driftcap_spore",
           "x": 38.0,
           "y": 5.0
+        },
+        {
+          "enemy_id": "tallow_warden",
+          "x": 42.0,
+          "y": 6.0
         }
       ],
-      "boss_placeholder": {
-        "id": "tallow_warden",
-        "name": "the Tallow Warden",
-        "x": 42.0,
-        "y": 6.0
-      },
       "exit_portal": {
         "x": 44.0,
         "y": 6.0,

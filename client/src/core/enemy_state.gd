@@ -27,6 +27,17 @@ var content_level: int = 1
 var damaged_by: Dictionary = {} # player_id -> true
 var rewards_granted: bool = false
 var flash_ticks: int = 0
+var scaled_max_hp: int = 0
+var n_peak: int = 1
+var phase_index: int = 0
+var phase_age: int = 0
+var invulnerable: bool = false
+var seal_tick: int = -1
+var last_aim_target_id: int = 0
+var same_target_streak: int = 0
+var drops_loot: bool = true
+var summoned: bool = false
+var loop_once_fired: Dictionary = {}
 
 
 func radius() -> float:
@@ -34,4 +45,22 @@ func radius() -> float:
 
 
 func max_hp() -> int:
+	if scaled_max_hp > 0:
+		return scaled_max_hp
 	return def.base_hp if def != null else 1
+
+
+func phase_id() -> String:
+	if def == null or phase_index < 0 or phase_index >= def.phases.size():
+		return ""
+	return String(def.phases[phase_index].get("id", ""))
+
+
+func current_phase() -> Dictionary:
+	if def == null or phase_index < 0 or phase_index >= def.phases.size():
+		return {}
+	return def.phases[phase_index]
+
+
+func is_boss() -> bool:
+	return def != null and def.is_boss()

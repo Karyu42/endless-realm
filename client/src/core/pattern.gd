@@ -23,6 +23,21 @@ var size: String = "S"
 var damage_key: String = ""
 var trigger: String = "timer"
 var interval_ticks: int = 0
+var arms: int = 0
+var emit_interval_ticks: int = 0
+var rotate_per_emit_deg: float = 0.0
+var duration_ticks: int = 0
+var repeats: int = 1
+var reaim: bool = false
+var angle_offset_per_repeat_deg: float = 0.0
+var child: PatternDef = null
+var shape: String = ""
+var radius: float = 0.0
+var placement: String = ""
+var max_targets: int = 0
+var telegraph_ticks: int = 0
+var tick_interval_ticks: int = 0
+var slow_pct: float = 0.0
 var _present: Dictionary = {}
 
 
@@ -66,6 +81,23 @@ static func from_json(d: Dictionary) -> PatternDef:
 	p.trigger = String(d.get("trigger", "timer"))
 	if p._present.has("interval_ticks"):
 		p.interval_ticks = int(d.get("interval_ticks", 0))
+	p.arms = int(d.get("arms", 0))
+	p.emit_interval_ticks = int(d.get("emit_interval_ticks", 0))
+	p.rotate_per_emit_deg = float(d.get("rotate_per_emit_deg", 0.0))
+	p.duration_ticks = int(d.get("duration_ticks", 0))
+	p.repeats = int(d.get("repeats", 1))
+	p.reaim = bool(d.get("reaim", false))
+	p.angle_offset_per_repeat_deg = float(d.get("angle_offset_per_repeat_deg", 0.0))
+	p.shape = String(d.get("shape", ""))
+	p.radius = float(d.get("radius", 0.0))
+	p.placement = String(d.get("placement", ""))
+	p.max_targets = int(d.get("max_targets", 0))
+	p.telegraph_ticks = int(d.get("telegraph_ticks", 0))
+	p.tick_interval_ticks = int(d.get("tick_interval_ticks", 0))
+	p.slow_pct = float(d.get("slow_pct", 0.0))
+	var child_raw: Variant = d.get("child", null)
+	if child_raw is Dictionary:
+		p.child = PatternDef.from_json(child_raw)
 	var cycle: Variant = d.get("angle_offset_cycle_deg", [])
 	if cycle is Array:
 		for v in cycle:
@@ -92,10 +124,16 @@ func missing_pack_ids() -> PackedStringArray:
 
 
 func emit(seed: int, origin_x: float, origin_y: float, aim_rad: float, volley_index: int) -> Array[PatternBullet]:
+	if type == "hazard":
+		return []
+	if type == "burst":
+		return _emit_burst(seed, origin_x, origin_y, aim_rad, volley_index)
 	var base: float = _base_angle(aim_rad, volley_index)
 	if type == "ring":
 		var rng: PCG32 = PCG32.new(seed, 1) if skip_start_rng else null
 		return _emit_ring(rng, origin_x, origin_y, base)
+	if type == "spiral":
+		return _emit_spiral(origin_x, origin_y, base, volley_index)
 	return _emit_fan(origin_x, origin_y, base)
 
 
@@ -156,3 +194,26 @@ func _bullet(index: int, angle: float, ox: float, oy: float) -> PatternBullet:
 	b.damage_key = damage_key
 	b.pattern_id = id
 	return b
+
+
+func _emit_spiral(ox: float, oy: float, base: float, emit_index: int) -> Array[PatternBullet]:
+	var n: int = arms if arms > 0 else 1
+	var step: float = TAU / float(n)
+	var rot: float = deg_to_rad(rotate_per_emit_deg * float(emit_index))
+	var out: Array[PatternBullet] = []
+	for i in range(n):
+		out.append(_bullet(i, base + float(i) * step + rot, ox, oy))
+	return out
+
+
+func _emit_burst(seed: int, ox: float, oy: float, aim_rad: float, repeat_index: int) -> Array[PatternBullet]:
+	if child == null:
+		return []
+	var extra: float = deg_to_rad(angle_offset_per_repeat_deg * float(repeat_index))
+	# Child volley is 0: rotation/offset for the burst lives on the parent.
+	# Fixed children ignore aim_rad, so the offset is applied after emit.
+	var bullets: Array[PatternBullet] = child.emit(seed, ox, oy, aim_rad + extra, 0)
+	if child.aim == "fixed" and extra != 0.0:
+		for b in bullets:
+			b.angle_rad += extra
+	return bullets
