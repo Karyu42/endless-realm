@@ -133,6 +133,7 @@ func _new_sim() -> LocalSim:
 	if catalog != null and catalog.scaling != null:
 		yard_e = catalog.scaling.practice_yard_content_level
 	sim.spawn_enemy("burrmite", 24.0, 10.0, yard_e)
+	sim.spawn_enemy("driftcap_spore", 24.0, 20.0, yard_e)
 	return sim
 
 

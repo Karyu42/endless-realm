@@ -14,6 +14,7 @@ var last_intent: InputIntent = InputIntent.new()
 
 ## Encode an InputIntent as a ClientMessage.input. interact_target_id is the
 ## auto-selected target; 0 means none and is left as the protobuf default.
+## ability_pressed is proto field 7, a one-shot press on this seq.
 static func encode_input(intent: InputIntent) -> PackedByteArray:
 	var msg = PB.ClientMessage.new()
 	var frame = msg.new_input()
@@ -23,6 +24,7 @@ static func encode_input(intent: InputIntent) -> PackedByteArray:
 	frame.set_aim(intent.aim)
 	frame.set_fire_held(intent.fire_held)
 	frame.set_interact_target_id(intent.interact_target_id)
+	frame.set_ability_pressed(intent.ability_pressed)
 	return msg.to_bytes()
 
 

@@ -31,6 +31,7 @@ func test_encode_input_round_trips_interact_target_id() -> void:
 	assert_almost_eq(frame.get_aim(), 1.5, 1e-6)
 	assert_true(frame.get_fire_held())
 	assert_eq(frame.get_interact_target_id(), BIG_ID)
+	assert_false(frame.get_ability_pressed(), "unset ability_pressed is false")
 
 
 func test_encode_input_zero_target_means_none() -> void:
@@ -40,3 +41,25 @@ func test_encode_input_zero_target_means_none() -> void:
 	assert_eq(decoded.from_bytes(buf), PB.PB_ERR.NO_ERRORS)
 	assert_eq(decoded.get_input().get_interact_target_id(), 0)
 	assert_eq(decoded.get_input().get_seq(), 1)
+
+
+func test_encode_input_round_trips_ability_pressed() -> void:
+	# True and false, alongside a nonzero interact_target_id (field 6).
+	var pressed := InputIntent.from_raw(9, -1.0, 0.0, 1.5, true, false, 0, BIG_ID, true)
+	var buf := NetClient.encode_input(pressed)
+	var decoded = PB.ClientMessage.new()
+	assert_eq(decoded.from_bytes(buf), PB.PB_ERR.NO_ERRORS)
+	assert_true(decoded.has_input())
+	var frame = decoded.get_input()
+	assert_eq(frame.get_seq(), 9)
+	assert_eq(frame.get_interact_target_id(), BIG_ID)
+	assert_true(frame.get_ability_pressed())
+
+	var quiet := InputIntent.from_raw(9, -1.0, 0.0, 1.5, true, false, 0, BIG_ID, false)
+	buf = NetClient.encode_input(quiet)
+	decoded = PB.ClientMessage.new()
+	assert_eq(decoded.from_bytes(buf), PB.PB_ERR.NO_ERRORS)
+	frame = decoded.get_input()
+	assert_eq(frame.get_interact_target_id(), BIG_ID)
+	assert_false(frame.get_ability_pressed())
+

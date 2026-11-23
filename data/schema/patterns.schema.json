@@ -12,7 +12,32 @@
       "type": "array",
       "minItems": 1,
       "items": {
-        "$ref": "#/$defs/pattern"
+        "allOf": [
+          {
+            "$ref": "#/$defs/pattern"
+          },
+          {
+            "if": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "const": "spore_ring"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            },
+            "then": {
+              "required": [
+                "count",
+                "aim",
+                "angle_offset_cycle_deg",
+                "interval_ticks"
+              ]
+            }
+          }
+        ]
       }
     }
   },
@@ -123,6 +148,10 @@
             "on_death",
             "phase_enter"
           ]
+        },
+        "interval_ticks": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     }
