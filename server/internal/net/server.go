@@ -92,6 +92,26 @@ func listenURLs(addr string) (health, connect string) {
 	return "http://" + hp + "/healthz", "ws://" + hp + "/ws"
 }
 
+// ProbeHealthz GETs /healthz on the listen address. Wildcard binds are
+// probed on 127.0.0.1 so this works from a distroless HEALTHCHECK.
+func ProbeHealthz(ctx context.Context, listenAddr string) error {
+	health, _ := listenURLs(listenAddr)
+	health = strings.Replace(health, "://localhost", "://127.0.0.1", 1)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, health, nil)
+	if err != nil {
+		return err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: status %d", health, res.StatusCode)
+	}
+	return nil
+}
+
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

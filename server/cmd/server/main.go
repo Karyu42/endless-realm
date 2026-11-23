@@ -23,7 +23,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	inst, err := instance.New(cfg.Seed, cfg.Multiplier, clock.Real{})
+	if cfg.Healthcheck {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := ernet.ProbeHealthz(ctx, cfg.ListenAddr); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	inst, err := instance.New(cfg.Seed, cfg.MultiplierHundredths, clock.Real{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -39,7 +48,7 @@ func main() {
 		_ = srv.Shutdown(shut)
 	}()
 
-	log.Printf("instance seed=%d multiplier=%g tick=%dHz", inst.Seed(), inst.Multiplier(), instance.TickRate)
+	log.Printf("instance seed=%d multiplier=%s (%d hundredths) tick=%dHz", inst.Seed(), instance.FormatMultiplier(inst.MultiplierHundredths()), inst.MultiplierHundredths(), instance.TickRate)
 	if err := srv.ListenAndServe(cfg.ListenAddr); err != nil && ctx.Err() == nil {
 		log.Fatal(err)
 	}
