@@ -6,8 +6,10 @@ extends SceneTree
 ##   --port N               listen port (default 8090; 0 = any free port)
 ##   --bind ADDR            bind address (default 127.0.0.1)
 ##   --seed N               instance seed sent in Welcome (default 1, matches the bot's -seed)
-##   --max-players N        lobby player cap, 1-50, default 50 (env ER_MAX_PLAYERS; the flag wins).
-##                          Out-of-range or non-integer values exit with code 2; never clamped.
+##   --max-players N        lobby player cap, 1-50, default 50. Falls back to env ER_MAX_PLAYERS
+##                          when the flag is absent; a given flag wins, even over an invalid env
+##                          value. Exits with code 2 only if the value actually used is
+##                          out of range or not an integer; never clamped.
 ##   --loadtest-unsafe-max-players N
 ##                          TEST ONLY: overrides the cap above 50 (up to 1000) for load tests.
 ##                          Not for real lobbies; prints a warning.
@@ -35,10 +37,8 @@ func _initialize() -> void:
 		return
 	_host = LobbyHost.new(_load_config())
 	_host.port = 8090
-	var env_max := OS.get_environment(ENV_MAX_PLAYERS)
-	if env_max != "":
-		if not _set_max_players(env_max, ENV_MAX_PLAYERS):
-			return
+	var flag_max: String = ""
+	var has_flag_max := false
 	var unsafe_max: String = ""
 	var i: int = 0
 	while i < args.size():
@@ -50,9 +50,7 @@ func _initialize() -> void:
 			"--bind":
 				_host.bind_address = v; i += 1
 			"--max-players":
-				if not _set_max_players(v, "--max-players"):
-					return
-				i += 1
+				flag_max = v; has_flag_max = true; i += 1
 			"--loadtest-unsafe-max-players":
 				unsafe_max = v; i += 1
 			"--seed":
@@ -68,6 +66,14 @@ func _initialize() -> void:
 			"--exit-when-empty":
 				_exit_when_empty = true
 		i += 1
+	# The flag wins over ER_MAX_PLAYERS; only the value actually used is validated.
+	if has_flag_max:
+		if not _set_max_players(flag_max, "--max-players"):
+			return
+	else:
+		var env_max := OS.get_environment(ENV_MAX_PLAYERS)
+		if env_max != "" and not _set_max_players(env_max, ENV_MAX_PLAYERS):
+			return
 	if unsafe_max != "":
 		var n := LobbyHost.parse_loadtest_unsafe_max_players(unsafe_max)
 		if n < 0:
