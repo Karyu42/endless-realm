@@ -71,3 +71,25 @@ func test_remove_player_drops_ability_state() -> void:
 	sim.remove_player(id)
 	sim.step()
 	assert_false(sim._ability_by_player.has(id), "removed with the player")
+
+
+func test_dead_entity_ids_are_never_reused_for_players() -> void:
+	var sim := _new_sim()
+	var e := sim.spawn_enemy("burrmite", 8.0, 5.0)
+	sim._enemies.clear()  # the enemy is gone
+	sim.step()
+	assert_false(sim.add_player(e), "a dead entity's id stays retired")
+	var next := sim.spawn_enemy("burrmite", 8.0, 5.0)
+	assert_gt(next, e, "allocator only moves forward")
+	var p := sim.alloc_player_id()
+	assert_gt(p, next)
+	assert_true(sim.add_player(p))
+
+
+func test_ids_skipped_by_a_reservation_stay_usable_for_players() -> void:
+	var sim := _new_sim()
+	sim.place_player(7, 1.0, 1.0)
+	sim.place_player(3, 2.0, 2.0)
+	assert_eq(sim.player_ids(), [1, 3, 7] as Array[int])
+	var e := sim.spawn_enemy("burrmite", 8.0, 5.0)
+	assert_gt(e, 7)

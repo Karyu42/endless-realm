@@ -37,10 +37,15 @@ const START_HP: int = 100
 ## Class for remote players until the host-lobby protocol carries one.
 ## TODO(host-lobby protocol PR): take the class from the joining client.
 const DEFAULT_CLASS_ID := "thornguard"
-## Saved ability states (remaining cooldown, Focus) of players who left,
-## kept for the life of the lobby so a rejoin cannot reset them. Oldest
-## entries are dropped past this many.
+## Ability state across leave/rejoin: a join that matches a host-verified
+## identity gets back the exact cooldown and Focus it left with. Every other
+## join (new, unknown, or no longer stored) starts conservative: the ability
+## on its full cooldown and 0 Focus, so no join gets a free full bar.
+## Saved states are kept for the life of the lobby, at most this many
+## (oldest dropped; a dropped one rejoins conservative), cleared by stop().
 const MAX_ABILITY_STASH: int = 256
+const CONSERVATIVE := {"conservative": true}
+const _LOCAL_KEY_PREFIX := "local:"
 const EMITTER_RADIUS: float = 0.6
 ## Matches the Go server's instance.DefaultInstanceID (the smoke instance).
 const DEFAULT_INSTANCE_ID: int = 1
@@ -118,8 +123,9 @@ class HostPlayer:
 	var class_id: String = ""
 	## True once a sim step has run with this player in it.
 	var in_sim: bool = false
-	## Ability state to restore right after the step that adds this player
-	## ({"cooldown": int, "focus": float}), or {} for a fresh player.
+	## Ability state to apply right after the step that adds this player:
+	## {"cooldown": int, "focus": float} for a matched identity, CONSERVATIVE
+	## otherwise; {} once applied.
 	var restore_ability: Dictionary = {}
 	var imported_character := PackedByteArray()
 
@@ -157,9 +163,10 @@ var on_interact: Callable = Callable()
 ## The shared world: every player, enemy, projectile and loot bag.
 var sim: LocalSim
 var catalog: DataCatalog
-## player id -> {"cooldown", "focus"} for players who left (bounded FIFO).
+## identity key -> {"id", "cooldown", "focus"} for players who left (bounded
+## FIFO). Keys are host-verified identities, never raw player ids.
 var _ability_stash: Dictionary = {}
-var _ability_stash_order: Array[int] = []
+var _ability_stash_order: Array[String] = []
 var _builtin_taken: bool = false
 
 # State
@@ -292,14 +299,14 @@ func is_m100_allowed(m100: int) -> bool:
 ## max_players. Returns the player id, or -1 if the lobby is full.
 ## `character` is passed to the shared sim: null (DEFAULT_CLASS_ID), a class
 ## id String, or a Dictionary {class_id, x?, y?, hp?}.
-## `rejoin_id` is a player id that left this lobby earlier: the player gets
-## that id back with the remaining ability cooldown and Focus it left with.
-## An unknown or live id is ignored and a fresh id is used.
-## TODO(host-lobby protocol PR): key this by the player's identity.
-func add_local_player(character: Variant = null, rejoin_id: int = 0) -> int:
+## `rejoin_token` is the token remove_local_player() returned when this
+## player left: the player gets their id back with the exact cooldown and
+## Focus they left with. Any other value (empty, unknown, already used, or
+## no longer stored) is a new join and starts conservative.
+func add_local_player(character: Variant = null, rejoin_token: String = "") -> int:
 	if players.size() >= max_players:
 		return -1
-	var p := _add_player(character, rejoin_id)
+	var p := _add_player(character, _LOCAL_KEY_PREFIX + rejoin_token if rejoin_token != "" else "")
 	p.is_local = true
 	return p.id
 
@@ -315,11 +322,15 @@ func submit_local_input(player_id: int, intent: InputIntent) -> void:
 			intent.interact_target_id, intent.ability_pressed)
 
 
-func remove_local_player(player_id: int) -> void:
+## Removes a local player. Returns a host-issued rejoin token (random, single
+## use) for add_local_player(), or "" if the player is unknown.
+func remove_local_player(player_id: int) -> String:
 	var p := _find_player(player_id)
 	if p == null or not p.is_local:
-		return
-	_leave(p)
+		return ""
+	var token := Crypto.new().generate_random_bytes(16).hex_encode()
+	_leave(p, _LOCAL_KEY_PREFIX + token)
+	return token
 
 
 ## Read-only view for one player after the last tick: the shared sim's
@@ -668,16 +679,22 @@ static func _finite_or_zero(v: float) -> float:
 	return v if is_finite(v) else 0.0
 
 
-func _add_player(character: Variant = null, rejoin_id: int = 0) -> HostPlayer:
+## `identity` is a host-verified key ("" = none). Only a stored key gets its
+## saved ability state back; everything else starts conservative.
+## TODO(handshake PR): Hello carries no verifiable identity yet, so remote
+## joins pass "" and always start conservative.
+func _add_player(character: Variant = null, identity: String = "") -> HostPlayer:
 	var p := HostPlayer.new()
+	p.restore_ability = CONSERVATIVE
 	# Ids come from the sim's one entity allocator, so a player id never
 	# collides with an enemy, projectile or bag (or a sim-only player such
 	# as LocalSim.place_ally, which never counts toward max_players).
-	if rejoin_id > 0 and _ability_stash.has(rejoin_id) and _find_player(rejoin_id) == null:
-		p.id = rejoin_id
-		p.restore_ability = _ability_stash[rejoin_id]
-		_ability_stash.erase(rejoin_id)
-		_ability_stash_order.erase(rejoin_id)
+	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
+	if not saved.is_empty() and _find_player(int(saved["id"])) == null:
+		_ability_stash.erase(identity)
+		_ability_stash_order.erase(identity)
+		p.id = int(saved["id"])
+		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"])}
 	elif _sim_has_builtin_player():
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
@@ -697,8 +714,7 @@ func _add_player(character: Variant = null, rejoin_id: int = 0) -> HostPlayer:
 		sim.add_player(p.id)
 		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if rec.has("hp") else -1)
 		sim.set_player_class_for(p.id, p.class_id)
-		if not p.restore_ability.is_empty():
-			_restore_ability(p)
+		_restore_ability(p)
 	else:
 		sim.add_player(p.id, rec)
 	p.join_tick = tick
@@ -712,33 +728,40 @@ func _sim_has_builtin_player() -> bool:
 	return not _builtin_taken and sim.tick() == 0 and sim.get_player(1) != null
 
 
-## Removes a host player from the lobby and the sim, saving their ability
-## state so a rejoin with the same id gets it back.
-func _leave(p: HostPlayer) -> void:
+## Removes a host player from the lobby and the sim. With a host-verified
+## identity, saves their ability state under it for a later rejoin.
+func _leave(p: HostPlayer, identity: String = "") -> void:
 	interact_validator.forget_player(p.id)
-	var saved: Dictionary = p.restore_ability
-	if saved.is_empty() and sim.get_player(p.id) != null:
-		saved = {"cooldown": sim.ability_cooldown_ticks(p.id), "focus": sim.focus(p.id)}
-	if not saved.is_empty():
-		_stash_ability(p.id, saved)
+	if identity != "":
+		var saved: Dictionary = p.restore_ability
+		if saved.is_empty() and sim.get_player(p.id) != null:
+			saved = {"cooldown": sim.ability_cooldown_ticks(p.id), "focus": sim.focus(p.id)}
+		if saved.has("cooldown"):
+			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"]})
 	sim.remove_player(p.id)
 	players.erase(p)
 
 
-func _stash_ability(id: int, saved: Dictionary) -> void:
-	if _ability_stash.has(id):
-		_ability_stash_order.erase(id)
-	_ability_stash[id] = saved
-	_ability_stash_order.append(id)
+func _stash_ability(key: String, saved: Dictionary) -> void:
+	if _ability_stash.has(key):
+		_ability_stash_order.erase(key)
+	_ability_stash[key] = saved
+	_ability_stash_order.append(key)
 	while _ability_stash_order.size() > MAX_ABILITY_STASH:
 		_ability_stash.erase(_ability_stash_order.pop_front())
 
 
+## Applies p.restore_ability: the saved values, or CONSERVATIVE (full
+## cooldown for the player's ability, 0 Focus).
 func _restore_ability(p: HostPlayer) -> void:
 	var saved := p.restore_ability
 	p.restore_ability = {}
-	sim.set_ability_cooldown_ticks(p.id, int(saved["cooldown"]))
-	sim.set_focus(p.id, float(saved["focus"]))
+	if saved.has("cooldown"):
+		sim.set_ability_cooldown_ticks(p.id, int(saved["cooldown"]))
+		sim.set_focus(p.id, float(saved["focus"]))
+	elif saved.has("conservative"):
+		sim.set_ability_cooldown_ticks(p.id, sim.world_view(p.id).ability_cooldown_max)
+		sim.set_focus(p.id, 0.0)
 
 
 ## Number of saved ability states (bounded by MAX_ABILITY_STASH).
@@ -765,6 +788,7 @@ static func _sim_character(character: Variant, spawn_x: float, spawn_y: float) -
 func _drop_player(c: HostConn) -> void:
 	if c.player == null:
 		return
+	# No verified identity on remote joins yet (see _add_player).
 	_leave(c.player)
 	c.player = null
 

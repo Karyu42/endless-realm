@@ -94,11 +94,25 @@ func test_remote_and_null_players_get_default_class() -> void:
 	assert_eq(_host.sim.get_player(remote).class_id, LobbyHost.DEFAULT_CLASS_ID)
 
 
+## Runs ticks until this player's ability is off cooldown with full Focus.
+func _wait_ability_ready(ids: Array) -> void:
+	for i in range(2000):
+		var ready := true
+		for id in ids:
+			if _host.sim.ability_cooldown_ticks(id) > 0 or _host.sim.focus(id) < float(_host.sim.focus_max(id)):
+				ready = false
+		if ready:
+			return
+		_host.run_tick()
+	fail_test("ability never became ready")
+
+
 func test_ability_press_casts_on_host_path_without_setting_class() -> void:
 	_host = _new_host()
 	var a := _host.add_local_player()  # no class given
 	var remote := _host._add_player().id
 	_host.run_tick()
+	_wait_ability_ready([a, remote])
 	var it := InputIntent.from_raw(1, 0.0, 0.0, 0.0, false)
 	it.ability_pressed = true
 	_host.submit_local_input(a, it)
@@ -109,7 +123,7 @@ func test_ability_press_casts_on_host_path_without_setting_class() -> void:
 	assert_eq(_host.ability_presses, 2)
 
 
-func test_ability_press_before_sim_join_is_kept_for_next_tick() -> void:
+func test_press_on_join_cannot_cast() -> void:
 	_host = _new_host()
 	_host.add_local_player()
 	var b := _host.add_local_player()  # not in the sim until the next step
@@ -117,9 +131,8 @@ func test_ability_press_before_sim_join_is_kept_for_next_tick() -> void:
 	it.ability_pressed = true
 	_host.submit_local_input(b, it)
 	_host.run_tick()
-	assert_eq(_host.sim.ward_ticks(b), 0)
 	_host.run_tick()
-	assert_gt(_host.sim.ward_ticks(b), 0)
+	assert_eq(_host.sim.ward_ticks(b), 0, "a join starts on cooldown with no Focus")
 
 
 func test_sim_only_allies_are_not_host_players() -> void:
@@ -274,6 +287,26 @@ func _cast(id: int, seq: int) -> void:
 	_host.submit_local_input(id, it)
 
 
+func _assert_conservative(id: int, why: String) -> void:
+	var cd_max := _host.sim.world_view(id).ability_cooldown_max
+	assert_gt(cd_max, 0)
+	assert_eq(_host.sim.ability_cooldown_ticks(id), cd_max, "%s: full cooldown" % why)
+	assert_almost_eq(_host.sim.focus(id), 0.0, 1e-6, "%s: no Focus" % why)
+
+
+## A local player b who has cast once and is mid-cooldown with Focus spent.
+func _player_mid_cooldown() -> int:
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	_wait_ability_ready([b])
+	_cast(b, 1)
+	_host.run_tick()
+	assert_gt(_host.sim.ability_cooldown_ticks(b), 0, "on cooldown")
+	assert_lt(_host.sim.focus(b), float(_host.sim.focus_max(b)), "Focus spent")
+	return b
+
+
 func test_leave_clears_sim_ability_entry() -> void:
 	_host = _new_host()
 	var a := _host.add_local_player()
@@ -286,73 +319,107 @@ func test_leave_clears_sim_ability_entry() -> void:
 	assert_true(_host.sim._ability_by_player.has(a))
 
 
-func test_rejoin_keeps_cooldown_and_focus() -> void:
+func test_fresh_join_starts_conservative() -> void:
 	_host = _new_host()
-	_host.add_local_player()
+	var a := _host.add_local_player()  # first player, takes over sim player 1
+	_assert_conservative(a, "first local join")  # applied at once, already in the sim
 	var b := _host.add_local_player()
+	var r := _host._add_player().id  # remote Hello path
 	_host.run_tick()
-	_cast(b, 1)
-	_host.run_tick()
-	var cd := _host.sim.ability_cooldown_ticks(b)
-	var focus := _host.sim.focus(b)
-	assert_gt(cd, 0, "on cooldown")
-	assert_lt(focus, float(_host.sim.focus_max(b)), "Focus spent")
-	_host.remove_local_player(b)
-	_host.run_tick()
-	assert_eq(_host.add_local_player(null, b), b, "same id back")
-	_host.run_tick()
-	assert_eq(_host.sim.ability_cooldown_ticks(b), cd, "cooldown not reset")
-	assert_almost_eq(_host.sim.focus(b), focus, 1e-6, "Focus not refilled")
-	_cast(b, 1)
-	_host.run_tick()
-	assert_eq(_host.ability_presses, 2)
-	assert_eq(_host.sim.ability_cooldown_ticks(b), cd - 1, "still cooling down, no recast")
+	assert_almost_eq(_host.sim.focus(b), 0.0, 1e-6)
+	_assert_conservative(r, "remote join")
 
 
-func test_rejoin_before_the_leave_is_stepped_keeps_state() -> void:
+func test_matched_identity_restores_exact_state() -> void:
 	_host = _new_host()
-	_host.add_local_player()
-	var b := _host.add_local_player()
-	_host.run_tick()
-	_cast(b, 1)
-	_host.run_tick()
+	var b := _player_mid_cooldown()
 	var cd := _host.sim.ability_cooldown_ticks(b)
 	var focus := _host.sim.focus(b)
-	_host.remove_local_player(b)
-	assert_eq(_host.add_local_player(null, b), b)
+	var token := _host.remove_local_player(b)
+	assert_ne(token, "")
+	_host.run_tick()
+	assert_eq(_host.add_local_player(null, token), b, "same id back")
+	_host.run_tick()
+	assert_eq(_host.sim.ability_cooldown_ticks(b), cd, "exact cooldown")
+	assert_almost_eq(_host.sim.focus(b), focus, 1e-6, "exact Focus")
+	assert_eq(_host.ability_stash_size(), 0, "token is single use")
+
+
+func test_matched_rejoin_before_the_leave_is_stepped() -> void:
+	_host = _new_host()
+	var b := _player_mid_cooldown()
+	var cd := _host.sim.ability_cooldown_ticks(b)
+	var focus := _host.sim.focus(b)
+	var token := _host.remove_local_player(b)
+	assert_eq(_host.add_local_player(null, token), b)
 	assert_eq(_host.sim.ability_cooldown_ticks(b), cd)
 	assert_almost_eq(_host.sim.focus(b), focus, 1e-6)
 
 
-func test_new_player_starts_fresh() -> void:
+func test_remote_reconnect_does_not_reset_cooldown_or_refill_focus() -> void:
 	_host = _new_host()
 	_host.add_local_player()
-	var b := _host.add_local_player()
+	var c := LobbyHost.HostConn.new()
+	c.player = _host._add_player()
+	var r := c.player.id
 	_host.run_tick()
-	_cast(b, 1)
+	_wait_ability_ready([r])
+	_host._queue_input(c.player, 1, 0.0, 0.0, 0.0, false, 0, true)
 	_host.run_tick()
-	_host.remove_local_player(b)
+	var cd := _host.sim.ability_cooldown_ticks(r)
+	var focus := _host.sim.focus(r)
+	assert_gt(cd, 0)
+	_host._drop_player(c)  # disconnect
 	_host.run_tick()
-	var c := _host.add_local_player()  # no rejoin id
-	assert_ne(c, b, "fresh id, never reused")
+	var r2 := _host._add_player().id  # reconnect: new Hello
 	_host.run_tick()
-	assert_eq(_host.sim.ability_cooldown_ticks(c), 0)
-	assert_almost_eq(_host.sim.focus(c), float(_host.sim.focus_max(c)), 1e-6)
-	assert_eq(_host.add_local_player(null, 987654), _host.players[-1].id, "unknown rejoin id is ignored")
-	assert_ne(_host.players[-1].id, 987654)
+	assert_ne(r2, r)
+	assert_gte(_host.sim.ability_cooldown_ticks(r2), cd - 1, "cooldown not reset")
+	assert_lte(_host.sim.focus(r2), focus, "Focus not refilled")
+	_host._queue_input(_host._find_player(r2), 1, 0.0, 0.0, 0.0, false, 0, true)
+	_host.run_tick()
+	assert_eq(_host.sim.ward_ticks(r2), 0, "cannot cast right after reconnecting")
 
 
-func test_ability_stash_is_bounded_and_cleared_on_close() -> void:
+func test_rejoin_after_eviction_starts_conservative() -> void:
 	_host = _new_host()
-	_host.add_local_player()
+	var b := _player_mid_cooldown()
+	var token := _host.remove_local_player(b)
 	_host.run_tick()
-	for i in range(LobbyHost.MAX_ABILITY_STASH + 20):
+	for i in range(LobbyHost.MAX_ABILITY_STASH):
 		var id := _host.add_local_player()
 		_host.run_tick()
 		_host.remove_local_player(id)
-	assert_eq(_host.ability_stash_size(), LobbyHost.MAX_ABILITY_STASH)
+	assert_eq(_host.ability_stash_size(), LobbyHost.MAX_ABILITY_STASH, "bounded")
+	var back := _host.add_local_player(null, token)
+	assert_ne(back, b, "evicted token is not a match")
+	_host.run_tick()
+	_assert_conservative(back, "evicted rejoin")
+
+
+func test_spoofed_local_rejoin_cannot_take_state() -> void:
+	_host = _new_host()
+	var b := _player_mid_cooldown()
+	var token := _host.remove_local_player(b)
+	_host.run_tick()
+	for guess in [str(b), "", "local:" + token, token.substr(0, 16), token.to_upper()]:
+		var id := _host.add_local_player(null, guess)
+		assert_ne(id, b, "guess %s does not get the id" % guess)
+		_host.run_tick()
+		_assert_conservative(id, "spoofed rejoin")
+		_host.remove_local_player(id)
+	assert_eq(_host.add_local_player(null, token), b, "the real token still works")
+
+
+func test_ability_stash_is_cleared_on_close() -> void:
+	_host = _new_host()
+	var b := _player_mid_cooldown()
+	var token := _host.remove_local_player(b)
+	assert_eq(_host.ability_stash_size(), 1)
 	_host.stop()
 	assert_eq(_host.ability_stash_size(), 0)
+	var again := _host.add_local_player(null, token)
+	assert_ne(again, b)
 
 
 func test_player_ids_never_collide_with_sim_entities() -> void:

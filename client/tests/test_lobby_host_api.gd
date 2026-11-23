@@ -538,7 +538,9 @@ func test_host_ability_is_consumed_by_shared_sim_once() -> void:
 	_host = _new_host()
 	var id := _host.add_local_player("thornguard")
 	var p: LobbyHost.HostPlayer = _host.players[0]
-	_host.run_tick()  # in the shared sim
+	_host.run_tick()  # in the shared sim; joins start on cooldown
+	_host.sim.set_ability_cooldown_ticks(id, 0)
+	_host.sim.set_focus(id, 100.0)
 	var intent := InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, false, 0, 0, true)
 	_host.submit_local_input(id, intent)
 	_host.run_tick()

@@ -29,6 +29,12 @@ var _tick: int = 0
 ## Default / solo viewer id (player 1 is spawned in _init).
 var _player_id: int = 1
 var _next_id: int = 2
+## Ids ever used for players (allocated or reserved). Only these, or ids the
+## allocator has not reached yet, may be passed to add_player / place_player.
+var _player_id_set: Dictionary = {1: true}
+## [lo, hi) ranges the allocator jumped over when a caller reserved a higher
+## id; never issued to entities. One entry per such reservation.
+var _skipped_ids: Array[PackedInt64Array] = []
 var _players: Dictionary = {} # id -> SimPlayerState
 var _sorted_ids: Array[int] = []
 var _pending_adds: Dictionary = {} # id -> {character: Variant, x: float, y: float, ...}
@@ -136,7 +142,7 @@ func player_count() -> int:
 ## Queue a player to join at the start of the next step(). character may be
 ## null, a class-id String, or a Dictionary {class_id, x, y, hp?}.
 func add_player(id: int, character: Variant = null) -> bool:
-	if id <= 0 or _entity_id_in_use(id):
+	if not _player_id_allowed(id):
 		return false
 	_reserve_id(id)
 	_pending_removes.erase(id)
@@ -261,31 +267,37 @@ func _alloc_id() -> int:
 
 
 ## Reserves an externally chosen id (add_player / place_player) so the
-## entity allocator never hands it out again.
+## entity allocator never hands it out again, and remembers it as a player id.
 func _reserve_id(id: int) -> void:
 	if id >= _next_id and id < MAX_ENTITY_ID:
+		if id > _next_id:
+			# The allocator never issues the ids it jumps over.
+			_skipped_ids.append(PackedInt64Array([_next_id, id]))
 		_next_id = id + 1
+	_player_id_set[id] = true
 
 
-## True if a live non-player entity (enemy, projectile, pattern bullet, bag)
-## already has this id.
-func _entity_id_in_use(id: int) -> bool:
-	for e in _enemies:
-		if e.id == id:
+## A caller-chosen player id is accepted only if the allocator has never
+## handed it to an entity: at or above the counter, jumped over by an
+## earlier reservation, or already a player id. Ids of entities that are
+## gone are never reused.
+func _player_id_allowed(id: int) -> bool:
+	if id <= 0 or id >= MAX_ENTITY_ID:
+		return false
+	if id >= _next_id or _player_id_set.has(id):
+		return true
+	for r in _skipped_ids:
+		if id >= r[0] and id < r[1]:
 			return true
-	for shot in _projectiles:
-		if shot.id == id:
-			return true
-	for b in _pattern_bullets:
-		if b.id == id:
-			return true
-	return _bag_by_id(id) != null
+	return false
 
 
 ## A fresh player id from the shared entity allocator. Hosts use this so
 ## player ids can never collide with enemy, projectile or bag ids.
 func alloc_player_id() -> int:
-	return _alloc_id()
+	var id := _alloc_id()
+	_player_id_set[id] = true
+	return id
 
 
 func spawn_enemy(def_id: String, x: float, y: float, content_level: int = 1) -> int:
@@ -564,7 +576,7 @@ func _spawn_projectile(p: SimPlayerState, sim_tick: int) -> void:
 func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p == null:
-		if id <= 0 or _entity_id_in_use(id):
+		if not _player_id_allowed(id):
 			return
 		_reserve_id(id)
 		_pending_adds.erase(id)
