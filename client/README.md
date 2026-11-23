@@ -102,8 +102,10 @@ lifetime and range, tick stepping, the `NetClient` stub, official
 PCG32 known vectors, golden pattern positions, swept hits, Burrmite
 damage / death, packed `res://data` loading, the burr_spit cadence
 (first spit 30 ticks after aggro), protocol v1 handshake and import refusal,
-portal-multiplier selection, beacon encode/decode, and a headless loopback
-host+client WebSocket session.
+portal-multiplier selection, beacon encode/decode, a headless loopback
+host+client WebSocket session, deterministic personal loot, idempotent
+drop ids, the vision §3.4 XP table (including level 1000), and multi-level-up
+from one grant.
 
 `spawn_tick` is the time index of the tick that spawned a shot (the first
 processed tick is 0). `tick()` and `snapshot.tick` count completed ticks, so
@@ -120,3 +122,22 @@ make fixtures-parity
 
 `make fixtures-parity` runs `go test -race ./internal/sim` and `make client-test`.
 
+## Loot and XP
+
+Kills in `LocalSim` roll personal loot and credit XP from `data/loot.json` and
+`data/scaling.json` (vision §3.4 and §4.2, content-v0.1 §4). Drops use PCG32
+seeded from the instance seed, the enemy id and the drop index, with the looter
+as the stream. Each drop has an idempotent `drop_id`. Bags expire after 60 s
+(1200 ticks). The HUD shows HP, level and an XP bar; E picks up a bag in range,
+and keys 1–8 equip an inventory slot.
+
+Interact prompt (1.5 tiles) and accept (2.0 tiles) ranges, and the practice-yard
+enemy level (E = 1), come from `data/scaling.json`. The client auto-selects a
+target in the prompt range and sends `interact_target_id` (0 means none). The
+sim applies a nonzero id as a press, at most once per seq, and silently drops
+an unknown id, a bag the player may not use, or a target farther than the
+accept range. The Server Engineer's protocol PR will add
+`uint64 interact_target_id = 6` to `InputFrame`; until then the field lives
+in `InputIntent` and `LocalSim`. Entity ids are `int` from one counter and stay below 2^63 so they fit the uint64 wire field.
+Every practice-yard enemy is fixed at the data E: kills give normal
+`killXP(1)`, Glint `ceil(m(1))` = 1, and loot rolls at T* = 0.

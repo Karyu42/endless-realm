@@ -8,6 +8,7 @@ extends Node
 enum Mode { SOLO, HOST, CLIENT }
 
 var config: SimConfig
+var catalog: DataCatalog
 var source: WorldSource
 var prev_snapshot: WorldSnapshot = WorldSnapshot.new()
 var curr_snapshot: WorldSnapshot = WorldSnapshot.new()
@@ -26,6 +27,10 @@ var move_x: float = 0.0
 var move_y: float = 0.0
 var aim: float = 0.0
 var fire_held: bool = false
+var interact_pressed: bool = false
+var inventory_slot: int = 0
+## Snapshot id of the interactable the client auto-selected (0 = none).
+var interact_target_id: int = 0
 
 var _accum: float = 0.0
 var _seq: int = 0
@@ -36,6 +41,7 @@ func _ready() -> void:
 	config = load("res://resources/sim_config.tres") as SimConfig
 	if config == null:
 		config = SimConfig.new()
+	catalog = DataCatalog.load_default()
 	# Boot may immediately switch to host/client; default solo keeps the
 	# practice yard working if the arena is opened on its own.
 	start_solo()
@@ -106,11 +112,18 @@ func _on_client_welcomed(pid: int) -> void:
 
 
 func _new_sim() -> LocalSim:
-	var catalog := DataCatalog.load_default()
+	if catalog == null:
+		catalog = DataCatalog.load_default()
 	var sim := LocalSim.new(config, 16.0, 16.0, catalog)
 	sim.set_bounds(0.0, 0.0, 32.0, 32.0)
 	sim.set_world_seed(1)
-	sim.spawn_enemy("burrmite", 24.0, 10.0)
+	sim.set_player_class("thornguard")
+	# Practice yard: every enemy is fixed at the data E (killXP(1), Glint 1, T* = 0).
+	sim.set_practice_yard(true)
+	var yard_e: int = 1
+	if catalog != null and catalog.scaling != null:
+		yard_e = catalog.scaling.practice_yard_content_level
+	sim.spawn_enemy("burrmite", 24.0, 10.0, yard_e)
 	return sim
 
 
@@ -152,8 +165,14 @@ func _process(delta: float) -> void:
 		# Wrap seq as u32 to stay wire-compatible later.
 		if _seq > 0xFFFFFFFF:
 			_seq = 1
-		var intent := InputIntent.from_raw(_seq, move_x, move_y, aim, fire_held)
-		source.submit_player_input(local_player_id, intent)
+		var intent := InputIntent.from_raw(
+			_seq, move_x, move_y, aim, fire_held, interact_pressed, inventory_slot, interact_target_id
+		)
+		# Consume one-shot actions so catch-up ticks do not repeat them.
+		interact_pressed = false
+		inventory_slot = 0
+		interact_target_id = 0
+		source.submit_input(intent)
 		source.step()
 		prev_snapshot = curr_snapshot
 		curr_snapshot = source.snapshot()

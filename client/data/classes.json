@@ -1,0 +1,40 @@
+{
+  "classes": [
+    {
+      "id": "thornguard",
+      "name": "Thornguard",
+      "base_hp": 200,
+      "base_ward": 12,
+      "stride": 4.5,
+      "tempo": 2.0,
+      "focus": 100,
+      "focus_regen": 5.0,
+      "weapon_id": "bramble_scattergun",
+      "ability_id": "thorn_ward"
+    },
+    {
+      "id": "gleamwright",
+      "name": "Gleamwright",
+      "base_hp": 140,
+      "base_ward": 6,
+      "stride": 5.0,
+      "tempo": 2.5,
+      "focus": 100,
+      "focus_regen": 5.0,
+      "weapon_id": "lumen_rod",
+      "ability_id": "kindle_pulse"
+    },
+    {
+      "id": "driftrunner",
+      "name": "Driftrunner",
+      "base_hp": 120,
+      "base_ward": 4,
+      "stride": 6.0,
+      "tempo": 3.5,
+      "focus": 100,
+      "focus_regen": 5.0,
+      "weapon_id": "gale_sling",
+      "ability_id": "slipstep"
+    }
+  ]
+}
