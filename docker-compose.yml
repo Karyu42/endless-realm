@@ -1,3 +1,7 @@
+# Pin GO_VERSION and POSTGRES_IMAGE via:
+#   docker compose --env-file tools/versions.env up
+# or `make dev` / `make smoke`, which pass that --env-file.
+# The `:-` defaults keep a raw `docker compose up` working at the same pins.
 services:
   postgres:
     # Pinned in tools/versions.env (POSTGRES_IMAGE). The game server does
@@ -33,6 +37,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Distroless image has no shell/curl; the server binary probes itself.
+    healthcheck:
+      test: ["CMD", "/server", "-healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
 volumes:
   er_pgdata:
