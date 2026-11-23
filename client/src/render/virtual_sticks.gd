@@ -1,7 +1,8 @@
 class_name VirtualSticks
 extends CanvasLayer
 ## Twin virtual sticks for touch / Android: left moves, right aims and fires
-## while held. Hidden on desktop unless a touch screen is present.
+## while held. Mode follows the last real input event (touch vs key/mouse),
+## so a touchscreen laptop can still use keyboard and mouse.
 
 var move_x: float = 0.0
 var move_y: float = 0.0
@@ -23,10 +24,10 @@ var _pad: Control
 
 
 func _ready() -> void:
-	using_touch = DisplayServer.is_touchscreen_available()
-	visible = using_touch
-	set_process_input(using_touch)
-	set_process(using_touch)
+	using_touch = false
+	visible = false
+	set_process_input(true)
+	set_process(true)
 	layer = 10
 	_pad = Control.new()
 	_pad.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -55,7 +56,33 @@ func _draw_stick(center: Vector2, knob_offset: Vector2) -> void:
 	_pad.draw_circle(center + knob_offset, KNOB_RADIUS_PX, Color(0.91, 0.76, 0.48, 0.9))
 
 
+func _set_using_touch(touch: bool) -> void:
+	if using_touch == touch:
+		return
+	using_touch = touch
+	visible = touch
+	if not touch:
+		_left_index = -1
+		_right_index = -1
+		_left_knob = Vector2.ZERO
+		_right_knob = Vector2.ZERO
+		move_x = 0.0
+		move_y = 0.0
+		fire_held = false
+		if _pad:
+			_pad.queue_redraw()
+
+
 func _input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch or event is InputEventScreenDrag:
+		_set_using_touch(true)
+	elif event is InputEventKey or event is InputEventMouseButton:
+		# Ignore mouse clicks synthesized from an active touch so a phone
+		# that also emits mouse events does not flap back to keyboard mode.
+		if event is InputEventMouseButton and (_left_index >= 0 or _right_index >= 0):
+			return
+		_set_using_touch(false)
+		return
 	if not using_touch:
 		return
 	if event is InputEventScreenTouch:
@@ -105,8 +132,8 @@ func _apply_left(pos: Vector2) -> void:
 	var offset := _clamped_offset(pos, _left_center)
 	_left_knob = offset
 	var raw := offset / STICK_RADIUS_PX
-	var len := raw.length()
-	if len < DEADZONE:
+	var stick_len := raw.length()
+	if stick_len < DEADZONE:
 		move_x = 0.0
 		move_y = 0.0
 	else:
@@ -118,8 +145,8 @@ func _apply_right(pos: Vector2) -> void:
 	var offset := _clamped_offset(pos, _right_center)
 	_right_knob = offset
 	var raw := offset / STICK_RADIUS_PX
-	var len := raw.length()
-	if len < DEADZONE:
+	var stick_len := raw.length()
+	if stick_len < DEADZONE:
 		fire_held = false
 	else:
 		fire_held = true

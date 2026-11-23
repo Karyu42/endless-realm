@@ -32,10 +32,10 @@ func scaled(s: float) -> SimVec2:
 
 ## Unit length, or zero if this is near the origin.
 func normalized() -> SimVec2:
-	var len := length()
-	if len <= SimConstants.MOVE_EPS:
+	var vec_len := length()
+	if vec_len <= SimConstants.MOVE_EPS:
 		return SimVec2.new()
-	return SimVec2.from_xy(x / len, y / len)
+	return SimVec2.from_xy(x / vec_len, y / vec_len)
 
 
 ## Godot 2D convention: +X = 0 rad, +Y down, clockwise positive.

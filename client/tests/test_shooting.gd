@@ -1,15 +1,27 @@
 extends GutTest
-## Fire-rate accumulator, aim convention, and projectile lifetime / range.
+## Fire-on-press timing from content-v0.1.md §1 (float64 next_ready, not an
+## integer-tick cooldown). Class Tempo values are from vision §2.
 
 
-func _cfg() -> SimConfig:
+func _cfg(tempo: float) -> SimConfig:
 	var cfg := SimConfig.new()
 	cfg.move_speed_tiles_per_s = 0.0
-	cfg.fire_rate_shots_per_s = 2.0
+	cfg.fire_rate_shots_per_s = tempo
+	cfg.tempo_bonus = 0.0
 	cfg.projectile_speed_tiles_per_s = 14.0
 	cfg.projectile_range_tiles = 7.0
 	cfg.projectile_lifetime_ticks_override = 0
 	return cfg
+
+
+## Thornguard: Tempo 2.0, cd = 0.5 s.
+func _thornguard() -> SimConfig:
+	return _cfg(2.0)
+
+
+## Driftrunner: Tempo 3.5, cd = 1/3.5 s ≈ 0.2857 s.
+func _driftrunner() -> SimConfig:
+	return _cfg(3.5)
 
 
 func _hold_fire(sim: LocalSim, ticks: int, aim: float = 0.0) -> void:
@@ -18,70 +30,115 @@ func _hold_fire(sim: LocalSim, ticks: int, aim: float = 0.0) -> void:
 		sim.step()
 
 
+func _spawn_ticks(sim: LocalSim) -> Array:
+	var ticks: Array = []
+	for shot in sim.snapshot().projectiles:
+		ticks.append(shot.spawn_tick)
+	return ticks
+
+
 func test_lifetime_ticks_matches_range_over_speed() -> void:
-	# ceil(7 / 14 * 20) = 10
-	assert_eq(_cfg().projectile_lifetime_ticks(), 10)
+	# ceil(7 / 14 * 20) = 10 (Gleamwright Lumen Rod range/speed).
+	assert_eq(_cfg(2.5).projectile_lifetime_ticks(), 10)
 
 
-func test_no_shot_until_accumulator_reaches_one() -> void:
-	# Tempo 2.0 / 20 Hz = 0.1 per tick. First shot on tick 10.
-	var sim := LocalSim.new(_cfg(), 0.0, 0.0)
-	_hold_fire(sim, 9)
-	assert_eq(sim.projectile_count(), 0)
-	sim.submit_input(InputIntent.from_raw(10, 0.0, 0.0, 0.0, true))
+func test_fire_cooldown_seconds_match_class_tempo() -> void:
+	assert_almost_eq(_thornguard().fire_cooldown_s(), 0.5, 1e-12)
+	assert_almost_eq(_driftrunner().fire_cooldown_s(), 1.0 / 3.5, 1e-12)
+	assert_almost_eq(_cfg(2.5).fire_cooldown_s(), 0.4, 1e-12)
+
+
+func test_first_shot_fires_on_the_press_tick() -> void:
+	var sim := LocalSim.new(_thornguard(), 0.0, 0.0)
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, true))
 	sim.step()
+	assert_eq(sim.tick(), 1)
 	assert_eq(sim.projectile_count(), 1)
-	assert_eq(sim.tick(), 10)
+	assert_eq(sim.snapshot().projectiles[0].spawn_tick, 0)
+	assert_almost_eq(sim.next_ready(), 0.5, 1e-12)
 
 
-func test_fire_rate_two_shots_per_second() -> void:
-	# Keep both volleys alive so the count is not reduced by despawn.
-	var cfg := _cfg()
+func test_thornguard_hold_from_tick_zero() -> void:
+	# content-v0.1 golden: Thornguard (2.0/s) fires on ticks 0, 10, 20 ….
+	var cfg := _thornguard()
 	cfg.projectile_range_tiles = 100.0
 	cfg.projectile_lifetime_ticks_override = 100
 	var sim := LocalSim.new(cfg, 0.0, 0.0)
-	_hold_fire(sim, SimConstants.TICK_HZ)
-	assert_eq(sim.projectile_count(), 2)
-	var shots := sim.snapshot().projectiles
-	assert_eq(shots[0].spawn_tick, 10)
-	assert_eq(shots[1].spawn_tick, 20)
+	_hold_fire(sim, 21)
+	assert_eq(sim.projectile_count(), 3)
+	assert_eq(_spawn_ticks(sim), [0, 10, 20])
 
 
-func test_release_does_not_bank_extra_shots() -> void:
-	var sim := LocalSim.new(_cfg(), 0.0, 0.0)
-	# 9 ticks held (acc = 0.9), then release, then 10 more held -> only one shot.
-	for i in range(9):
-		sim.submit_input(InputIntent.from_raw(i + 1, 0.0, 0.0, 0.0, true))
-		sim.step()
-	sim.submit_input(InputIntent.from_raw(10, 0.0, 0.0, 0.0, false))
+func test_driftrunner_hold_from_tick_zero() -> void:
+	# content-v0.1 golden: Driftrunner (3.5/s) fires on 0, 6, 12, 18, 23, 29.
+	# Scheduling from the previous ready time (not the landing tick) is what
+	# produces tick 23 instead of 24.
+	var cfg := _driftrunner()
+	cfg.projectile_range_tiles = 100.0
+	cfg.projectile_lifetime_ticks_override = 100
+	var sim := LocalSim.new(cfg, 0.0, 0.0)
+	_hold_fire(sim, 30)
+	assert_eq(sim.projectile_count(), 6)
+	assert_eq(_spawn_ticks(sim), [0, 6, 12, 18, 23, 29])
+
+
+func test_thornguard_repress_mid_cooldown_waits_until_ten() -> void:
+	# Press tick 0, release tick 1, press again tick 3 → volleys at 0 and 10.
+	var cfg := _thornguard()
+	cfg.projectile_range_tiles = 100.0
+	cfg.projectile_lifetime_ticks_override = 100
+	var sim := LocalSim.new(cfg, 0.0, 0.0)
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, true))
 	sim.step()
-	assert_eq(sim.projectile_count(), 0)
-	for i in range(10):
-		sim.submit_input(InputIntent.from_raw(11 + i, 0.0, 0.0, 0.0, true))
+	assert_eq(_spawn_ticks(sim), [0])
+	# Release on tick 1, remain released on tick 2, re-press from tick 3.
+	sim.submit_input(InputIntent.from_raw(2, 0.0, 0.0, 0.0, false))
+	sim.step()
+	sim.submit_input(InputIntent.from_raw(3, 0.0, 0.0, 0.0, false))
+	sim.step()
+	for i in range(7):
+		sim.submit_input(InputIntent.from_raw(4 + i, 0.0, 0.0, 0.0, true))
 		sim.step()
-	assert_eq(sim.projectile_count(), 1)
+	assert_eq(sim.tick(), 10)
+	assert_eq(_spawn_ticks(sim), [0], "still on cooldown at tick 9")
+	sim.submit_input(InputIntent.from_raw(11, 0.0, 0.0, 0.0, true))
+	sim.step()
+	assert_eq(sim.tick(), 11)
+	assert_eq(_spawn_ticks(sim), [0, 10])
+
+
+func test_fast_tapping_never_exceeds_the_hold_rate() -> void:
+	# Tapping every other tick fires no faster than holding (0, 10).
+	var cfg := _thornguard()
+	cfg.projectile_range_tiles = 100.0
+	cfg.projectile_lifetime_ticks_override = 100
+	var sim := LocalSim.new(cfg, 0.0, 0.0)
+	for i in range(SimConstants.TICK_HZ):
+		var held := (i % 2) == 0
+		sim.submit_input(InputIntent.from_raw(i + 1, 0.0, 0.0, 0.0, held))
+		sim.step()
+	assert_eq(sim.projectile_count(), 2)
+	assert_eq(_spawn_ticks(sim), [0, 10])
 
 
 func test_aim_zero_travels_positive_x() -> void:
-	var sim := LocalSim.new(_cfg(), 0.0, 0.0)
-	_hold_fire(sim, 10, 0.0)
+	var sim := LocalSim.new(_thornguard(), 0.0, 0.0)
+	_hold_fire(sim, 1, 0.0)
 	assert_eq(sim.projectile_count(), 1)
 	var shot: SimProjectile = sim.snapshot().projectiles[0]
 	assert_almost_eq(shot.dir_x, 1.0, 1e-12)
 	assert_almost_eq(shot.dir_y, 0.0, 1e-12)
-	var pos := shot.position_at_time(float(sim.tick()))
-	# Fired on tick 10, elapsed 0 on the fire tick.
+	var pos := shot.position_at_time(float(shot.spawn_tick))
 	assert_almost_eq(pos.x, 0.0, 1e-12)
 	assert_almost_eq(pos.y, 0.0, 1e-12)
-	# One second later would be 14 tiles, but range/lifetime cap at 7 over 10 ticks.
 	pos = shot.position_at_time(float(shot.spawn_tick + 5))
 	assert_almost_eq(pos.x, 14.0 * 5.0 * SimConstants.TICK_DT, 1e-12)
 	assert_almost_eq(pos.y, 0.0, 1e-12)
 
 
 func test_aim_half_pi_travels_positive_y() -> void:
-	var sim := LocalSim.new(_cfg(), 1.0, 2.0)
-	_hold_fire(sim, 10, PI / 2.0)
+	var sim := LocalSim.new(_thornguard(), 1.0, 2.0)
+	_hold_fire(sim, 1, PI / 2.0)
 	var shot: SimProjectile = sim.snapshot().projectiles[0]
 	assert_almost_eq(shot.dir_x, 0.0, 1e-12)
 	assert_almost_eq(shot.dir_y, 1.0, 1e-12)
@@ -91,32 +148,31 @@ func test_aim_half_pi_travels_positive_y() -> void:
 
 
 func test_projectile_despawns_after_lifetime() -> void:
-	var sim := LocalSim.new(_cfg(), 0.0, 0.0)
-	_hold_fire(sim, 10)
+	var sim := LocalSim.new(_thornguard(), 0.0, 0.0)
+	_hold_fire(sim, 1)
 	assert_eq(sim.projectile_count(), 1)
 	var spawn_tick := sim.snapshot().projectiles[0].spawn_tick
-	assert_eq(spawn_tick, 10)
-	# Lifetime 10: still alive at spawn + 9, gone at spawn + 10.
+	assert_eq(spawn_tick, 0)
+	# Lifetime 10: still alive while processing spawn + 9, gone at spawn + 10.
 	for i in range(9):
 		sim.submit_input(InputIntent.from_raw(20 + i, 0.0, 0.0, 0.0, false))
 		sim.step()
-	assert_eq(sim.tick(), 19)
+	assert_eq(sim.tick(), 10)
 	assert_eq(sim.projectile_count(), 1)
 	sim.submit_input(InputIntent.from_raw(30, 0.0, 0.0, 0.0, false))
 	sim.step()
-	assert_eq(sim.tick(), 20)
+	assert_eq(sim.tick(), 11)
 	assert_eq(sim.projectile_count(), 0)
 
 
 func test_projectile_despawns_at_range_before_lifetime() -> void:
-	var cfg := _cfg()
+	var cfg := _thornguard()
 	cfg.projectile_speed_tiles_per_s = 20.0
 	cfg.projectile_range_tiles = 2.0
 	cfg.projectile_lifetime_ticks_override = 20
 	# 20 tiles/s * 0.05 s = 1 tile/tick, so range 2 is hit at elapsed 2.
 	var sim := LocalSim.new(cfg, 0.0, 0.0)
-	# Fire once (tempo 2.0 -> tick 10).
-	_hold_fire(sim, 10)
+	_hold_fire(sim, 1)
 	assert_eq(sim.projectile_count(), 1)
 	sim.submit_input(InputIntent.from_raw(11, 0.0, 0.0, 0.0, false))
 	sim.step()
