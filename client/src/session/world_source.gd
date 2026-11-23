@@ -1,7 +1,8 @@
 class_name WorldSource
 extends RefCounted
-## Interface for the offline sim and the future net client. Gameplay nodes must
-## not step the world themselves — they only emit InputIntent and read snapshots.
+## Interface for the in-process sim (solo now; a player-hosted lobby later).
+## Gameplay nodes must not step the world themselves — they only emit
+## InputIntent and read snapshots. The sim itself has no Node dependency.
 
 
 func submit_input(_intent: InputIntent) -> void:

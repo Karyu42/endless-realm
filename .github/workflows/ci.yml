@@ -485,10 +485,34 @@ jobs:
         run: |
           set -euo pipefail
           log="${RUNNER_TEMP}/linux-smoke.log"
-          timeout 60 "${OUT_DIR}/${OUT_FILE}" --headless --quit-after 120 2>&1 | tee "$log"
-          if grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script' "$log"; then
-            echo "::error::Linux export hit script errors on startup"; exit 1
+          # Capture the run's exit code (pipefail: a crash, or 124 on timeout) instead of
+          # letting set -e stop the step, so the scan below still prints the offending lines.
+          rc=0
+          timeout 60 "${OUT_DIR}/${OUT_FILE}" --headless --quit-after 120 2>&1 | tee "$log" || rc=$?
+          # Only this smoke-run log is gated; import/export logs are not.
+          # Strip ANSI colour codes so the anchored patterns still match.
+          sed -E 's/\x1b\[[0-9;]*m//g' "$log" > "${log}.plain"
+          fail=0
+          if grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script' "${log}.plain"; then
+            echo "::error::Linux export hit script errors on startup"
+            fail=1
           fi
+          # Data lines catch exports that silently ship without data/ (#16), e.g.
+          # "DataCatalog: cannot read ..." and "LocalSim.spawn_enemy: unknown id burrmite".
+          if grep -nE '^(ERROR|SCRIPT ERROR):|DataCatalog: cannot read|DataCatalog:.*unknown id|spawn_enemy: unknown id' "${log}.plain" > "${log}.errors"; then
+            echo "::error::Linux export logged engine/script/data errors during the headless smoke run:"
+            sed 's/^/  /' "${log}.errors"
+            fail=1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            if [ "$rc" -eq 124 ]; then
+              echo "::error::Linux export did not exit within 60 s (timeout, exit 124)"
+            else
+              echo "::error::Linux export exited with code ${rc}"
+            fi
+            fail=1
+          fi
+          exit "$fail"
       - name: Upload ${{ matrix.target }} build
         if: steps.inputs.outputs.present == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
