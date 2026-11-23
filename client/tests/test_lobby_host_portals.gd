@@ -542,6 +542,7 @@ func test_join_floor_reject_is_reported() -> void:
 	assert_true(_instance_of(a).is_overworld())
 	assert_eq(_rejections.size(), 1)
 	assert_eq(_rejections[0][0], a)
+	assert_eq(_rejections[0][1], PB.ErrorCode.JOIN_REFUSED, "a specific code, not unspecified")
 	assert_string_contains(_rejections[0][2], "join floor")
 
 
@@ -583,6 +584,47 @@ func test_remote_player_gets_error_message_on_reject() -> void:
 				code[0] = m.get_error().get_code()
 		return code[0] != -1), "remote gets an Error")
 	assert_eq(code[0], PB.ErrorCode.MULTIPLIER_NOT_ALLOWED)
+	ws.close()
+
+
+func test_remote_join_floor_reject_carries_join_refused() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var ws := WebSocketPeer.new()
+	assert_eq(ws.connect_to_url("ws://127.0.0.1:%d/ws" % _host.port), OK)
+	var pump := func(pred: Callable) -> bool:
+		for i in range(500):
+			_host.run_tick()
+			ws.poll()
+			if pred.call():
+				return true
+			OS.delay_msec(10)
+		return false
+	assert_true(pump.call(func() -> bool: return ws.get_ready_state() == WebSocketPeer.STATE_OPEN))
+	var hello = PB.ClientMessage.new()
+	hello.new_hello().set_protocol_version(SimConstants.PROTOCOL_VERSION)
+	ws.send(hello.to_bytes())
+	assert_true(pump.call(func() -> bool: return _host.players.size() == 1 and _host.players[0].in_sim))
+	var p: LobbyHost.HostPlayer = _host.players[0]
+	var portal := PortalSnapshot.new()
+	portal.id = _host.sim._alloc_id()
+	portal.x = p.x
+	portal.y = p.y
+	portal.kind = PortalSnapshot.KIND_ENTER
+	portal.dungeon_id = "hollowmere_vault"
+	portal.m100 = 100
+	portal.base_level = 10
+	portal.content_level = 10
+	_host.sim.add_portal(portal)
+	assert_true(_host._resolve_bag(portal.id, p.id).is_empty())
+	var code := [-1]
+	assert_true(pump.call(func() -> bool:
+		while ws.get_available_packet_count() > 0:
+			var m = PB.ServerMessage.new()
+			if m.from_bytes(ws.get_packet()) == PB.PB_ERR.NO_ERRORS and m.has_error():
+				code[0] = m.get_error().get_code()
+		return code[0] != -1), "remote gets an Error")
+	assert_eq(code[0], PB.ErrorCode.JOIN_REFUSED)
 	ws.close()
 
 

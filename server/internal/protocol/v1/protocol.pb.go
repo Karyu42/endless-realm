@@ -34,6 +34,8 @@ const (
 	ErrorCode_OPEN_PORTAL_LIMIT      ErrorCode = 5
 	// The portal's multiplier is outside the lobby's allowed range.
 	ErrorCode_MULTIPLIER_NOT_ALLOWED ErrorCode = 6
+	// The player does not meet the requirements to join this instance.
+	ErrorCode_JOIN_REFUSED ErrorCode = 7
 )
 
 // Enum value maps for ErrorCode.
@@ -46,6 +48,7 @@ var (
 		4: "INSTANCE_FULL",
 		5: "OPEN_PORTAL_LIMIT",
 		6: "MULTIPLIER_NOT_ALLOWED",
+		7: "JOIN_REFUSED",
 	}
 	ErrorCode_value = map[string]int32{
 		"ERROR_CODE_UNSPECIFIED": 0,
@@ -55,6 +58,7 @@ var (
 		"INSTANCE_FULL":          4,
 		"OPEN_PORTAL_LIMIT":      5,
 		"MULTIPLIER_NOT_ALLOWED": 6,
+		"JOIN_REFUSED":           7,
 	}
 )
 
@@ -1452,7 +1456,7 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\x10join_instance_ok\x18\x05 \x01(\v2\x1a.endless.v1.JoinInstanceOkH\x00R\x0ejoinInstanceOk\x12?\n" +
 	"\rinstance_list\x18\x06 \x01(\v2\x18.endless.v1.InstanceListH\x00R\finstanceList\x12.\n" +
 	"\x05error\x18\a \x01(\v2\x16.endless.v1.ErrorReplyH\x00R\x05errorB\t\n" +
-	"\apayload*\xb6\x01\n" +
+	"\apayload*\xc8\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12INVALID_MULTIPLIER\x10\x01\x12\x16\n" +
@@ -1460,7 +1464,8 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\x13ALREADY_IN_INSTANCE\x10\x03\x12\x11\n" +
 	"\rINSTANCE_FULL\x10\x04\x12\x15\n" +
 	"\x11OPEN_PORTAL_LIMIT\x10\x05\x12\x1a\n" +
-	"\x16MULTIPLIER_NOT_ALLOWED\x10\x06BIZGgithub.com/Karyu42/endless-realm/server/internal/protocol/v1;protocolv1b\x06proto3"
+	"\x16MULTIPLIER_NOT_ALLOWED\x10\x06\x12\x10\n" +
+	"\fJOIN_REFUSED\x10\aBIZGgithub.com/Karyu42/endless-realm/server/internal/protocol/v1;protocolv1b\x06proto3"
 
 var (
 	file_v1_protocol_proto_rawDescOnce sync.Once

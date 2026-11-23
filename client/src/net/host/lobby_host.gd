@@ -1149,7 +1149,7 @@ func _enter_refusal(p: HostPlayer, portal: PortalSnapshot) -> Array:
 	var sp := psim.get_player(p.sim_id)
 	var sc := psim.scaling()
 	if sp == null or sc == null or sc.below_join_floor(sp.level, portal.content_level):
-		return [PB.ErrorCode.ERROR_CODE_UNSPECIFIED, "level is below this portal's join floor"]
+		return [PB.ErrorCode.JOIN_REFUSED, "level is below this portal's join floor"]
 	return _record_refusal(_record_for(p.instance, portal.id), p.id)
 
 
