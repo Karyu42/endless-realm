@@ -142,7 +142,7 @@ Karyu's rule: enemy scaling follows the players **in range**, and it stays at th
 **Curve.** One kink at 8 players: the approved v0.1 coefficients hold exactly up to 8 (so every 8-player number in `content-v0.1.md` stays valid), and each player past 8 adds half as much:
 
 ```
-n_max = 50                                      (data-pack ceiling, not live lobby occupancy)
+n_max = 50                                      (data-pack ceiling, provisional until the 50-player load test passes; not live lobby occupancy)
 n = min(n_peak, n_max)
 s100(n) = 100 + k × (min(n, 8) − 1) + t × max(0, n − 8)
 
@@ -358,7 +358,7 @@ Full trading is allowed: items **and** currencies (Glint, Echo Dust, Riftstone) 
 
 **Host responsibility (D26):** each lobby's host is responsible for its own data and erasure requests. The project does **not** operate a character/account database or receive gameplay, inventory or trade histories. The internet listing service does receive host addresses and lobby metadata (§11.4), so it is not described as collecting no personal data. **Privacy counsel must approve before any public release: [pre-release issue #20](https://github.com/Karyu42/endless-realm/issues/20).** This section is an implementation default, not a legal determination of grounds for retention.
 
-**Mandatory host notice:** before authentication, profile creation, import or persistent connection logging, the join screen must show the host's notice. It names the operator and erasure contact, describes every category below, states the host's chosen retention values and any platform-level access logging, explains imports and device snapshots, and links the listing service's notice. The client sends no identity key or character snapshot until the player has read and accepted that notice. Network addresses necessarily reach the host to fetch it; the pre-notice path must not persist them. No notice, no join. Material changes require showing the notice again before play resumes.
+**Mandatory host notice:** before authentication, profile creation, import or persistent connection logging, the join screen must show the host's notice. It names the operator and erasure contact, describes every category below, states the host's chosen retention values and any platform-level access logging, explains imports and device snapshots, states that a **ban survives erase-player** (the banned lobby key and expiry are kept until the ban expires) and that the import registry keeps an identity-free record of imported characters, and links the listing service's notice. The client sends no identity key or character snapshot until the player has read and accepted that notice. Network addresses necessarily reach the host to fetch it; the pre-notice path must not persist them. No notice, no join. Material changes require showing the notice again before play resumes.
 
 **Trade log:** every window reaching one Lock writes one `trade_log` row (committed, rejected, failed, timed out or cancelled), with `trade_id`, UTC event timestamps, local profile and character IDs, mode, item IDs/tiers, amounts, NTV and result. Earlier cancellations produce identity-free counters only. Gameplay appends records; corrections append compensating records. A separate host maintenance path may purge/redact records for retention and erasure. Local-store transactions must retain the §8.2 atomicity and idempotency invariants; Postgres roles/partitions are not required.
 
@@ -373,7 +373,8 @@ Full trading is allowed: items **and** currencies (Glint, Echo Dust, Riftstone) 
 | All-time and season leaderboard rows | While profile retained; old seasonal boards expire 24 months after season ends | Remove the profile's rows and displayed memorials immediately |
 | Chat | In-memory only until disconnect or lobby shutdown; no transcript files | Drop buffered messages by that player. A client may have seen/copied them; the host cannot erase another person's copies |
 | Host-admin, import, incident and revert audit rows | 90 days; host may choose 3–90 days (enough for the 72 h revert window) | Remove identifying actor/subject fields, names, identity keys and snapshot payloads; retain action, time, result and anonymous local references until expiry. Reverts for the erased subject are disabled |
-| Ban entries | 90 days, host may choose 3–90 days; manual extensions require an audited reason | Keep only the banned per-lobby public key and the expiry, so the ban still works, and delete the name, reason text and profile link. That one retained key is flagged for counsel review in #20. There is no hidden device-fingerprint ban |
+| Import registry (§11.5): `origin_key` hash + import date only | Lifetime of the lobby | **Not removed** by erase-player or audit expiry. It holds no personal identifiers, profile link, key, name or snapshot (counsel to confirm under #20). A host-admin clear deletes one row and writes an identity-free audit entry |
+| Ban entries | 90 days, host may choose 3–90 days; manual extensions require an audited reason | Keep only the banned per-lobby public key and the expiry, so the ban **survives the erase** and still works, and delete the name, reason text and profile link. That one retained key is flagged for counsel review in #20. There is no hidden device-fingerprint ban |
 | Server / connection / error logs | Application logs are identity-free counters/error codes only, rotated within 7 days. IPs, identity keys, names and device hashes are never persisted | No player-specific application records remain to remove. Host proxy/OS logging must be disabled or redacted to the same policy, documented in the mandatory notice and tested; a third-party platform's separate policy requires privacy review |
 | Host backups | Encrypted, local; expire within 30 days | Delete accessible per-profile exports immediately, queue redaction/deletion for backups and prevent restoration from reintroducing erased data. An erase journal is applied before any restored save goes online; expire the journal after the last affected backup is destroyed |
 | Device's offline saves, key backup and exported character snapshots | Until the player deletes them; device-managed only | Host erasure cannot remotely delete them. The client offers "delete local copies" after the receipt; also erase files/backups manually. Restoring an old snapshot is a **new import**, subject to the receiving host's policy, never automatic recovery of an erased profile |
@@ -381,7 +382,7 @@ Full trading is allowed: items **and** currencies (Glint, Echo Dust, Riftstone) 
 
 **Erasure requests:** contact the lobby operator shown in the notice; listing removal requests go to the listing operator's published contact. The host's erase command runs even if its trade interface is paused and writes an identity-free receipt (request id, completion time, counts removed), not a fresh copy of the erased identifiers. Requests concerning other hosts, devices or copied exports must reach those holders separately. Imported provenance is a historical claim, not permission to keep personal identifiers indefinitely: retained items/records lose identifying mappings on erasure while keeping opaque local lineage needed for integrity. Immutable provenance means gameplay cannot rewrite history, not that privacy maintenance cannot redact it.
 
-**Acceptance checks:** expiry and erase tests cover every row above, trade/revert/idempotency invariants after redaction, backup restore after an erase, and log capture during a join proving that identity keys and raw network addresses are not persisted. The 3-day minimum supports the existing 72 h incident window; the dedicated incident journal, not a trade log alone, contains the undo state. No promise of GDPR compliance is made before #20 is signed off.
+**Acceptance checks:** expiry and erase tests cover every row above. Import-registry rows: re-importing the same origin is still `ALREADY_IMPORTED` after the import audit row has expired and after the importer was erased; a Fallen copy and an offline-progressed copy are rejected the same way; a copy whose origin is this lobby gets `ALREADY_PRESENT` (original exists) or `REJECTED_ORIGIN_RETIRED` (original deleted or erased); an admin clear allows exactly one new import. Ban rows: rejoining after an erase with the same device secret is still banned, the ban lapses at its expiry, and a re-bind carries it to the new key. Also covered: trade/revert/idempotency invariants after redaction, backup restore after an erase, and log capture during a join proving that identity keys and raw network addresses are not persisted. The 3-day minimum supports the existing 72 h incident window; the dedicated incident journal, not a trade log alone, contains the undo state. No promise of GDPR compliance is made before #20 is signed off.
 
 ### 8.4 Trade value and limits
 **⚠ Hosting:** account age and hours played are counted **per lobby** (time since the host-local profile was created in this lobby, hours in this lobby, §11.2). Hosts can turn the gate and cap off (§11.3).
@@ -412,7 +413,7 @@ Gifts (one side empty) are allowed and count toward the giver's cap.
 ### 8.5 Abuse review (public summary)
 **⚠ Hosting:** flags go to the lobby's host admin and bans are per lobby. Thresholds inside the open-source host software are effectively public, so v0.1 relies on host authority, not secrecy (§11.6, D27).
 
-The server flags unusual activity into a human review queue. Examples include very one-sided trades, many new accounts sending to one account, many accounts on one device trading into one account, and implausible earn rates. The only automatic actions are:
+The server flags unusual activity into a human review queue. Examples include very one-sided trades, many new accounts sending to one account, a burst of newly created profiles that all trade into one account, and implausible earn rates. The only automatic actions are:
 - hold the received assets of a flagged trade for up to 48 h (auto-released if nobody acts, with the flag kept on record);
 - pause one account's trading pending review;
 - the §8.2 freezes and kill switch.
@@ -438,7 +439,7 @@ Why: full currency trading means real-money traders will come. Server-side atomi
 
 ## 10. Decisions (2026-11-23)
 
-D1–D7 and D17–D24 are Karyu's decisions. D8–D16 and D25–D27 are design defaults accepted by Chief of Staff and can be tuned after playtests (D14 remains gated by privacy review). D28–D30 are later confirmations/rulings relayed by Chief of Staff.
+D1–D7, D17–D21, D23 and D24 are Karyu's decisions (relayed by Chief of Staff; Karyu's own words, where quoted, are from Chief of Staff's chat as cited in the [PR #14 review](https://github.com/Karyu42/endless-realm/pull/14#pullrequestreview-6027324646)). D22 and D28–D30 are Chief of Staff rulings. D8–D16 and D25–D27 are design defaults accepted by Chief of Staff and can be tuned after playtests (D14 remains gated by privacy review). **P1** is a design proposal pending Karyu's answer (§12), not a decision.
 
 | # | Decision |
 |---|---|
@@ -459,13 +460,14 @@ D1–D7 and D17–D24 are Karyu's decisions. D8–D16 and D25–D27 are design d
 | D15 | *Default, tunable after playtests.* No paid premium season track. Paid cosmetics are sold only as separate store items (§9). |
 | D16 | *Default, tunable after playtests.* Enforcement in v0.1 uses automatic holds and pauses only. Bans are human-only. Revisit once flag precision has been measured (§8.5). |
 | D17 | No official servers for now: offline solo and player-hosted lobbies only (§11). |
-| D18 | The host sets the lobby's max players, default 50 (§11.3). |
+| D18 | The host sets the lobby's max players, default 50 (§11.3). Karyu: "solo and player lobbies, let players decide on a max player count, defaulted to 50." The 1–50 **ceiling** is a provisional engineering/design limit, not his decision, until the 50-player load test passes (`stack.md`). |
 | D19 | The lobby browser shows the multipliers of open portals; with more than 5 open it shows at least the 2 lowest and 2 highest (§11.4). |
 | D20 | Enemy scaling is dynamic with the players in range and stays at the peak count reached during an encounter (§3.5). |
 | D21 | Offline characters aren't tracked but are flagged, and lobbies can disable them (§11.7). |
-| D22 | Discovery: LAN, invite code and direct address first, then a Cloudflare Workers listing-only service planned for the free tier; any paid tier needs approval (§11.4). |
-| D23 | Characters live on the lobby that created them. Other lobbies may import them if the receiving host allows it, offline and lobby characters alike (§11.5). |
-| D24 | Device-key identity with host-local profiles, no email or password. The host is the Godot game (listen server or `--headless`) (§11.2, PR #14). |
+| D22 | *Chief of Staff ruling.* Discovery: LAN, invite code and direct address first, then a Cloudflare Workers listing-only service planned for the free tier; any paid tier needs Karyu's approval (§11.4). |
+| D23 | Characters live on the lobby that created them. Other lobbies may import them if the receiving host allows it, offline and lobby characters alike (§11.5). Karyu: "the character initially lives on the server they were created on and can be imported if allowed on the other server". |
+| D24 | The host is the Godot game (listen server or `--headless`); Go is a reference/test harness only. Karyu: "since we use godot anyway why not that one?" |
+| P1 | *Proposed, pending Karyu (§12 Q1). Not a decision.* Identity: per-lobby keys derived from a device-held secret, host-local profiles, no email or password, no central account (§11.2). |
 | D25 | *Default, tunable after playtests.* Offline-flagged characters earn normally but never appear on leaderboards and can't trade with non-Offline characters (§11.7). |
 | D26 | *Default, tunable after playtests.* Hosts are responsible for their own lobby's data: a mandatory pre-join privacy notice, per-category retention and `erase-player` (§8.3), and no IP or device hashes. Public release is gated on privacy counsel review, [issue #20](https://github.com/Karyu42/endless-realm/issues/20). |
 | D27 | *Default, tunable after playtests.* Leaderboards and bans are per lobby. Anti-cheat relies on host authority, not secret thresholds (§11.6). |
@@ -477,7 +479,7 @@ D1–D7 and D17–D24 are Karyu's decisions. D8–D16 and D25–D27 are design d
 
 ## 11. Hosting model: offline solo and player-hosted lobbies [v0.1]
 
-Karyu's decisions (2026-11-23, D17–D24): **there are no official servers for now.** The game runs in two ways:
+Decisions (2026-11-23, D17–D24 and D29; credits in §10): **there are no official servers for now.** The game runs in two ways:
 - **Offline solo:** the client's in-process sim (`LocalSim`, `stack.md`), with no network and no tracking. `n_peak` is always 1. The device acts as its own host for saves (§11.5).
 - **Player-hosted lobbies:** a player hosts with the **Godot game itself**, either as a listen server inside their client or as the same export run `--headless` (D24, `stack.md` amendment in PR #14). Solo and hosted play run the same GDScript sim, rules and `data/` pack. A lobby is one Hearth, one Wilds and its portal instances.
 
@@ -488,12 +490,14 @@ Everything in this doc that said "the server" now means **the lobby's host**. It
 - **A lobby is exactly as trustworthy as its host.** The host can edit its own save. The game never calls a character "verified". It only says where the character was recorded (§11.5 provenance), and the lobby browser says so plainly (§11.4).
 - **Version lock:** a client can join only a lobby with the same protocol version and `data/` pack hash. Hosts can't change formulas or tuning in v0.1. **[Later]** Modded or custom-rule lobbies, shown with their own badge.
 
-### 11.2 Identity: device keys and host-local profiles (D24)
+### 11.2 Identity: device keys and host-local profiles (P1, proposed — pending Karyu, §12 Q1)
+**Status: design proposal, not a decision.** Karyu hasn't chosen the identity model yet. Everything below is the recommended design; the alternatives are in §12 Q1. Other sections that say "profile" or "key" assume this proposal and change with his answer.
+
 - **No email, no password, no central account.** Each device creates and keeps a secret identity root. For every host it joins, the client derives a **separate per-lobby Ed25519 key pair** from that root and the host's full `host_id` (a domain-separated KDF; the exact construction and test vectors are owned by the Server Engineer). Different hosts therefore see unrelated player keys. Only that **per-lobby public key** leaves the device; the root/master public key is never sent. Authentication uses a fresh, single-use host nonce bound to the host identity/session, signed with that lobby key. No global player identifier is used.
 - **Joining a lobby:** after the mandatory pre-join notice (§8.3), the host checks the signature and creates a **host-local profile** on first successful join. It owns that lobby's account-level state (wallets per mode, stash, cosmetic unlocks, trade gate counters) and characters. The display name is unique within the lobby. The UI uses a short fingerprint for display, but authorization compares the full key/fingerprint, never the shortened label.
 - **Hosts have keys too.** Each host installation has a stable key pair; `host_id` is the **full SHA-256 fingerprint of its public key**. Short forms are display-only. Clients pin it on first connection and warn on a change; address or lobby-name changes don't create a new profile. A new host key is a different identity unless the client explicitly trusts an authenticated migration.
 - **Linkability:** unrelated hosts see different player authentication keys. Display names, network addresses, a shared host impersonating several lobbies, and voluntarily exported character provenance can still link activity. The pre-join/import notice explains that; the game does not promise anonymity. Exports carry source-lobby provenance, never the device root or player authentication keys.
-- **Key backup:** the client can export the secret identity root as a passphrase-encrypted file and import it on another device. Without that file, a lost device means lost access to every host-local profile. A host admin can re-bind a profile to a new public key in their own lobby, and each re-bind writes an audit row (old key, new key, admin, reason).
+- **Key backup:** the client can export the secret identity root as a passphrase-encrypted file and import it on another device. Without that file, a lost device means lost access to every host-local profile. A host admin can re-bind a profile to a new public key in their own lobby, and each re-bind writes an audit row (old key, new key, admin, reason). **A ban carries over:** if the old key is banned, the new key gets the same ban and expiry in the same transaction. The old key stays banned too, so a re-bind can't be used to dodge a ban.
 - **"Account" in §7–§9** means the host-local profile in that lobby. That includes account age and hours played (§8.4).
 
 ### 11.3 Host lobby settings
@@ -504,7 +508,7 @@ Set by the host when the lobby starts. Fields marked *live* can change while it 
 | Lobby name | 3–32 characters | "<host name>'s lobby" | Shown in the browser |
 | Password | optional, 0–64 characters | none | Shown as a lock icon. The password is never listed |
 | Mode | Standard or Hardcore | Standard | One mode per lobby. Hardcore lobbies are the separate realm of §7.3 |
-| **Max players** | **1–50** | **50** (desktop / `--headless`) | The ceiling of 50 is a tuning number to raise after the 50-player load-test gate (`stack.md`); Android is join-only for v0.1 (later CoS ruling, D29), with no Android-host default. *Live:* lowering it never kicks anyone, it only blocks new joins. It also caps every portal instance (§6.1 rule 5) |
+| **Max players** | **1–50** | **50** (desktop / `--headless`) | The ceiling of 50 is **provisional** until the 50-player load test passes (`stack.md`); if it fails, the ceiling drops to the tested value; Android is join-only for v0.1 (later CoS ruling, D29), with no Android-host default. *Live:* lowering it never kicks anyone, it only blocks new joins. It also caps every portal instance (§6.1 rule 5) |
 | **Allow imported characters** | on / off | on | *Live.* Whether characters created elsewhere (another lobby or offline solo) can be imported into this lobby (§11.5) |
 | **Allow Offline-flagged characters** | on / off | on | *Live.* Applies to imports whose `played_offline` flag is set. Only matters while imports are on. Turning it off blocks new imports of flagged characters; flagged characters already in the lobby stay |
 | **Allowed multiplier range** | `M_min` to `M_max` in hundredths, each in `[50, 150]`, step 5, `M_min ≤ 100 ≤ M_max` | 50 to 150 (the full v0.1 range) | *Live* for new portals. Validate the global step/range first (`INVALID_MULTIPLIER`), then the host range (`MULTIPLIER_NOT_ALLOWED`). The latter is an **additive protocol enum value**, not a renumbering; old peers must not treat it as a success. 1.00 must stay in range, because found portals (§6) are always M = 1.00 |
@@ -565,8 +569,15 @@ The host also has a **host admin** role for kicks, bans, freezes, incident windo
   - There are **no cross-host transactions or guarantees.** Copies of one character can exist in several lobbies at once and diverge freely. Each lobby's economy is separate (§11.1), so these copies don't duplicate anything inside any one lobby.
   - **What the copy carries:** class, mode, level, XP, and the snapshot's equipped and inventory gear and cosmetic tokens. It doesn't carry pending loot (snapshots are taken in the Hearth, after banking), the source profile's stash or wallets, Sparks, cosmetic unlocks or leaderboard history. Those are profile state in the source lobby. *Design default, tunable after playtests.*
   - **New ids on arrival:** the receiving host mints fresh `item_uid`s for every carried item (provenance reason `IMPORTED`) and writes one audit row per import. Imported items stay subject to the §8.4 re-trade hold, which starts at import.
-  - **Idempotent import per origin character per lobby.** A lobby accepts a given `(origin_host_id, origin_character_id)` once across all profiles of that lobby. Importing it again is rejected with `ALREADY_IMPORTED` unless the host admin clears the earlier record (audited). This stops repeated imports of the same snapshot from multiplying items inside one lobby.
-- **Checks on import (receiving host):** the version and data-pack hash match; imports are allowed (§11.3), and Offline-flagged ones too if the flag is set; the mode matches the lobby (**Hardcore → Hardcore only; Standard → Standard only**, never conversion); the character isn't Fallen (memorials can't be imported); the signature verifies against the key named in the snapshot; and the snapshot is well-formed: schema, item ids, and levels, tiers and stats consistent with this data pack's formulas. Signing proves issuance, not honest earning; a dishonest host can forge reachable values. Authenticate the receiving profile and bind the new copy to it; an export is a portable bearer copy, not proof of global ownership. Result codes: `IMPORTED`, `REJECTED_IMPORTS_OFF`, `REJECTED_OFFLINE_OFF`, `REJECTED_VERSION`, `REJECTED_MODE`, `REJECTED_FALLEN`, `REJECTED_SIGNATURE`, `REJECTED_INVALID` or `ALREADY_IMPORTED`. Any result except `IMPORTED` changes nothing.
+  - **Idempotent import per origin character per lobby.** A lobby accepts a given `(origin_host_id, origin_character_id)` once, across all its profiles.
+    - **Import registry:** each accepted import stores one row: `origin_key = SHA-256("er-import-v1" ‖ origin_host_id ‖ origin_character_id)` plus the import date (UTC day). It holds no profile, player key, name, lobby name or snapshot. It lives as long as the lobby, and neither audit expiry nor erase-player removes it (§8.3). Only a host-admin clear deletes a row, and that writes an identity-free audit entry.
+    - **Rejection:** importing the same origin again is rejected with `ALREADY_IMPORTED`. This also covers a copy that died (a Fallen hardcore copy) and a copy that went through offline play and came back with `played_offline` set. Every copy keeps its origin pair, so all of them stay blocked until an admin clears the row.
+    - This stops repeated imports of the same snapshot from multiplying items inside one lobby.
+  - **Importing back into the origin lobby:** if a snapshot's `origin_host_id` is this lobby's own `host_id`, the import is always rejected.
+    - `ALREADY_PRESENT` when the original character still exists here, alive or as a memorial.
+    - `REJECTED_ORIGIN_RETIRED` when it was deleted or erased here.
+    - The original already lives in this lobby, so a round-trip copy would duplicate its gear, and a returning copy could undo a deletion, an erasure or a hardcore death. The host-admin clear doesn't apply to this rule.
+- **Checks on import (receiving host):** the version and data-pack hash match; imports are allowed (§11.3), and Offline-flagged ones too if the flag is set; the mode matches the lobby (**Hardcore → Hardcore only; Standard → Standard only**, never conversion); the character isn't Fallen (memorials can't be imported); the signature verifies against the key named in the snapshot; and the snapshot is well-formed: schema, item ids, and levels, tiers and stats consistent with this data pack's formulas. Signing proves issuance, not honest earning; a dishonest host can forge reachable values. Authenticate the receiving profile and bind the new copy to it; an export is a portable bearer copy, not proof of global ownership. Result codes: `IMPORTED`, `REJECTED_IMPORTS_OFF`, `REJECTED_OFFLINE_OFF`, `REJECTED_VERSION`, `REJECTED_MODE`, `REJECTED_FALLEN`, `REJECTED_SIGNATURE`, `REJECTED_INVALID`, `ALREADY_IMPORTED`, `ALREADY_PRESENT` or `REJECTED_ORIGIN_RETIRED`. Any result except `IMPORTED` changes nothing. The origin and registry checks run after `REJECTED_SIGNATURE` and `REJECTED_INVALID`. If the origin is this lobby, the result is `ALREADY_PRESENT` or `REJECTED_ORIGIN_RETIRED`. Otherwise it is `ALREADY_IMPORTED` when the registry holds the `origin_key`.
 - **After import, the copy is a normal character of that lobby.** It plays, trades and ranks like a character created there. The only exception is the Offline flag's limits (§11.7). The receiving host's import setting is the gate, and there are no extra "imported" restrictions.
 - **Hardcore copies:** permadeath applies per copy. A copy that dies is Fallen in that lobby only.
 - **Where provenance shows:** on the character sheet ("Imported from <source lobby name> · <source host fingerprint> · <date>", plus "Created on <origin lobby name>" when that differs), character select, player-list details and the trade window. This is provenance, not a restrictive Imported badge.
@@ -583,7 +594,7 @@ The host also has a **host admin** role for kicks, bans, freezes, incident windo
 | §7.3 Incident windows and reverts | On-call ops | Automatic windows still open when the host's sim crashes, restarts or stalls (same triggers). Manual windows, extensions and reverts are done by the host admin, with the same audit rows | — |
 | §6.1 Party cap 8, n snapshots | 8-player instances; n fixed at room activation and arena seal | Instance cap = the lobby's max players. Scaling uses `n_peak` (§3.5) | D18, D20 |
 | §9 Seasons and cosmetics | Central season service; account-wide unlocks | Season dates ship in the data pack (UTC), so every lobby and offline play share Season 0's dates. Sparks, the track and unlocks are **per lobby** (per device offline). Cosmetic tokens trade only inside their lobby; one carried in an import is a new token there. No paid cosmetics | D28 |
-| `stack.md` | Official Go server + Postgres; email + password | Godot host (Go = reference/test harness) and device-key identity as accepted in PR #14, except Android hosting, which D29 supersedes (join-only in v0.1). `stack.md` is owned by the Server Engineer; this PR doesn't edit it | D24 |
+| `stack.md` | Official Go server + Postgres; email + password | Godot host (Go = reference/test harness, D24). Identity is still a proposal in both this doc (P1) and PR #14, and neither records it as decided. Android hosting differs from #14's current text, where D29 is the later ruling (join-only in v0.1). `stack.md` is owned by the Server Engineer; this PR doesn't edit it | D24 |
 
 **Hosting platforms (latest ruling, D29):** desktop listen servers and desktop `--headless` hosts ship first. Android is **join-only in v0.1**, not a listen host. The Android default of 8 proposed in PR #14 is superseded by this later ruling. A web-export client cannot host either. The Godot shared sim remains authoritative; existing Go code is a reference/test harness, not the live gameplay host.
 
@@ -597,22 +608,31 @@ The host also has a **host admin** role for kicks, bans, freezes, incident windo
 - **What it can do:** everything else: play, join portals, earn loot, XP and Sparks normally, and count toward `n_peak` like anyone.
 - Offline hardcore is on the honor system, since offline play can't be audited. Permadeath still applies to a flagged hardcore copy inside a lobby.
 
-## 12. Hosting decisions and defaults (2026-11-23)
+## 12. Hosting decisions, defaults and the open question (2026-11-23)
 
-These come from Karyu's answers and Chief of Staff's acceptance of the §12 questions in the first version of this PR. They are recorded as D22–D30 in §10.
+These come from Karyu's answers and Chief of Staff's rulings on the §12 questions in the first version of this PR. They are recorded as D22–D30 and P1 in §10.
 
-- **D22, Discovery (Karyu):** LAN, invite code and direct address first, then an internet listing-only service on Cloudflare Workers, planned for the free tier. The internet browser is in scope. Any paid tier needs approval first (§11.4).
+- **D22, Discovery (Chief of Staff ruling):** LAN, invite code and direct address first, then an internet listing-only service on Cloudflare Workers, planned for the free tier. The internet browser is in scope. Any paid tier needs Karyu's approval first (§11.4).
 - **D23, Characters (Karyu):** a character lives on the lobby that created it. Other lobbies may import it if the receiving host allows it, and that applies to offline and lobby characters alike. Import permission is set per host. Import is a copy with immutable provenance and no global ownership (§11.5).
-- **D24, Identity and host (Karyu):** device-key identity with host-local profiles, and no email or password (§11.2). The host is the Godot game, as a listen server or `--headless` (PR #14).
+- **D24, Host (Karyu):** the host is the Godot game, as a listen server or `--headless`. Go is a reference/test harness only.
 - **D25, Offline characters (design default, accepted by CoS):** they play and earn normally, but never appear on leaderboards and can't trade with non-Offline characters (§11.7).
-- **D26, Player data (design default, accepted by CoS):** each host is responsible for its own lobby's data. No IP or device hashes are kept, and there is an "erase player" command. Privacy review before any public release (§11.6).
+- **D26, Player data (design default, accepted by CoS):** each host is responsible for its own lobby's data, with a mandatory notice, per-category retention and erase-player (§8.3). No IP or device hashes.
 - **D27, Competition and enforcement (design default, accepted by CoS):** leaderboards and bans are per lobby. Anti-cheat relies on host authority over clients, not secret thresholds (§11.6).
-- **D28, Seasons/cosmetics (confirmed via CoS):** seasons and unlocks are per lobby and per device, with no paid cosmetics (§11.6).
-- **D29, Hosting platforms (later ruling via CoS):** desktop/headless first; Android join-only in v0.1. This supersedes #14's Android-host default.
-- **D30, Modes/trading/admin (confirmed via CoS):** D1 and D3 stand; the host admin replaces Economy Ops. Trading and the anti-RMT gate are **ON** by default (§11.3).
+- **D28, Seasons/cosmetics (CoS ruling):** seasons and unlocks are per lobby and per device, with no paid cosmetics (§11.6).
+- **D29, Hosting platforms (CoS ruling):** desktop/headless first; Android join-only in v0.1. This is later than, and differs from, #14's Android-host default.
+- **D30, Modes/trading/admin (CoS ruling):** D1 and D3 stand; the host admin replaces Economy Ops. Trading and the anti-RMT gate are **ON** by default (§11.3).
 - **Public-release gate:** privacy counsel review in [pre-release issue #20](https://github.com/Karyu42/endless-realm/issues/20) must be completed before any public release. This doc does not resolve it.
 
-**No open questions.** The import rules in §11.5 (what a copy carries, new item ids, one import per origin character per lobby) are design defaults that can be tuned after playtests. None of them change direction or money.
+**Open question for Karyu (direction):**
+
+1. **Identity (P1).** How do players identify themselves to lobbies? Karyu asked what an account service would cost and how email/password browser games handle it, but hasn't chosen.
+   - (a) **Device-held secret with per-lobby derived keys and host-local profiles** (§11.2): no email or password, nothing central, no cost. Unrelated lobbies can't link a player by key. A lost device without the key backup loses access.
+   - (b) **Email + password per lobby:** familiar, but every host then stores emails and password hashes. That's more personal data per host, a weaker privacy story, and no recovery without email sending.
+   - (c) **Central account service:** cross-lobby identity and recovery, but it's always-on official infrastructure with an ongoing cost, which conflicts with "no official servers for now".
+
+   **Recommendation: (a)** for v0.1. It fits D17 and D26, costs nothing, and can later gain an optional central account (c) without breaking per-lobby profiles.
+
+Everything else in §11 is a decision or a tunable design default. The import rules in §11.5 (what a copy carries, new item ids, the import registry) don't change direction or money.
 
 ## Appendix A. Group scaling curve, n = 1…50
 
