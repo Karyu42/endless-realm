@@ -15,7 +15,7 @@ var inventory_slot: int = 0
 ## value is an interact press on this seq, applied at most once per seq.
 ## Entity ids are int from LocalSim's single counter and stay below 2^63.
 var interact_target_id: int = 0
-## Requested proto field (not on the wire yet): bool ability_pressed = 7.
+## proto InputFrame.ability_pressed = 7 (bool).
 ## A true value is an ability press on this seq, applied at most once per seq
 ## if Focus and the cooldown allow; otherwise it is a silent no-op.
 var ability_pressed: bool = false

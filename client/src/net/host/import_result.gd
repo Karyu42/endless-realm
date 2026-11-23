@@ -14,7 +14,8 @@ const REJECTED_OFFLINE_OFF: int = 2
 const REJECTED_BAD_FORMAT: int = 3
 ## A character file from a format version this host does not read.
 const REJECTED_UNSUPPORTED_VERSION: int = 4
-## The signature does not verify. TODO: signatures are not checked yet.
+## The signature is missing or did not verify. Import fails closed: until
+## verification lands (host-lobby protocol PR) every well-formed blob gets this.
 const REJECTED_BAD_SIGNATURE: int = 5
 ## This player already imported a character in this lobby.
 const REJECTED_ALREADY_EXISTS: int = 6

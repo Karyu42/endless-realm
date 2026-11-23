@@ -269,12 +269,12 @@ func test_world_view_after_ticks() -> void:
 	assert_eq(get_signal_parameters(_host, "ticked", 2), [3])
 	var v := _host.world_view(a)
 	assert_true(v is WorldSnapshot)
-	assert_true(v is HostWorldSnapshot)
 	assert_eq(v.player_id, a)
-	assert_eq(v.tick, 3)
-	assert_eq((v as HostWorldSnapshot).host_tick, 3)
-	assert_eq((v as HostWorldSnapshot).others.size(), 1)
-	assert_eq((v as HostWorldSnapshot).others[0]["id"], b)
+	assert_eq(v.tick, 3, "shared sim clock matches the host tick")
+	var ids: Array[int] = []
+	for ps in v.players:
+		ids.append(ps.id)
+	assert_eq(ids, [a, b], "everyone in the shared sim, ascending id")
 	assert_null(_host.world_view(9999), "unknown player")
 
 
@@ -536,21 +536,19 @@ func test_ability_pressed_is_one_shot_per_seq() -> void:
 
 func test_host_ability_is_consumed_by_shared_sim_once() -> void:
 	_host = _new_host()
-	var id := _host.add_local_player()
+	var id := _host.add_local_player("thornguard")
 	var p: LobbyHost.HostPlayer = _host.players[0]
-	p.sim.set_catalog(DataCatalog.load_default())
-	p.sim.set_player_class("thornguard")
-	var sim_id := p.sim.snapshot().player_id
+	_host.run_tick()  # in the shared sim
 	var intent := InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, false, 0, 0, true)
 	_host.submit_local_input(id, intent)
 	_host.run_tick()
-	assert_eq(p.sim.ward_ticks(sim_id), 59, "sim consumed ability")
-	assert_almost_eq(p.sim.focus(sim_id), 60.25, 1e-6)
+	assert_eq(_host.sim.ward_ticks(id), 59, "sim consumed ability")
+	assert_almost_eq(_host.sim.focus(id), 60.25, 1e-6)
 	assert_false(p.ability_pressed, "host queue cleared")
-	assert_false(p.sim.get_player(sim_id).intent.ability_pressed, "sim one-shot cleared")
-	p.sim.set_ability_cooldown_ticks(sim_id, 0)
+	assert_false(_host.sim.get_player(id).intent.ability_pressed, "sim one-shot cleared")
+	_host.sim.set_ability_cooldown_ticks(id, 0)
 	_host.submit_local_input(id, intent)  # duplicate seq cannot recast
 	_host.run_tick()
-	assert_eq(p.sim.ward_ticks(sim_id), 58, "ward not refreshed")
-	assert_almost_eq(p.sim.focus(sim_id), 60.5, 1e-6)
-	assert_false(p.sim.get_player(sim_id).intent.ability_pressed)
+	assert_eq(_host.sim.ward_ticks(id), 58, "ward not refreshed")
+	assert_almost_eq(_host.sim.focus(id), 60.5, 1e-6)
+	assert_false(_host.sim.get_player(id).intent.ability_pressed)

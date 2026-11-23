@@ -10,6 +10,7 @@ const GOLDEN_WELCOME := "0801108780808010180c2001300338c801"
 const GOLDEN_ERROR := "3a0a0804120666756c6c2121"
 const GOLDEN_SNAP := "1a0c080512080887808080101004"
 const GOLDEN_INPUT := "120f080915000080bf2801308780808010"
+const GOLDEN_SNAP_BAGS := "1a2208051204080210041a18088780808010150000c03f1d000010402002280130023828"
 
 
 func test_welcome_instance_and_uint64_player_id_match_go() -> void:
@@ -75,3 +76,36 @@ func test_unset_interact_target_decodes_as_zero() -> void:
 	var d = PB.ClientMessage.new()
 	assert_eq(d.from_bytes(m.to_bytes()), PB.PB_ERR.NO_ERRORS)
 	assert_eq(d.get_input().get_interact_target_id(), 0)
+
+
+func test_snapshot_loot_bags_match_go() -> void:
+	var m = PB.ServerMessage.new()
+	var s = m.new_snapshot()
+	s.set_tick(5)
+	var p = s.add_players()
+	p.set_id(2)
+	p.set_applied_seq(4)
+	var b = s.add_bags()
+	b.set_id(BIG_ID)
+	b.set_x(1.5)
+	b.set_y(2.25)
+	b.set_owner_player_id(2)
+	b.set_t_star(1)
+	b.set_bag_color_kind(2)
+	b.set_spawn_tick(40)
+	assert_eq(m.to_bytes().hex_encode(), GOLDEN_SNAP_BAGS, "encodes like Go")
+	var d = PB.ServerMessage.new()
+	assert_eq(d.from_bytes(GOLDEN_SNAP_BAGS.hex_decode()), PB.PB_ERR.NO_ERRORS)
+	var bags = d.get_snapshot().get_bags()
+	assert_eq(bags.size(), 1)
+	assert_eq(bags[0].get_id(), BIG_ID)
+	assert_almost_eq(bags[0].get_x(), 1.5, 1e-6)
+	assert_almost_eq(bags[0].get_y(), 2.25, 1e-6)
+	assert_eq(bags[0].get_owner_player_id(), 2)
+	assert_eq(bags[0].get_t_star(), 1)
+	assert_eq(bags[0].get_bag_color_kind(), 2)
+	assert_eq(bags[0].get_spawn_tick(), 40)
+	# Old snapshot bytes decode with no bags.
+	var o = PB.ServerMessage.new()
+	assert_eq(o.from_bytes(GOLDEN_SNAP.hex_decode()), PB.PB_ERR.NO_ERRORS)
+	assert_eq(o.get_snapshot().get_bags().size(), 0)

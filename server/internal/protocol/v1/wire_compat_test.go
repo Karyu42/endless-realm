@@ -22,6 +22,8 @@ const (
 	goldenSnapHex    = "1a0c080512080887808080101004"       // ServerMessage{snapshot: {tick 5, players [{bigID, 4}]}}
 	goldenInputHex   = "120f080915000080bf2801308780808010" // ClientMessage{input: {seq 9, move_x -1, fire, target bigID}}
 	goldenAbilityHex = "120408033801"                       // ClientMessage{input: {seq 3, ability_pressed}}
+	// ServerMessage{snapshot: {tick 5, players [{2, 4}], bags [{bigID, 1.5, 2.25, owner 2, t_star 1, teal, spawn 40}]}}
+	goldenSnapBagsHex = "1a2208051204080210041a18088780808010150000c03f1d000010402002280130023828"
 )
 
 func roundTrip[T proto.Message](t *testing.T, in T, out T) []byte {
@@ -126,5 +128,32 @@ func TestInputFrameAbilityPressedGolden(t *testing.T) {
 	var old protocolv1.InputFrame
 	if err := proto.Unmarshal([]byte{0x08, 0x03}, &old); err != nil || old.GetAbilityPressed() {
 		t.Fatalf("unset ability_pressed should decode false (err %v)", err)
+	}
+}
+
+func TestSnapshotLootBagsGolden(t *testing.T) {
+	in := &protocolv1.ServerMessage{Payload: &protocolv1.ServerMessage_Snapshot{Snapshot: &protocolv1.Snapshot{
+		Tick:    5,
+		Players: []*protocolv1.PlayerStub{{Id: 2, AppliedSeq: 4}},
+		Bags: []*protocolv1.LootBag{{
+			Id: bigID, X: 1.5, Y: 2.25, OwnerPlayerId: 2, TStar: 1, BagColorKind: 2, SpawnTick: 40,
+		}},
+	}}}
+	out := &protocolv1.ServerMessage{}
+	b := roundTrip(t, in, out)
+	if got := hex.EncodeToString(b); got != goldenSnapBagsHex {
+		t.Fatalf("snapshot bytes %s, want %s", got, goldenSnapBagsHex)
+	}
+	bags := out.GetSnapshot().GetBags()
+	if len(bags) != 1 || bags[0].GetId() != bigID || bags[0].GetX() != 1.5 || bags[0].GetY() != 2.25 ||
+		bags[0].GetOwnerPlayerId() != 2 || bags[0].GetTStar() != 1 || bags[0].GetBagColorKind() != 2 ||
+		bags[0].GetSpawnTick() != 40 {
+		t.Fatalf("bags not round-tripped: %v", bags)
+	}
+	// A snapshot without bags keeps its old bytes (additive field).
+	var old protocolv1.ServerMessage
+	raw, _ := hex.DecodeString(goldenSnapHex)
+	if err := proto.Unmarshal(raw, &old); err != nil || len(old.GetSnapshot().GetBags()) != 0 {
+		t.Fatalf("old snapshot should decode with no bags (err %v)", err)
 	}
 }

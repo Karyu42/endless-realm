@@ -386,9 +386,12 @@ func (x *InputFrame) GetAbilityPressed() bool {
 
 // Snapshot is a stub: tick plus the last applied input seq per connected player.
 type Snapshot struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tick          uint32                 `protobuf:"varint,1,opt,name=tick,proto3" json:"tick,omitempty"`
-	Players       []*PlayerStub          `protobuf:"bytes,2,rep,name=players,proto3" json:"players,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Tick    uint32                 `protobuf:"varint,1,opt,name=tick,proto3" json:"tick,omitempty"`
+	Players []*PlayerStub          `protobuf:"bytes,2,rep,name=players,proto3" json:"players,omitempty"`
+	// Loot bags visible to the receiving player: only that player's own bags.
+	// Each recipient gets its own list; it is empty for most players.
+	Bags          []*LootBag `protobuf:"bytes,3,rep,name=bags,proto3" json:"bags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -437,6 +440,110 @@ func (x *Snapshot) GetPlayers() []*PlayerStub {
 	return nil
 }
 
+func (x *Snapshot) GetBags() []*LootBag {
+	if x != nil {
+		return x.Bags
+	}
+	return nil
+}
+
+// A personal loot bag on the ground (tile units). Item details stay
+// server-side until pickup.
+type LootBag struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	X             float32                `protobuf:"fixed32,2,opt,name=x,proto3" json:"x,omitempty"`
+	Y             float32                `protobuf:"fixed32,3,opt,name=y,proto3" json:"y,omitempty"`
+	OwnerPlayerId uint64                 `protobuf:"varint,4,opt,name=owner_player_id,json=ownerPlayerId,proto3" json:"owner_player_id,omitempty"`
+	// Tier reference (T*) the bag color is relative to.
+	TStar uint32 `protobuf:"varint,5,opt,name=t_star,json=tStar,proto3" json:"t_star,omitempty"`
+	// 0 = unknown, 1 = brown (tier <= T*), 2 = teal (T*+1), 3 = gold (T*+2 or higher).
+	BagColorKind uint32 `protobuf:"varint,6,opt,name=bag_color_kind,json=bagColorKind,proto3" json:"bag_color_kind,omitempty"`
+	// Server tick the bag dropped on.
+	SpawnTick     uint32 `protobuf:"varint,7,opt,name=spawn_tick,json=spawnTick,proto3" json:"spawn_tick,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LootBag) Reset() {
+	*x = LootBag{}
+	mi := &file_v1_protocol_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LootBag) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LootBag) ProtoMessage() {}
+
+func (x *LootBag) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_protocol_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LootBag.ProtoReflect.Descriptor instead.
+func (*LootBag) Descriptor() ([]byte, []int) {
+	return file_v1_protocol_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *LootBag) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *LootBag) GetX() float32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *LootBag) GetY() float32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *LootBag) GetOwnerPlayerId() uint64 {
+	if x != nil {
+		return x.OwnerPlayerId
+	}
+	return 0
+}
+
+func (x *LootBag) GetTStar() uint32 {
+	if x != nil {
+		return x.TStar
+	}
+	return 0
+}
+
+func (x *LootBag) GetBagColorKind() uint32 {
+	if x != nil {
+		return x.BagColorKind
+	}
+	return 0
+}
+
+func (x *LootBag) GetSpawnTick() uint32 {
+	if x != nil {
+		return x.SpawnTick
+	}
+	return 0
+}
+
 type PlayerStub struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -447,7 +554,7 @@ type PlayerStub struct {
 
 func (x *PlayerStub) Reset() {
 	*x = PlayerStub{}
-	mi := &file_v1_protocol_proto_msgTypes[5]
+	mi := &file_v1_protocol_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -459,7 +566,7 @@ func (x *PlayerStub) String() string {
 func (*PlayerStub) ProtoMessage() {}
 
 func (x *PlayerStub) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[5]
+	mi := &file_v1_protocol_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -472,7 +579,7 @@ func (x *PlayerStub) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlayerStub.ProtoReflect.Descriptor instead.
 func (*PlayerStub) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{5}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *PlayerStub) GetId() uint64 {
@@ -501,7 +608,7 @@ type OpenPortal struct {
 
 func (x *OpenPortal) Reset() {
 	*x = OpenPortal{}
-	mi := &file_v1_protocol_proto_msgTypes[6]
+	mi := &file_v1_protocol_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -513,7 +620,7 @@ func (x *OpenPortal) String() string {
 func (*OpenPortal) ProtoMessage() {}
 
 func (x *OpenPortal) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[6]
+	mi := &file_v1_protocol_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -526,7 +633,7 @@ func (x *OpenPortal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenPortal.ProtoReflect.Descriptor instead.
 func (*OpenPortal) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{6}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *OpenPortal) GetM100() uint32 {
@@ -547,7 +654,7 @@ type JoinInstance struct {
 
 func (x *JoinInstance) Reset() {
 	*x = JoinInstance{}
-	mi := &file_v1_protocol_proto_msgTypes[7]
+	mi := &file_v1_protocol_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -559,7 +666,7 @@ func (x *JoinInstance) String() string {
 func (*JoinInstance) ProtoMessage() {}
 
 func (x *JoinInstance) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[7]
+	mi := &file_v1_protocol_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -572,7 +679,7 @@ func (x *JoinInstance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinInstance.ProtoReflect.Descriptor instead.
 func (*JoinInstance) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{7}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *JoinInstance) GetInstance() uint64 {
@@ -591,7 +698,7 @@ type LeaveInstance struct {
 
 func (x *LeaveInstance) Reset() {
 	*x = LeaveInstance{}
-	mi := &file_v1_protocol_proto_msgTypes[8]
+	mi := &file_v1_protocol_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -603,7 +710,7 @@ func (x *LeaveInstance) String() string {
 func (*LeaveInstance) ProtoMessage() {}
 
 func (x *LeaveInstance) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[8]
+	mi := &file_v1_protocol_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -616,7 +723,7 @@ func (x *LeaveInstance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LeaveInstance.ProtoReflect.Descriptor instead.
 func (*LeaveInstance) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{8}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{9}
 }
 
 type ListInstances struct {
@@ -627,7 +734,7 @@ type ListInstances struct {
 
 func (x *ListInstances) Reset() {
 	*x = ListInstances{}
-	mi := &file_v1_protocol_proto_msgTypes[9]
+	mi := &file_v1_protocol_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -639,7 +746,7 @@ func (x *ListInstances) String() string {
 func (*ListInstances) ProtoMessage() {}
 
 func (x *ListInstances) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[9]
+	mi := &file_v1_protocol_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -652,7 +759,7 @@ func (x *ListInstances) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListInstances.ProtoReflect.Descriptor instead.
 func (*ListInstances) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{9}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{10}
 }
 
 type InstanceInfo struct {
@@ -670,7 +777,7 @@ type InstanceInfo struct {
 
 func (x *InstanceInfo) Reset() {
 	*x = InstanceInfo{}
-	mi := &file_v1_protocol_proto_msgTypes[10]
+	mi := &file_v1_protocol_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -682,7 +789,7 @@ func (x *InstanceInfo) String() string {
 func (*InstanceInfo) ProtoMessage() {}
 
 func (x *InstanceInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[10]
+	mi := &file_v1_protocol_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -695,7 +802,7 @@ func (x *InstanceInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceInfo.ProtoReflect.Descriptor instead.
 func (*InstanceInfo) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{10}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *InstanceInfo) GetInstance() uint64 {
@@ -744,7 +851,7 @@ type OpenPortalOk struct {
 
 func (x *OpenPortalOk) Reset() {
 	*x = OpenPortalOk{}
-	mi := &file_v1_protocol_proto_msgTypes[11]
+	mi := &file_v1_protocol_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -756,7 +863,7 @@ func (x *OpenPortalOk) String() string {
 func (*OpenPortalOk) ProtoMessage() {}
 
 func (x *OpenPortalOk) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[11]
+	mi := &file_v1_protocol_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -769,7 +876,7 @@ func (x *OpenPortalOk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenPortalOk.ProtoReflect.Descriptor instead.
 func (*OpenPortalOk) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{11}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *OpenPortalOk) GetInstance() uint64 {
@@ -804,7 +911,7 @@ type JoinInstanceOk struct {
 
 func (x *JoinInstanceOk) Reset() {
 	*x = JoinInstanceOk{}
-	mi := &file_v1_protocol_proto_msgTypes[12]
+	mi := &file_v1_protocol_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -816,7 +923,7 @@ func (x *JoinInstanceOk) String() string {
 func (*JoinInstanceOk) ProtoMessage() {}
 
 func (x *JoinInstanceOk) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[12]
+	mi := &file_v1_protocol_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -829,7 +936,7 @@ func (x *JoinInstanceOk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinInstanceOk.ProtoReflect.Descriptor instead.
 func (*JoinInstanceOk) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{12}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *JoinInstanceOk) GetInstance() uint64 {
@@ -862,7 +969,7 @@ type InstanceList struct {
 
 func (x *InstanceList) Reset() {
 	*x = InstanceList{}
-	mi := &file_v1_protocol_proto_msgTypes[13]
+	mi := &file_v1_protocol_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -874,7 +981,7 @@ func (x *InstanceList) String() string {
 func (*InstanceList) ProtoMessage() {}
 
 func (x *InstanceList) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[13]
+	mi := &file_v1_protocol_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -887,7 +994,7 @@ func (x *InstanceList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceList.ProtoReflect.Descriptor instead.
 func (*InstanceList) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{13}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *InstanceList) GetInstances() []*InstanceInfo {
@@ -907,7 +1014,7 @@ type ErrorReply struct {
 
 func (x *ErrorReply) Reset() {
 	*x = ErrorReply{}
-	mi := &file_v1_protocol_proto_msgTypes[14]
+	mi := &file_v1_protocol_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -919,7 +1026,7 @@ func (x *ErrorReply) String() string {
 func (*ErrorReply) ProtoMessage() {}
 
 func (x *ErrorReply) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[14]
+	mi := &file_v1_protocol_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -932,7 +1039,7 @@ func (x *ErrorReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorReply.ProtoReflect.Descriptor instead.
 func (*ErrorReply) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{14}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ErrorReply) GetCode() ErrorCode {
@@ -966,7 +1073,7 @@ type ClientMessage struct {
 
 func (x *ClientMessage) Reset() {
 	*x = ClientMessage{}
-	mi := &file_v1_protocol_proto_msgTypes[15]
+	mi := &file_v1_protocol_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -978,7 +1085,7 @@ func (x *ClientMessage) String() string {
 func (*ClientMessage) ProtoMessage() {}
 
 func (x *ClientMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[15]
+	mi := &file_v1_protocol_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -991,7 +1098,7 @@ func (x *ClientMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientMessage.ProtoReflect.Descriptor instead.
 func (*ClientMessage) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{15}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ClientMessage) GetPayload() isClientMessage_Payload {
@@ -1113,7 +1220,7 @@ type ServerMessage struct {
 
 func (x *ServerMessage) Reset() {
 	*x = ServerMessage{}
-	mi := &file_v1_protocol_proto_msgTypes[16]
+	mi := &file_v1_protocol_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1125,7 +1232,7 @@ func (x *ServerMessage) String() string {
 func (*ServerMessage) ProtoMessage() {}
 
 func (x *ServerMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_protocol_proto_msgTypes[16]
+	mi := &file_v1_protocol_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1138,7 +1245,7 @@ func (x *ServerMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerMessage.ProtoReflect.Descriptor instead.
 func (*ServerMessage) Descriptor() ([]byte, []int) {
-	return file_v1_protocol_proto_rawDescGZIP(), []int{16}
+	return file_v1_protocol_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ServerMessage) GetPayload() isServerMessage_Payload {
@@ -1287,10 +1394,20 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\x03aim\x18\x04 \x01(\x02R\x03aim\x12\x1b\n" +
 	"\tfire_held\x18\x05 \x01(\bR\bfireHeld\x12,\n" +
 	"\x12interact_target_id\x18\x06 \x01(\x04R\x10interactTargetId\x12'\n" +
-	"\x0fability_pressed\x18\a \x01(\bR\x0eabilityPressed\"P\n" +
+	"\x0fability_pressed\x18\a \x01(\bR\x0eabilityPressed\"y\n" +
 	"\bSnapshot\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\rR\x04tick\x120\n" +
-	"\aplayers\x18\x02 \x03(\v2\x16.endless.v1.PlayerStubR\aplayers\"=\n" +
+	"\aplayers\x18\x02 \x03(\v2\x16.endless.v1.PlayerStubR\aplayers\x12'\n" +
+	"\x04bags\x18\x03 \x03(\v2\x13.endless.v1.LootBagR\x04bags\"\xb9\x01\n" +
+	"\aLootBag\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\x12\f\n" +
+	"\x01x\x18\x02 \x01(\x02R\x01x\x12\f\n" +
+	"\x01y\x18\x03 \x01(\x02R\x01y\x12&\n" +
+	"\x0fowner_player_id\x18\x04 \x01(\x04R\rownerPlayerId\x12\x15\n" +
+	"\x06t_star\x18\x05 \x01(\rR\x05tStar\x12$\n" +
+	"\x0ebag_color_kind\x18\x06 \x01(\rR\fbagColorKind\x12\x1d\n" +
+	"\n" +
+	"spawn_tick\x18\a \x01(\rR\tspawnTick\"=\n" +
 	"\n" +
 	"PlayerStub\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1f\n" +
@@ -1363,7 +1480,7 @@ func file_v1_protocol_proto_rawDescGZIP() []byte {
 }
 
 var file_v1_protocol_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_v1_protocol_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_v1_protocol_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_v1_protocol_proto_goTypes = []any{
 	(ErrorCode)(0),         // 0: endless.v1.ErrorCode
 	(*Hello)(nil),          // 1: endless.v1.Hello
@@ -1371,41 +1488,43 @@ var file_v1_protocol_proto_goTypes = []any{
 	(*Reject)(nil),         // 3: endless.v1.Reject
 	(*InputFrame)(nil),     // 4: endless.v1.InputFrame
 	(*Snapshot)(nil),       // 5: endless.v1.Snapshot
-	(*PlayerStub)(nil),     // 6: endless.v1.PlayerStub
-	(*OpenPortal)(nil),     // 7: endless.v1.OpenPortal
-	(*JoinInstance)(nil),   // 8: endless.v1.JoinInstance
-	(*LeaveInstance)(nil),  // 9: endless.v1.LeaveInstance
-	(*ListInstances)(nil),  // 10: endless.v1.ListInstances
-	(*InstanceInfo)(nil),   // 11: endless.v1.InstanceInfo
-	(*OpenPortalOk)(nil),   // 12: endless.v1.OpenPortalOk
-	(*JoinInstanceOk)(nil), // 13: endless.v1.JoinInstanceOk
-	(*InstanceList)(nil),   // 14: endless.v1.InstanceList
-	(*ErrorReply)(nil),     // 15: endless.v1.ErrorReply
-	(*ClientMessage)(nil),  // 16: endless.v1.ClientMessage
-	(*ServerMessage)(nil),  // 17: endless.v1.ServerMessage
+	(*LootBag)(nil),        // 6: endless.v1.LootBag
+	(*PlayerStub)(nil),     // 7: endless.v1.PlayerStub
+	(*OpenPortal)(nil),     // 8: endless.v1.OpenPortal
+	(*JoinInstance)(nil),   // 9: endless.v1.JoinInstance
+	(*LeaveInstance)(nil),  // 10: endless.v1.LeaveInstance
+	(*ListInstances)(nil),  // 11: endless.v1.ListInstances
+	(*InstanceInfo)(nil),   // 12: endless.v1.InstanceInfo
+	(*OpenPortalOk)(nil),   // 13: endless.v1.OpenPortalOk
+	(*JoinInstanceOk)(nil), // 14: endless.v1.JoinInstanceOk
+	(*InstanceList)(nil),   // 15: endless.v1.InstanceList
+	(*ErrorReply)(nil),     // 16: endless.v1.ErrorReply
+	(*ClientMessage)(nil),  // 17: endless.v1.ClientMessage
+	(*ServerMessage)(nil),  // 18: endless.v1.ServerMessage
 }
 var file_v1_protocol_proto_depIdxs = []int32{
-	6,  // 0: endless.v1.Snapshot.players:type_name -> endless.v1.PlayerStub
-	11, // 1: endless.v1.InstanceList.instances:type_name -> endless.v1.InstanceInfo
-	0,  // 2: endless.v1.ErrorReply.code:type_name -> endless.v1.ErrorCode
-	1,  // 3: endless.v1.ClientMessage.hello:type_name -> endless.v1.Hello
-	4,  // 4: endless.v1.ClientMessage.input:type_name -> endless.v1.InputFrame
-	7,  // 5: endless.v1.ClientMessage.open_portal:type_name -> endless.v1.OpenPortal
-	8,  // 6: endless.v1.ClientMessage.join_instance:type_name -> endless.v1.JoinInstance
-	10, // 7: endless.v1.ClientMessage.list_instances:type_name -> endless.v1.ListInstances
-	9,  // 8: endless.v1.ClientMessage.leave_instance:type_name -> endless.v1.LeaveInstance
-	2,  // 9: endless.v1.ServerMessage.welcome:type_name -> endless.v1.Welcome
-	3,  // 10: endless.v1.ServerMessage.reject:type_name -> endless.v1.Reject
-	5,  // 11: endless.v1.ServerMessage.snapshot:type_name -> endless.v1.Snapshot
-	12, // 12: endless.v1.ServerMessage.open_portal_ok:type_name -> endless.v1.OpenPortalOk
-	13, // 13: endless.v1.ServerMessage.join_instance_ok:type_name -> endless.v1.JoinInstanceOk
-	14, // 14: endless.v1.ServerMessage.instance_list:type_name -> endless.v1.InstanceList
-	15, // 15: endless.v1.ServerMessage.error:type_name -> endless.v1.ErrorReply
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	7,  // 0: endless.v1.Snapshot.players:type_name -> endless.v1.PlayerStub
+	6,  // 1: endless.v1.Snapshot.bags:type_name -> endless.v1.LootBag
+	12, // 2: endless.v1.InstanceList.instances:type_name -> endless.v1.InstanceInfo
+	0,  // 3: endless.v1.ErrorReply.code:type_name -> endless.v1.ErrorCode
+	1,  // 4: endless.v1.ClientMessage.hello:type_name -> endless.v1.Hello
+	4,  // 5: endless.v1.ClientMessage.input:type_name -> endless.v1.InputFrame
+	8,  // 6: endless.v1.ClientMessage.open_portal:type_name -> endless.v1.OpenPortal
+	9,  // 7: endless.v1.ClientMessage.join_instance:type_name -> endless.v1.JoinInstance
+	11, // 8: endless.v1.ClientMessage.list_instances:type_name -> endless.v1.ListInstances
+	10, // 9: endless.v1.ClientMessage.leave_instance:type_name -> endless.v1.LeaveInstance
+	2,  // 10: endless.v1.ServerMessage.welcome:type_name -> endless.v1.Welcome
+	3,  // 11: endless.v1.ServerMessage.reject:type_name -> endless.v1.Reject
+	5,  // 12: endless.v1.ServerMessage.snapshot:type_name -> endless.v1.Snapshot
+	13, // 13: endless.v1.ServerMessage.open_portal_ok:type_name -> endless.v1.OpenPortalOk
+	14, // 14: endless.v1.ServerMessage.join_instance_ok:type_name -> endless.v1.JoinInstanceOk
+	15, // 15: endless.v1.ServerMessage.instance_list:type_name -> endless.v1.InstanceList
+	16, // 16: endless.v1.ServerMessage.error:type_name -> endless.v1.ErrorReply
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_v1_protocol_proto_init() }
@@ -1413,7 +1532,7 @@ func file_v1_protocol_proto_init() {
 	if File_v1_protocol_proto != nil {
 		return
 	}
-	file_v1_protocol_proto_msgTypes[15].OneofWrappers = []any{
+	file_v1_protocol_proto_msgTypes[16].OneofWrappers = []any{
 		(*ClientMessage_Hello)(nil),
 		(*ClientMessage_Input)(nil),
 		(*ClientMessage_OpenPortal)(nil),
@@ -1421,7 +1540,7 @@ func file_v1_protocol_proto_init() {
 		(*ClientMessage_ListInstances)(nil),
 		(*ClientMessage_LeaveInstance)(nil),
 	}
-	file_v1_protocol_proto_msgTypes[16].OneofWrappers = []any{
+	file_v1_protocol_proto_msgTypes[17].OneofWrappers = []any{
 		(*ServerMessage_Welcome)(nil),
 		(*ServerMessage_Reject)(nil),
 		(*ServerMessage_Snapshot)(nil),
@@ -1436,7 +1555,7 @@ func file_v1_protocol_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_protocol_proto_rawDesc), len(file_v1_protocol_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
