@@ -44,6 +44,10 @@ const DEFAULT_CLASS_ID := "thornguard"
 ##   (floor 0) and the saved Focus plus normal regen over them (capped);
 ## - a rejoin key with no snapshot (already used, dropped, or not issued by
 ##   this host): conservative, the ability on full cooldown and 0 Focus.
+## A local player who leaves before entering the sim leaves no snapshot
+## (conservative rejoin), except the listen-host player on the built-in
+## player 1: it is in the sim before the first step, so a leave then
+## snapshots its ready first-join state and the rejoin is ready.
 ## Remote joins always start conservative until the handshake verifies an
 ## identity. Snapshots live as long as this host, at most this many (oldest
 ## dropped), and stop() clears them.
@@ -247,6 +251,10 @@ var catalog: DataCatalog
 ## FIFO). Keys are host-verified identities, never raw player ids.
 var _ability_stash: Dictionary = {}
 var _ability_stash_order: Array[String] = []
+## Overworld player ids this host issued that are still in use: a player in
+## the lobby or a rejoin snapshot. Only these are ever re-added. Bounded by
+## the lobby plus MAX_ABILITY_STASH; pruned on leave, eviction and stop().
+var _issued_player_ids: Dictionary = {}
 var _builtin_taken: bool = false
 
 # State
@@ -350,6 +358,7 @@ func stop() -> void:
 	_portal_records.clear()
 	# The lobby is closing: saved ability states do not outlive it.
 	_ability_stash.clear()
+	_issued_player_ids.clear()
 	_ability_stash_order.clear()
 	_tcp.stop()
 
@@ -808,7 +817,11 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
 	if not saved.is_empty() and not _stash_id_issued_here(saved):
-		saved = {}  # not an id this host's overworld sim issued: start fresh
+		_ability_stash.erase(identity)
+		_ability_stash_order.erase(identity)
+		for id in _issued_player_ids.keys():
+			_prune_issued_id(int(id))
+		saved = {}  # not an id this host issued: a fresh id, conservative
 	if not saved.is_empty() and _find_player(int(saved["id"])) == null:
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
@@ -821,6 +834,7 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		_builtin_taken = true
 	else:
 		p.id = sim.alloc_player_id()
+	_issued_player_ids[p.id] = true
 	p.instance = instances[0]  # every join lands in the overworld
 	p.sim_id = p.id
 	# Spread spawns over the arena deterministically by id.
@@ -887,24 +901,46 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 					"left_tick": saved["left_tick"], "progression": progression})
 	p.instance.sim.remove_player(p.sim_id)
 	players.erase(p)
+	_prune_issued_id(p.id)
 
 
 func _stash_ability(key: String, saved: Dictionary) -> void:
 	saved["sim"] = sim.get_instance_id()  # the sim that issued saved["id"]
+	var replaced: Dictionary = _ability_stash.get(key, {})
 	if _ability_stash.has(key):
 		_ability_stash_order.erase(key)
 	_ability_stash[key] = saved
 	_ability_stash_order.append(key)
+	if not replaced.is_empty():
+		_prune_issued_id(int(replaced.get("id", 0)))
 	while _ability_stash_order.size() > MAX_ABILITY_STASH:
+		var evicted: Dictionary = _ability_stash.get(_ability_stash_order[0], {})
 		_ability_stash.erase(_ability_stash_order.pop_front())
+		_prune_issued_id(int(evicted.get("id", 0)))
 
 
-## A rejoin re-adds an old player id only when the host itself recorded it
-## from this overworld sim (issued by its alloc_player_id or the built-in
-## player). The sim no longer has to tell returning ids from reused ones.
+## Forgets an issued id once no lobby player and no snapshot holds it.
+func _prune_issued_id(id: int) -> void:
+	if _find_player(id) != null:
+		return
+	for saved: Dictionary in _ability_stash.values():
+		if int(saved.get("id", 0)) == id:
+			return
+	_issued_player_ids.erase(id)
+
+
+func issued_player_id_count() -> int:
+	return _issued_player_ids.size()
+
+
+## A rejoin re-adds an old player id only if this host issued it from its
+## current overworld sim (alloc_player_id or the built-in player) and still
+## holds it in _issued_player_ids. The sim never has to tell returning ids
+## from reused ones.
 func _stash_id_issued_here(saved: Dictionary) -> bool:
 	var id := int(saved.get("id", 0))
-	return id > 0 and id < INSTANCE_ID_BLOCK and int(saved.get("sim", 0)) == sim.get_instance_id()
+	return id > 0 and id < INSTANCE_ID_BLOCK and int(saved.get("sim", 0)) == sim.get_instance_id() \
+			and _issued_player_ids.has(id)
 
 
 ## Applies p.restore_ability: a snapshot adjusted for the host ticks since
