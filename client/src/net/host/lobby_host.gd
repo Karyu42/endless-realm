@@ -114,6 +114,11 @@ class HostInstance:
 	var seed: int = 0
 	var m100: int = 100
 	var no_persistent_rewards: bool = false
+	## The transfer this instance was created from (seed, M, B, E, opener),
+	## so a reset rebuilds the same slice.
+	var created_from: PortalTransfer = null
+	## §7.3: a player who left from inside still counts as present until then.
+	var linger_until_tick: int = -1
 	var arrival_x: float = 0.0
 	var arrival_y: float = 0.0
 	## Distinct players this instance may admit, locked at creation (vision §6 rule 5).
@@ -230,6 +235,7 @@ var instances: Array[HostInstance] = []
 ## Load test only: spread joining remote players over this many dungeon
 ## instances (0 or 1 = everyone stays in the overworld).
 var loadtest_instances: int = 0
+const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
 var _retired_entrances: Dictionary = {}  # entrance key -> true (persistent, after stop)
@@ -859,6 +865,10 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 		_restore_entry_progression(p, carry)
 		progression = _progression_fields(carry)
 		p.instance.sim.apply_carried_player(carry, leaving.x, leaving.y)
+	# TODO(§7.3): a full 5 s in-world linger. Until then the host treats
+	# the leaver as present for that long, so a reset never runs under them.
+	if not p.instance.is_overworld() and leaving != null and leaving.hp > 0:
+		p.instance.linger_until_tick = maxi(p.instance.linger_until_tick, tick + LINGER_TICKS)
 	# Persistent entrances admit by occupancy, so per-player entries of
 	# players who left the lobby are dropped to keep them bounded.
 	for record: PortalRecord in _portal_records.values():
@@ -1203,9 +1213,13 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 		_reject_portal(p, int(refusal[0]), String(refusal[1]))
 		return
 	var dest: HostInstance = record.instance
+	if dest != null and record.reset_when_empty and _no_living_player_inside(dest):
+		if not _reset_instance(record):
+			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "practice instance unavailable")
+			return
 	if dest == null:
 		# A record with an assigned id is never restarted after closure.
-		if record.instance_id != 0 and not record.reset_when_empty:
+		if record.instance_id != 0:
 			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "portal instance is closed")
 			return
 		# The opener as they are in the source world (the sim that queued
@@ -1249,18 +1263,13 @@ func _create_dungeon_instance(xfer: PortalTransfer) -> HostInstance:
 	inst.dungeon_id = xfer.dungeon_id
 	inst.seed = xfer.seed
 	inst.m100 = xfer.m100
+	inst.created_from = xfer
 	inst.arrival_x = xfer.arrival_x
 	inst.arrival_y = xfer.arrival_y
 	inst.capacity = _settings.max_players
-	var dsim := LocalSim.new(_config, xfer.arrival_x, xfer.arrival_y, catalog)
-	dsim.remove_player(1)  # the built-in player; gone at the first step
-	if not dsim.set_id_floor(inst.index * INSTANCE_ID_BLOCK):
+	var dsim := _build_dungeon_sim(def, xfer, inst.index * INSTANCE_ID_BLOCK)
+	if dsim == null:
 		return null
-	dsim.set_lobby_settings(_settings)
-	# opener_id is the opener's sim id in the SOURCE world, not the
-	# destination id allocated later. Preserve that creation provenance.
-	dsim.configure_dungeon(def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
-			xfer.opener_id, xfer.opener_lp)
 	inst.sim = dsim
 	instances.append(inst)
 	return inst
@@ -1310,6 +1319,66 @@ func _restore_entry_progression(p: HostPlayer, carry: PlayerCarry) -> void:
 		p.progression_entries.pop_back()
 
 
+func _build_dungeon_sim(def: DungeonDef, xfer: PortalTransfer, id_floor: int) -> LocalSim:
+	var dsim := LocalSim.new(_config, xfer.arrival_x, xfer.arrival_y, catalog)
+	dsim.remove_player(1)  # the built-in player; gone at the first step
+	if not dsim.set_id_floor(id_floor):
+		return null
+	dsim.set_lobby_settings(_settings)
+	# opener_id is the opener's sim id in the SOURCE world, not the
+	# destination id allocated later. Preserve that creation provenance.
+	dsim.configure_dungeon(def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
+			xfer.opener_id, xfer.opener_lp)
+	return dsim
+
+
+## content §2.5: no living (or lingering) player inside the instance.
+func _no_living_player_inside(inst: HostInstance) -> bool:
+	if inst.linger_until_tick > tick:
+		return false
+	for p in players:
+		if p.instance == inst:
+			var sp := inst.sim.get_player(p.sim_id)
+			if sp != null and sp.hp > 0:
+				return false
+	return true
+
+
+## Rebuilds a reset-when-empty instance in place: same instance id and id
+## block, a fresh slice (rooms, boss, exit) from the creation transfer, and
+## entity ids that keep counting up. Occupants (none living) are carried.
+func _reset_instance(record: PortalRecord) -> bool:
+	var inst := record.instance
+	var def: DungeonDef = catalog.dungeon(inst.dungeon_id) if catalog != null else null
+	if def == null or inst.created_from == null:
+		return false
+	var old := inst.sim
+	var floor := old.alloc_player_id() + 1
+	if floor >= (inst.index + 1) * INSTANCE_ID_BLOCK:
+		return false
+	var fresh := _build_dungeon_sim(def, inst.created_from, floor)
+	if fresh == null:
+		return false
+	record.sim_ids.clear()
+	for p in players:
+		if p.instance != inst:
+			continue
+		var from := old.get_player(p.sim_id)
+		if from == null:
+			continue
+		var carry := PlayerCarry.from_sim(from, old.ability_state(p.sim_id))
+		var nid := fresh.alloc_player_id()
+		carry.player_id = nid
+		fresh.place_player(nid, inst.arrival_x, inst.arrival_y)
+		fresh.apply_carried_player(carry, inst.arrival_x, inst.arrival_y)
+		p.sim_id = nid
+		record.sim_ids[p.id] = nid
+	inst.sim = fresh
+	record.cleared = false
+	inst.linger_until_tick = -1
+	return true
+
+
 ## Moves `p` into `dest` as `dest_id` at (x, y), carrying class, level,
 ## inventory, HP and ability state (Focus and cooldown exactly as they are,
 ## never refreshed). Removal from the old sim takes effect at its next step.
@@ -1347,21 +1416,13 @@ func _teardown_empty_instances() -> void:
 		# cleared is recorded for deposits and later lifetime rules.
 		if inst.sim.has_method("boss_defeated"):
 			record.cleared = record.cleared or bool(inst.sim.call("boss_defeated"))
-		if record.persistent and not record.reset_when_empty:
+		if record.persistent:
 			continue  # a persistent entrance keeps its one instance
 		var used := false
 		for p in players:
 			if p.instance == inst:
 				used = true
 				break
-		if not used and record.reset_when_empty:
-			instances.erase(inst)
-			_instance_by_portal.erase(inst.portal_key)
-			record.instance = null
-			record.sim_ids.clear()
-			record.admitted.clear()
-			record.cleared = false
-			continue
 		if used:
 			record.empty_since_tick = -1
 			continue
