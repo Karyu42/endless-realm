@@ -156,12 +156,9 @@ weaker host (a phone) needs room, the first levers are in this order:
   the shared enemy/pattern rules. No group HP scaling or rewind yet.
 - **Real networks:** real network latency, loss, and TCP head-of-line
   blocking. Everything here ran on loopback.
-- **godobuf names:** godobuf v0.7.0 output does not compile on Godot 4.7.2
-  for the current proto. `instance_id` generates `get_instance_id()`, which
-  overrides `Object`'s method, and `message Error` shadows the global `Error`
-  enum. The gen script renames both in the generated GDScript
-  (`get_instance_id_value()`, `ErrorMsg`). The cleaner fix is to avoid those
-  names in `proto/v1`, which is wire-compatible.
+- **godobuf names:** proto/v1 avoids names that clash in generated GDScript
+  (no `instance_id` field, no `Error` message), so the generated codec is
+  used unmodified.
 - **Codegen check:** `make proto` / proto-codegen-check does not regenerate
   the GDScript codecs yet. Regenerate them with
   `tools/proto/gen-gdscript-proto.sh` (pinned godobuf v0.7.0,

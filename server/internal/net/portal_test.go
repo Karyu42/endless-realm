@@ -31,8 +31,8 @@ func handshakeConn(t *testing.T, ctx context.Context, hsURL string) *websocket.C
 	if w == nil {
 		t.Fatal("missing Welcome")
 	}
-	if w.GetInstanceId() != instance.DefaultInstanceID {
-		t.Fatalf("welcome instance_id %d, want %d", w.GetInstanceId(), instance.DefaultInstanceID)
+	if w.GetInstance() != instance.DefaultInstanceID {
+		t.Fatalf("welcome instance %d, want %d", w.GetInstance(), instance.DefaultInstanceID)
 	}
 	return conn
 }

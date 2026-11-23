@@ -156,3 +156,20 @@ accept range. The Server Engineer's protocol PR will add
 in `InputIntent` and `LocalSim`. Entity ids are `int` from one counter and stay below 2^63 so they fit the uint64 wire field.
 Every practice-yard enemy is fixed at the data E: kills give normal
 `killXP(1)`, Glint `ceil(m(1))` = 1, and loot rolls at T* = 0.
+
+## Host interact hook
+
+`proto/v1.InputFrame.interact_target_id` is a uint64 entity id, not a boolean.
+Zero means none; a nonzero target is a press on that seq. `LobbyHost` queues
+presses from accepted inputs and evaluates them after movement using the
+host's position. Unknown / disallowed targets and targets beyond the accept range in
+`data/scaling.json` (`interact_accept_range_tiles`) are silently dropped;
+the same seq cannot interact twice, including across the uint32 wrap.
+
+The host has not wired the shared sim's interactables yet. For the loot work,
+set `host.interact_validator.resolver` to
+`func(target_id: int, player_id: int) -> Dictionary`, returning
+`{"x": float, "y": float}` in tiles only for an existing target the player
+may use, or `{}` otherwise. Set `host.on_interact` to
+`func(player_id: int, target_id: int) -> void` to apply accepted presses.
+The resolver defaults to unknown, so no interaction is accepted until wired.

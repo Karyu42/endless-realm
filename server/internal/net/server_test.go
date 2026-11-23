@@ -132,8 +132,8 @@ func TestHandshakeWelcome(t *testing.T) {
 	if w.GetM100() != 125 {
 		t.Fatalf("m100 %d, want 125", w.GetM100())
 	}
-	if w.GetInstanceId() != instance.DefaultInstanceID {
-		t.Fatalf("instance_id %d, want default %d", w.GetInstanceId(), instance.DefaultInstanceID)
+	if w.GetInstance() != instance.DefaultInstanceID {
+		t.Fatalf("instance %d, want default %d", w.GetInstance(), instance.DefaultInstanceID)
 	}
 	if w.GetPlayerId() == 0 {
 		t.Fatal("player id should be non-zero")

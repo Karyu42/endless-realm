@@ -70,6 +70,9 @@ class HostPlayer:
 	var move_y: float = 0.0
 	var aim: float = 0.0
 	var fire_held: bool = false
+	## Interact presses received since the last tick: [seq, target_id] pairs,
+	## in arrival order. Bounded by the per-tick message budget.
+	var interacts: Array[PackedInt64Array] = []
 	var hp: int = START_HP
 	var join_tick: int = 0
 	var x: float = 0.0
@@ -90,6 +93,11 @@ var expect_clients: int = 0
 var max_players: int = DEFAULT_MAX_PLAYERS
 ## Microsecond clock for deadlines and timeouts. Tests inject a fake.
 var clock: Callable = Time.get_ticks_usec
+## Validates interact presses (range, once per seq, known/allowed target).
+var interact_validator := HostInteractValidator.new()
+## HOOK (#30): called as on_interact.call(player_id, target_id) for each
+## accepted interact press, after that player's movement for the tick.
+var on_interact: Callable = Callable()
 
 # State
 var tick: int = 0
@@ -365,7 +373,7 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 		w.set_tick_hz(SimConstants.TICK_HZ)
 		w.set_instance_seed(instance_seed)
 		w.set_multiplier(float(multiplier_m100) / 100.0)
-		w.set_instance_id(DEFAULT_INSTANCE_ID)
+		w.set_instance(DEFAULT_INSTANCE_ID)
 		w.set_m100(multiplier_m100)
 		c.ws.put_packet(out.to_bytes())
 	elif msg.has_input():
@@ -374,13 +382,17 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 		var f = msg.get_input()
 		var p := c.player
 		var seq: int = f.get_seq()
-		if seq <= p.seq:
-			return  # stale or duplicate
+		if not Seq.seq_is_next(seq, p.seq):
+			return  # stale or duplicate, including across the uint32 wrap
 		p.seq = seq
 		p.move_x = _finite_or_zero(f.get_move_x())
 		p.move_y = _finite_or_zero(f.get_move_y())
 		p.aim = _finite_or_zero(f.get_aim())
 		p.fire_held = f.get_fire_held()
+		var target: int = f.get_interact_target_id()
+		if target != 0:
+			# Each press is evaluated, even if later frames arrive in the same tick.
+			p.interacts.append(PackedInt64Array([seq, target]))
 		_inputs_this_tick += 1
 	elif c.player != null and (msg.has_open_portal() or msg.has_join_instance() \
 			or msg.has_list_instances() or msg.has_leave_instance()):
@@ -409,6 +421,7 @@ func _add_player() -> HostPlayer:
 func _drop_player(c: HostConn) -> void:
 	if c.player == null:
 		return
+	interact_validator.forget_player(c.player.id)
 	players.erase(c.player)
 	c.player = null
 
@@ -434,6 +447,8 @@ func _step_sim() -> Array[PackedFloat64Array]:
 		p.aim_applied = snap.player_aim
 		px[i] = p.x
 		py[i] = p.y
+		if not p.interacts.is_empty():
+			_apply_interacts(p)
 		hp[i] = p.hp
 		var local_tick: int = p.sim.tick()
 		for shot in snap.projectiles:
@@ -447,6 +462,14 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			hp[i] = START_HP
 		players[i].hp = hp[i]
 	return shots
+
+
+func _apply_interacts(p: HostPlayer) -> void:
+	var pending := p.interacts
+	p.interacts = []
+	for press in pending:
+		if interact_validator.validate(p.id, press[0], press[1], p.x, p.y) and on_interact.is_valid():
+			on_interact.call(p.id, press[1])
 
 
 func _shot_vs_emitters(shot: SimProjectile, local_tick: int) -> void:
