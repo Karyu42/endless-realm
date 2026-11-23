@@ -124,6 +124,22 @@ func test_host_main_exits_nonzero_on_out_of_range_max_players() -> void:
 	assert_eq(_run_host_main(PackedStringArray(["--max-players", "50"])), 0, "50 is accepted")
 
 
+## #32 item 2: a valid flag wins over an invalid ER_MAX_PLAYERS (same as the
+## game boot path); exit 2 only when the value actually used is invalid.
+func test_host_main_valid_flag_wins_over_invalid_env() -> void:
+	OS.set_environment("ER_MAX_PLAYERS", "99")
+	var flag_ok := _run_host_main(PackedStringArray(["--max-players", "8"]))
+	var flag_bad := _run_host_main(PackedStringArray(["--max-players", "0"]))
+	OS.set_environment("ER_MAX_PLAYERS", "8")
+	var env_ok := _run_host_main(PackedStringArray())
+	var env_ok_flag_bad := _run_host_main(PackedStringArray(["--max-players", "abc"]))
+	OS.unset_environment("ER_MAX_PLAYERS")
+	assert_eq(flag_ok, 0, "valid flag, invalid env: flag used")
+	assert_eq(flag_bad, 2, "invalid flag is used and rejected")
+	assert_eq(env_ok, 0, "valid env, no flag")
+	assert_eq(env_ok_flag_bad, 2, "invalid flag still rejected with a valid env")
+
+
 func test_full_lobby_replies_instance_full_and_closes() -> void:
 	_host = _start_host(1)
 	var a := _connect()
