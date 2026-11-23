@@ -30,6 +30,8 @@ const N_PEAK_RANGE_TILES: float = 12.0
 ## vision §6.1 rule 7: proximity and non-idle window.
 const BOSS_PROXIMITY_TILES: float = 12.0
 const NON_IDLE_WINDOW_TICKS: int = 600
+## vision §6.1 rule 6a: after an empty-arena reset the boss is untouched for 5 s.
+const BOSS_RESET_UNTOUCHED_TICKS: int = 100
 const NON_IDLE_AIM_RAD: float = 0.017453292519943295  # 1 degree
 
 var _config: SimConfig
@@ -98,6 +100,9 @@ var _exit_spawned: bool = false
 var _boss_defeated: bool = false
 ## Boss-arena n_peak (vision §3.5). 0 means the encounter has not started.
 var _boss_n_peak: int = 0
+## vision §6.1 rule 6a: sealed from the tick the boss first takes damage.
+var _arena_sealed: bool = false
+var _boss_untouched_until: int = -1
 ## Per-room n_peak for non-arena dungeon rooms, keyed by room id.
 var _room_n_peak: Dictionary = {}
 var _boss_fight_ticks: int = 0
@@ -452,6 +457,8 @@ func step() -> void:
 	_cull_hazards(sim_tick)
 	_cull_pattern_jobs()
 	_cull_enemies()
+	_maybe_lift_empty_arena(sim_tick)
+	_tick_boss_untouched(sim_tick)
 	_maybe_spawn_exit()
 	_tick += 1
 
@@ -519,6 +526,10 @@ func world_view(player_id: int) -> WorldSnapshot:
 	snap.enemies = enemy_snaps
 	snap.portals = _portals.duplicate()
 	snap.hazards = _hazards.duplicate()
+	snap.arena_sealed = _arena_sealed
+	snap.seal_tick = _current_seal_tick()
+	if _arena_sealed:
+		snap.seal_segments = _seal_segments()
 	var plist: Array[PlayerSnapshot] = []
 	for id in _sorted_ids:
 		var p: SimPlayerState = _players[id]
@@ -623,12 +634,11 @@ func _apply_movement(p: SimPlayerState) -> void:
 		mx = 0.0
 		my = 0.0
 	var step_len: float = _config.move_speed_tiles_per_s * _player_stride_mult(p) * SimConstants.TICK_DT
-	p.x += mx * step_len
-	p.y += my * step_len
-	if _has_bounds:
-		var r: float = _config.player_radius_tiles
-		p.x = clampf(p.x, _bound_min_x + r, _bound_max_x - r)
-		p.y = clampf(p.y, _bound_min_y + r, _bound_max_y - r)
+	# Walking uses the same wall clip as Slipstep so dungeon walls and the
+	# sealed arena doorway (vision §6.1 rule 6a) actually block movement.
+	var dest: PackedFloat64Array = _blink_destination(p.x, p.y, mx, my, step_len)
+	p.x = dest[0]
+	p.y = dest[1]
 
 
 func _apply_fire(p: SimPlayerState, sim_tick: int) -> void:
@@ -1214,12 +1224,19 @@ func vault_exit_open() -> bool:
 	return _exit_spawned
 
 
-## Read-only copy of boss-dead and vault-exit-open. Mutating the Dictionary
-## does not change sim state.
+## Read-only: true from the tick the boss first takes damage until the seal lifts
+## (boss death, empty-arena reset, or a new instance). Mutating nothing.
+func arena_sealed() -> bool:
+	return _arena_sealed
+
+
+## Read-only copy of boss-dead, vault-exit-open, and arena-sealed. Mutating the
+## Dictionary does not change sim state.
 func dungeon_state() -> Dictionary:
 	return {
 		"boss_defeated": _boss_defeated,
 		"vault_exit_open": _exit_spawned,
+		"arena_sealed": _arena_sealed,
 	}
 
 
@@ -1399,6 +1416,8 @@ func configure_dungeon(
 	_exit_spawned = false
 	_boss_defeated = false
 	_boss_n_peak = 0
+	_arena_sealed = false
+	_boss_untouched_until = -1
 	_room_n_peak.clear()
 	_reset_boss_fight_trackers()
 	_portals.clear()
@@ -1884,6 +1903,7 @@ func _blink_destination(sx: float, sy: float, dx: float, dy: float, dist: float)
 		t_end = _clip_segment_t(sx, ex, _bound_min_x + r, _bound_max_x - r, t_end)
 		t_end = _clip_segment_t(sy, ey, _bound_min_y + r, _bound_max_y - r, t_end)
 	t_end = _clip_blocked_tiles_t(sx, sy, ex, ey, t_end)
+	t_end = _clip_arena_seal_t(sx, sy, ex, ey, t_end)
 	return PackedFloat64Array([sx + (ex - sx) * t_end, sy + (ey - sy) * t_end])
 
 
@@ -1980,6 +2000,99 @@ func _tile_is_blocked(tx: int, ty: int) -> bool:
 	if tx >= int(ceil(_bound_max_x)) or ty >= int(ceil(_bound_max_y)):
 		return true
 	return false
+
+
+func _clip_arena_seal_t(sx: float, sy: float, ex: float, ey: float, t_end: float) -> float:
+	# While sealed, nobody may cross the arena bounds (vision §6.1 rule 6a).
+	if not _arena_sealed or _dungeon == null or t_end <= 0.0:
+		return t_end
+	var room: Dictionary = _arena_room()
+	if room.is_empty():
+		return t_end
+	var start_in: bool = _dungeon.room_contains(room, sx, sy)
+	var dest_in: bool = _dungeon.room_contains(room, sx + (ex - sx) * t_end, sy + (ey - sy) * t_end)
+	if dest_in == start_in:
+		return t_end
+	var lo: float = 0.0
+	var hi: float = t_end
+	for _i in range(40):
+		var mid: float = (lo + hi) * 0.5
+		var mx: float = sx + (ex - sx) * mid
+		var my: float = sy + (ey - sy) * mid
+		if _dungeon.room_contains(room, mx, my) == start_in:
+			lo = mid
+		else:
+			hi = mid
+	return maxf(0.0, lo)
+
+
+func _current_seal_tick() -> int:
+	if not _arena_sealed:
+		return -1
+	for e in _enemies:
+		if e.is_boss() and e.seal_tick >= 0:
+			return e.seal_tick
+	return -1
+
+
+func arena_seal_segments() -> Array[Dictionary]:
+	# Read-only copy of the sealed doorway segments, in tiles.
+	return _seal_segments() if _arena_sealed else []
+
+
+func _seal_segments() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var room: Dictionary = _arena_room()
+	if room.is_empty() or _dungeon == null:
+		return out
+	var arena := _dict_rect(room)
+	if arena.size.x <= 0.0 or arena.size.y <= 0.0:
+		return out
+	var others: Array = []
+	for other in _dungeon.rooms:
+		if String(other.get("id", "")) == String(room.get("id", "")):
+			continue
+		others.append(other)
+	for corridor in _dungeon.corridors:
+		others.append(corridor)
+	for other in others:
+		var edge: Dictionary = _shared_edge(arena, _dict_rect(other))
+		if not edge.is_empty():
+			out.append(edge)
+	return out
+
+
+func _dict_rect(d: Dictionary) -> Rect2:
+	var origin: Variant = d.get("origin", [])
+	var size: Variant = d.get("size", [])
+	if not (origin is Array) or not (size is Array):
+		return Rect2()
+	if (origin as Array).size() < 2 or (size as Array).size() < 2:
+		return Rect2()
+	return Rect2(float(origin[0]), float(origin[1]), float(size[0]), float(size[1]))
+
+
+func _shared_edge(a: Rect2, b: Rect2) -> Dictionary:
+	# Shared vertical or horizontal edge between two axis-aligned rooms.
+	var lo: float
+	var hi: float
+	if is_equal_approx(a.position.x, b.position.x + b.size.x) or is_equal_approx(a.position.x + a.size.x, b.position.x):
+		var x: float = a.position.x if is_equal_approx(a.position.x, b.position.x + b.size.x) else a.position.x + a.size.x
+		lo = maxf(a.position.y, b.position.y)
+		hi = minf(a.position.y + a.size.y, b.position.y + b.size.y)
+		if hi - lo > 0.05:
+			return {"x0": x, "y0": lo, "x1": x, "y1": hi}
+	if is_equal_approx(a.position.y, b.position.y + b.size.y) or is_equal_approx(a.position.y + a.size.y, b.position.y):
+		var y: float = a.position.y if is_equal_approx(a.position.y, b.position.y + b.size.y) else a.position.y + a.size.y
+		lo = maxf(a.position.x, b.position.x)
+		hi = minf(a.position.x + a.size.x, b.position.x + b.size.x)
+		if hi - lo > 0.05:
+			return {"x0": lo, "y0": y, "x1": hi, "y1": y}
+	return {}
+
+
+func _set_arena_sealed(sealed: bool) -> void:
+	_arena_sealed = sealed
 
 
 func _apply_interact(p: SimPlayerState, sim_tick: int) -> void:
@@ -2390,7 +2503,68 @@ func _living_boss() -> EnemyState:
 
 
 func _begin_boss_fight(_e: EnemyState, sim_tick: int) -> void:
+	# The physical seal only exists in a dungeon boss arena (vision §6.1 rule 6a).
+	if not _arena_room().is_empty():
+		_set_arena_sealed(true)
 	_sample_boss_fight_tick(sim_tick)
+
+
+func _maybe_lift_empty_arena(sim_tick: int) -> void:
+	# The seal lifts when no living player is left in the arena; the boss then
+	# resets (vision §6.1 rule 6a). Full restore details also live on #61.
+	if not _arena_sealed or _boss_defeated or _dungeon == null:
+		return
+	if _arena_room().is_empty():
+		return
+	if _count_living_in_arena() > 0:
+		return
+	_set_arena_sealed(false)
+	_reset_abandoned_boss_fight(sim_tick)
+
+
+func _reset_abandoned_boss_fight(sim_tick: int) -> void:
+	_boss_n_peak = 0
+	_reset_boss_fight_trackers()
+	_boss_untouched_until = sim_tick + BOSS_RESET_UNTOUCHED_TICKS
+	_pattern_bullets.clear()
+	_hazards.clear()
+	for e in _enemies:
+		if e.is_boss():
+			_cancel_jobs_from(e.id)
+			e.seal_tick = -1
+			e.damaged_by.clear()
+			e.rewards_granted = false
+			e.alive = true
+			_apply_n_peak(e, 1)
+			e.hp = e.scaled_max_hp
+			if e.def != null and e.def.phases.size() > 0:
+				_enter_boss_phase(e, 0)
+			e.invulnerable = true
+		elif e.summoned:
+			e.drops_loot = false
+			e.invulnerable = false
+			e.alive = false
+			e.hp = 0
+			e.flash_ticks = 0
+			_cancel_jobs_from(e.id)
+
+
+func _tick_boss_untouched(sim_tick: int) -> void:
+	if _boss_untouched_until < 0:
+		return
+	if sim_tick < _boss_untouched_until:
+		var boss: EnemyState = _living_boss()
+		if boss != null:
+			boss.invulnerable = true
+		return
+	_boss_untouched_until = -1
+	var boss: EnemyState = _living_boss()
+	if boss == null:
+		return
+	var phase: Dictionary = boss.current_phase()
+	if bool(phase.get("invulnerable", false)):
+		return
+	boss.invulnerable = false
 
 
 func _sample_boss_fight_tick(sim_tick: int) -> void:
@@ -2548,6 +2722,8 @@ func _kill_enemy(e: EnemyState, sim_tick: int) -> void:
 func _on_boss_defeated(e: EnemyState, sim_tick: int) -> void:
 	_boss_defeated = true
 	_boss_n_peak = 0
+	_set_arena_sealed(false)
+	_boss_untouched_until = -1
 	_pattern_bullets.clear()
 	_hazards.clear()
 	_cancel_jobs_from(e.id)

@@ -26,6 +26,10 @@ const WARDEN_LAST := Color(0.96, 0.95, 0.90)
 const ACOLYTE_COLOR := Color(0.72, 0.62, 0.42)
 const HAZARD_TELEGRAPH := Color(0.95, 0.72, 0.22, 0.28)
 const HAZARD_ACTIVE := Color(0.92, 0.48, 0.12, 0.40)
+const SEAL_COLOR := Color(0.98, 0.78, 0.32, 0.95)
+const SEAL_GLOW := Color(0.95, 0.50, 0.12, 0.40)
+const SEAL_CUE_TEXT := "the doors are sealed"
+const SEAL_CUE_SEC := 2.0
 const CRYPT_FLOOR := Color(0.11, 0.09, 0.08)
 const CRYPT_DARK := Color(0.16, 0.12, 0.10)
 
@@ -36,6 +40,9 @@ var _patterns: Node2D
 var _enemies: Node2D
 var _camera: Camera2D
 var _hint: Label
+var _seal_cue: Label
+var _seal_cue_left: float = 0.0
+var _saw_sealed: bool = false
 var _hp: Label
 var _level: Label
 var _xp: Label
@@ -152,6 +159,17 @@ func _ready() -> void:
 	_loot_btn.text = "Loot"
 	_loot_btn.visible = false
 	_loot_btn.pressed.connect(_on_loot_pressed)
+	_seal_cue = Label.new()
+	_seal_cue.name = "SealCue"
+	_seal_cue.text = SEAL_CUE_TEXT
+	_seal_cue.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_seal_cue.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_seal_cue.add_theme_font_size_override("font_size", 28)
+	_seal_cue.add_theme_color_override("font_color", Color(0.99, 0.90, 0.62))
+	_seal_cue.add_theme_color_override("font_outline_color", Color(0.12, 0.06, 0.02, 0.95))
+	_seal_cue.add_theme_constant_override("outline_size", 8)
+	_seal_cue.visible = false
+	_seal_cue.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_floats = Node2D.new()
 	_floats.name = "Floaters"
 	add_child(_floats)
@@ -174,6 +192,21 @@ func _ready() -> void:
 	margin.add_child(vbox)
 	layer.add_child(margin)
 	add_child(layer)
+	var cue_layer := CanvasLayer.new()
+	cue_layer.layer = 7
+	var cue_root := CenterContainer.new()
+	cue_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cue_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_seal_cue.custom_minimum_size = Vector2(0, 80)
+	# Sit the cue in the upper third so it doesn't cover the Warden.
+	var cue_pad := MarginContainer.new()
+	cue_pad.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cue_pad.add_theme_constant_override("margin_bottom", 280)
+	cue_pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cue_root.add_child(_seal_cue)
+	cue_pad.add_child(cue_root)
+	cue_layer.add_child(cue_pad)
+	add_child(cue_layer)
 	var host_panel: Control = preload("res://src/render/host_lobby_panel.tscn").instantiate() as Control
 	host_panel.name = "HostLobbyPanel"
 	var host_layer := CanvasLayer.new()
@@ -225,6 +258,7 @@ func _draw() -> void:
 			if (x + y) % 2 == 0:
 				draw_rect(Rect2(float(x) * px, float(y) * px, px, px), dark)
 	draw_rect(Rect2(0.0, 0.0, size, size), edge, false, 2.0)
+	_draw_seal()
 	_draw_hazards()
 
 
@@ -237,6 +271,7 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_tick_hit_feel(delta)
+	_tick_seal_cue(delta)
 	_update_player_view()
 	_update_enemy_views()
 	_update_shot_views()
@@ -843,6 +878,38 @@ func _warden_color(e: EnemySnapshot) -> Color:
 			return WARDEN_LAST
 		_:
 			return WARDEN_COLOR
+
+
+func _draw_seal() -> void:
+	var snap := GameSession.curr_snapshot
+	if snap == null or not snap.arena_sealed:
+		return
+	var px := SimConstants.TILE_PX
+	for seg in snap.seal_segments:
+		var a := Vector2(float(seg.get("x0", 0.0)) * px, float(seg.get("y0", 0.0)) * px)
+		var b := Vector2(float(seg.get("x1", 0.0)) * px, float(seg.get("y1", 0.0)) * px)
+		# A wide wax glow plus a bright bar so the sealed door reads at a glance.
+		draw_line(a, b, SEAL_GLOW, 22.0, true)
+		draw_line(a, b, SEAL_COLOR, 7.0, true)
+		draw_line(a, b, Color(1.0, 0.95, 0.80, 0.85), 2.0, true)
+
+
+func _tick_seal_cue(delta: float) -> void:
+	var snap := GameSession.curr_snapshot
+	var sealed: bool = snap != null and snap.arena_sealed
+	if sealed and not _saw_sealed:
+		_seal_cue_left = SEAL_CUE_SEC
+		if _seal_cue != null:
+			_seal_cue.visible = true
+	if not sealed:
+		_seal_cue_left = 0.0
+		if _seal_cue != null:
+			_seal_cue.visible = false
+	_saw_sealed = sealed
+	if _seal_cue_left > 0.0:
+		_seal_cue_left = maxf(0.0, _seal_cue_left - delta)
+		if _seal_cue_left <= 0.0 and _seal_cue != null:
+			_seal_cue.visible = false
 
 
 func _draw_hazards() -> void:
