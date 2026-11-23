@@ -1,8 +1,11 @@
 extends Node
 ## Autoload. Owns a WorldSource, steps it at 20 Hz, and exposes snapshots for
 ## render interpolation. Gameplay nodes emit input and read state only.
-## Solo play and a later player-hosted lobby both run LocalSim (plain
-## RefCounted game rules). This node is the session wrapper, not the sim.
+## Solo, listen-host, and remote client all submit InputIntent through source.
+## The sim itself is LocalSim (plain RefCounted game rules), not this node.
+## Listen-host networking uses the Server Engineer's LobbyHost (proto/v1).
+
+enum Mode { SOLO, HOST, CLIENT }
 
 var config: SimConfig
 var catalog: DataCatalog
@@ -10,6 +13,14 @@ var source: WorldSource
 var prev_snapshot: WorldSnapshot = WorldSnapshot.new()
 var curr_snapshot: WorldSnapshot = WorldSnapshot.new()
 var alpha: float = 0.0
+var mode: Mode = Mode.SOLO
+var lobby_host: LobbyHost
+var lobby_client: LobbyClient
+var lobby_config: LobbyConfig
+var beacon: LobbyBeaconBroadcaster
+## New characters default to not played-offline (QA #28).
+var played_offline: bool = false
+var local_player_id: int = 1
 
 ## Latest raw input, written by the arena / virtual sticks each display frame.
 var move_x: float = 0.0
@@ -31,19 +42,126 @@ func _ready() -> void:
 	if config == null:
 		config = SimConfig.new()
 	catalog = DataCatalog.load_default()
+	# Boot may immediately switch to host/client; default solo keeps the
+	# practice yard working if the arena is opened on its own.
+	start_solo()
+
+
+func start_solo() -> void:
+	_teardown_net()
+	mode = Mode.SOLO
+	local_player_id = 1
+	source = _new_sim()
+	_reset_snapshots()
+
+
+func start_host(cfg: LobbyConfig, bind_host: String = "*") -> Error:
+	_teardown_net()
+	lobby_config = cfg
+	var hs = cfg.host_settings
+	if hs.join_code == "":
+		hs.join_code = LobbyConfig.generate_join_code()
+	var bind := bind_host
+	if bind == "*" or bind == "":
+		bind = "0.0.0.0"
+	lobby_host = LobbyHost.new(config)
+	lobby_host.port = cfg.ws_port
+	lobby_host.bind_address = bind
+	lobby_host.max_players = hs.max_players
+	lobby_host.instance_seed = cfg.instance_seed
+	lobby_host.multiplier_m100 = int(round(cfg.display_multiplier * 100.0))
+	# TODO(host-settings): once LobbyHost.apply_settings / settings() land,
+	# call apply_settings on a real LobbySettings instead of copying fields.
+	var err: Error = lobby_host.start()
+	if err != OK:
+		lobby_host = null
+		start_solo()
+		return err
+	cfg.ws_port = lobby_host.port
+	# TODO(host-view): once add_local_player / submit_local_input /
+	# remove_local_player, world_view(player_id) and the ticked signal land,
+	# the host arena should render from lobby_host.world_view(local_player_id)
+	# and this separate LocalSim should be dropped.
+	var sim := _new_sim()
+	mode = Mode.HOST
+	local_player_id = 1
+	source = HostWorldSource.new(lobby_host, sim)
+	beacon = LobbyBeaconBroadcaster.new()
+	if beacon.start(cfg, bind) != OK:
+		# Discovery is optional; the host still listens on WebSocket.
+		beacon = null
+	_reset_snapshots()
+	return OK
+
+
+func start_client(url: String, offline: bool = false, join_code: String = "") -> Error:
+	_teardown_net()
+	played_offline = offline
+	lobby_client = LobbyClient.new()
+	lobby_client.name = "LobbyClient"
+	add_child(lobby_client)
+	var err: Error = lobby_client.connect_to(url, offline, join_code)
+	if err != OK:
+		lobby_client.queue_free()
+		lobby_client = null
+		start_solo()
+		return err
+	lobby_client.welcomed.connect(_on_client_welcomed)
+	mode = Mode.CLIENT
+	source = ClientWorldSource.new(lobby_client)
+	_reset_snapshots()
+	return OK
+
+
+func _on_client_welcomed(pid: int) -> void:
+	local_player_id = pid
+
+
+func _new_sim() -> LocalSim:
+	if catalog == null:
+		catalog = DataCatalog.load_default()
 	var sim := LocalSim.new(config, 16.0, 16.0, catalog)
 	sim.set_bounds(0.0, 0.0, 32.0, 32.0)
 	sim.set_world_seed(1)
 	sim.set_player_class("thornguard")
 	# Practice yard: every enemy is fixed at the data E (killXP(1), Glint 1, T* = 0).
 	sim.set_practice_yard(true)
-	sim.spawn_enemy("burrmite", 24.0, 10.0, catalog.scaling.practice_yard_content_level)
-	source = sim
-	curr_snapshot = source.snapshot()
+	var yard_e: int = 1
+	if catalog != null and catalog.scaling != null:
+		yard_e = catalog.scaling.practice_yard_content_level
+	sim.spawn_enemy("burrmite", 24.0, 10.0, yard_e)
+	return sim
+
+
+func _reset_snapshots() -> void:
+	_accum = 0.0
+	_seq = 0
+	curr_snapshot = source.snapshot() if source != null else WorldSnapshot.new()
 	prev_snapshot = curr_snapshot.duplicate_snapshot()
 
 
+func _teardown_net() -> void:
+	if beacon != null:
+		beacon.stop()
+		beacon = null
+	if lobby_host != null:
+		lobby_host.stop()
+		lobby_host = null
+	if lobby_client != null:
+		lobby_client.stop()
+		lobby_client.queue_free()
+		lobby_client = null
+
+
 func _process(delta: float) -> void:
+	if lobby_host != null:
+		lobby_host.service()
+		if beacon != null:
+			beacon.player_count = LobbyConfig.beacon_player_count(
+				lobby_host.players.size(), lobby_host.max_players)
+			beacon.poll(delta)
+	if source == null:
+		return
 	var dt: float = SimConstants.TICK_DT
 	_accum += delta
 	var steps: int = 0

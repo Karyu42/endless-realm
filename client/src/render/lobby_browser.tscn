@@ -1,0 +1,149 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/render/lobby_browser.gd" id="1_browser"]
+
+[node name="LobbyBrowser" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_browser")
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="Cols" type="HBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Left" type="VBoxContainer" parent="Margin/Cols"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Margin/Cols/Left"]
+layout_mode = 2
+text = "LAN lobbies"
+
+[node name="LobbyList" type="ItemList" parent="Margin/Cols/Left"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+auto_height = false
+
+[node name="StatusLabel" type="Label" parent="Margin/Cols/Left"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "0 lobby(s) on LAN"
+
+[node name="JoinSelectedButton" type="Button" parent="Margin/Cols/Left"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Join selected"
+
+[node name="Right" type="VBoxContainer" parent="Margin/Cols"]
+layout_mode = 2
+custom_minimum_size = Vector2(280, 0)
+theme_override_constants/separation = 8
+
+[node name="PlayTitle" type="Label" parent="Margin/Cols/Right"]
+layout_mode = 2
+text = "Play"
+
+[node name="SoloButton" type="Button" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Play solo"
+
+[node name="HostTitle" type="Label" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Host a lobby"
+
+[node name="NameEdit" type="LineEdit" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Lobby name"
+text = "Practice Lobby"
+
+[node name="MaxPlayersEdit" type="LineEdit" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Max players (1–50)"
+
+[node name="M100MinEdit" type="LineEdit" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Min M (m100, 50–150 step 5)"
+text = "100"
+
+[node name="M100MaxEdit" type="LineEdit" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Max M (m100, 50–150 step 5)"
+text = "100"
+
+[node name="HostCodeEdit" type="LineEdit" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Join code (blank = random)"
+
+[node name="AllowImportsCheck" type="CheckBox" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Imports allowed"
+
+[node name="AllowOfflineImportsCheck" type="CheckBox" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Offline-flagged imports allowed"
+
+[node name="BroadcastJoinCodeCheck" type="CheckBox" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Broadcast join code on LAN"
+
+[node name="HostButton" type="Button" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Host"
+
+[node name="JoinTitle" type="Label" parent="Margin/Cols/Right"]
+layout_mode = 2
+text = "Join"
+
+[node name="JoinCodeEdit" type="LineEdit" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Join code"
+
+[node name="JoinCodeButton" type="Button" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Join by code"
+
+[node name="JoinIpEdit" type="LineEdit" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "IP:port  (e.g. 192.168.1.10:8080)"
+
+[node name="JoinIpButton" type="Button" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Join by IP"
+
+[node name="PlayedOfflineCheck" type="CheckBox" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "This character was played offline"
