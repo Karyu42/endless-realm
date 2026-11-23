@@ -1,0 +1,16 @@
+class_name EnemySnapshot
+extends RefCounted
+## Render-facing copy of one enemy at a tick. Not a sim object.
+
+var id: int = 0
+var def_id: String = ""
+var x: float = 0.0
+var y: float = 0.0
+var aim: float = 0.0
+var hp: int = 0
+var max_hp: int = 0
+var radius: float = 0.35
+
+
+func to_pixels() -> Vector2:
+	return Vector2(x * SimConstants.TILE_PX, y * SimConstants.TILE_PX)

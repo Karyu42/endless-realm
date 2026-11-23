@@ -1,0 +1,29 @@
+{
+  "enemies": [
+    {
+      "id": "burrmite",
+      "name": "Burrmite",
+      "rank": "normal",
+      "base": {
+        "hp": 60,
+        "ward": 0,
+        "contact": 8,
+        "damage": {
+          "spit": 10
+        }
+      },
+      "move_speed": 3.5,
+      "wander_speed": 1.5,
+      "radius": 0.35,
+      "aggro_radius": 8.0,
+      "hover_radius": 3.0,
+      "leash": 16.0,
+      "strafe_switch_ticks": 40,
+      "ai": {
+        "type": "chase_hover",
+        "pattern": "burr_spit",
+        "fire_interval_ticks": 30
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "patterns": [
+    {
+      "id": "burr_spit",
+      "type": "fan",
+      "count": 1,
+      "spread_deg": 0,
+      "aim": "aimed",
+      "start_angle_deg": 0,
+      "speed": 6.0,
+      "range": 6.0,
+      "size": "S",
+      "damage_key": "spit",
+      "trigger": "timer",
+      "interval_ticks": 30
+    },
+    {
+      "id": "fixture_gap_ring",
+      "type": "ring",
+      "count": 8,
+      "aim": "fixed",
+      "start_angle_deg": 0,
+      "skip": {
+        "consecutive": 2,
+        "start": "rng"
+      },
+      "speed": 4.0,
+      "range": 5.0,
+      "size": "M",
+      "damage_key": "ring",
+      "trigger": "timer",
+      "interval_ticks": 40
+    }
+  ]
+}

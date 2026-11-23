@@ -60,5 +60,69 @@ for s, files in sorted(by_schema.items()):
     if r.returncode != 0:
         err(f"data files failed validation against {s}")
 
+# --- content-v0.1 §5: pattern references and damage_key ---
+enemies_path = root / "enemies.json"
+patterns_path = root / "patterns.json"
+if enemies_path.exists() and patterns_path.exists():
+    enemies_doc = json.loads(enemies_path.read_text(encoding="utf-8"))
+    patterns_doc = json.loads(patterns_path.read_text(encoding="utf-8"))
+    pattern_ids = {
+        str(p.get("id"))
+        for p in patterns_doc.get("patterns", [])
+        if isinstance(p, dict) and p.get("id")
+    }
+    patterns_by_id = {
+        str(p.get("id")): p
+        for p in patterns_doc.get("patterns", [])
+        if isinstance(p, dict) and p.get("id")
+    }
+
+    def pattern_refs(obj, acc, path=""):
+        if isinstance(obj, dict):
+            fire = obj.get("fire")
+            if isinstance(fire, str) and fire:
+                acc.append((f"{path}.fire" if path else "fire", fire))
+            for key in ("pattern", "pattern_id"):
+                val = obj.get(key)
+                if isinstance(val, str) and val:
+                    acc.append((f"{path}.{key}" if path else key, val))
+            child = obj.get("child")
+            if isinstance(child, str) and child:
+                acc.append((f"{path}.child" if path else "child", child))
+            for k, v in obj.items():
+                if k in ("pattern", "pattern_id", "fire", "child") and isinstance(v, str):
+                    continue
+                pattern_refs(v, acc, f"{path}.{k}" if path else k)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                pattern_refs(v, acc, f"{path}[{i}]")
+
+    for i, enemy in enumerate(enemies_doc.get("enemies", [])):
+        if not isinstance(enemy, dict):
+            continue
+        eid = str(enemy.get("id", f"enemies[{i}]"))
+        refs = []
+        pattern_refs(enemy, refs, eid)
+        damage = {}
+        base = enemy.get("base", {})
+        if isinstance(base, dict) and isinstance(base.get("damage"), dict):
+            damage = {str(k): v for k, v in base["damage"].items()}
+        used_keys = set()
+        for loc, pid in refs:
+            if pid not in pattern_ids:
+                err(f"{loc}: pattern reference {pid!r} is not in patterns.json")
+                continue
+            key = str(patterns_by_id[pid].get("damage_key") or "")
+            if not key:
+                continue
+            used_keys.add(key)
+            if key not in damage:
+                err(
+                    f"{eid}: pattern {pid!r} damage_key {key!r} is missing from base.damage"
+                )
+        for key in sorted(damage):
+            if key not in used_keys:
+                print(f"::warning::{eid}: unused damage_key {key!r} in base.damage")
+
 print(f"data-validate: {len(data_files)} data files, {len(schemas)} schemas, {errors} errors")
 sys.exit(1 if errors else 0)

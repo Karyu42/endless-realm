@@ -1,0 +1,54 @@
+{
+  "cases": [
+    {
+      "name": "fixture_gap_ring_seed_12345_t10",
+      "pattern_id": "fixture_gap_ring",
+      "seed": "12345",
+      "spawn_tick": 0,
+      "origin": [
+        0.0,
+        0.0
+      ],
+      "aim_rad": 0.0,
+      "volley_index": 0,
+      "ticks": [
+        10
+      ],
+      "notes": "First PCG32 draw % 8 == 4, so ring indices 4 and 5 are skipped.",
+      "expected": {
+        "10": [
+          {
+            "x": 2.0,
+            "y": 0.0,
+            "index": 0
+          },
+          {
+            "x": 1.4142135623730951,
+            "y": 1.4142135623730951,
+            "index": 1
+          },
+          {
+            "x": 0.0,
+            "y": 2.0,
+            "index": 2
+          },
+          {
+            "x": -1.4142135623730951,
+            "y": 1.4142135623730951,
+            "index": 3
+          },
+          {
+            "x": 0.0,
+            "y": -2.0,
+            "index": 6
+          },
+          {
+            "x": 1.4142135623730951,
+            "y": -1.4142135623730951,
+            "index": 7
+          }
+        ]
+      }
+    }
+  ]
+}
