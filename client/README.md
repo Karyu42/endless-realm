@@ -252,14 +252,17 @@ class until the host-lobby protocol carries one. Player ids come from the
 sim's single entity allocator (`LocalSim.alloc_player_id()`), so they never
 collide with enemy, projectile or bag ids; `add_player` / `place_player`
 reserve a caller-chosen id and refuse one already held by an entity.
-Leaving removes the player's ability state from the sim. A join that matches
-a host-verified identity gets back the exact cooldown and Focus it left with;
-every other join starts conservative (ability on full cooldown, 0 Focus), so
-a rejoin can't reset ability state. Local players: `remove_local_player()`
-returns a single-use host-issued token for `add_local_player(character,
-rejoin_token)`. Remote joins have no verified identity until the handshake PR,
-so they always start conservative. Saved states are bounded and cleared by
-`stop()`; one that is no longer stored rejoins conservative.
+Join state (content-v0.1 §1, phase 1): leaving removes the player's ability
+state from the sim. Players the host verifies itself (the listen-host and
+local players) follow the spec: a first join this host session is ready (100
+Focus, cooldown 0); `remove_local_player()` returns a single-use host-issued
+token, and `add_local_player(character, rejoin_token)` restores the snapshot
+with the cooldown reduced by the host ticks elapsed (floor 0) and Focus regen
+at the class rate over them (capped). A token without a snapshot (already
+used, dropped, or not issued by this host) starts conservative: full
+cooldown, 0 Focus. Remote joins start conservative until the handshake
+verifies an identity. Snapshots are bounded and cleared by `stop()`. Elapsed
+time is the host tick count.
 `submit_local_input(player_id, intent: InputIntent)` uses the same per-tick
 queue and rules as a remote InputFrame (applied once per seq, interact presses
 go through the interact validator), with no socket and no message budget.
