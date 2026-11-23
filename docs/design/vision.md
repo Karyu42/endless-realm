@@ -6,7 +6,9 @@ Endless Realm is a co-op, top-down bullet-hell MMO. It has no level cap and gear
 
 All formulas are the source of truth. Tables only illustrate them. All numbers are starting values for tuning. Put them in config, not in code.
 
-Companion docs: base stats for v0.1 enemies, the Tallow Warden, the Wilds ring layout and projectile speeds will live in [`docs/design/content-v0.1.md`](content-v0.1.md) (PR #4, branch `design/content-v0.1`, being aligned to this doc and landing with or before it). **This doc is the source of truth.** Where the two disagree, vision.md wins. The engine, netcode and persistence choices are in [`docs/tech/stack.md`](../tech/stack.md). Detailed anti-cheat and anomaly-detection thresholds live in a **private ops doc** (owned by Economy Ops) and are deliberately not in this public repo.
+Companion docs: base stats for v0.1 enemies, the Tallow Warden, the Wilds ring layout and projectile speeds will live in [`docs/design/content-v0.1.md`](content-v0.1.md) (merged from PR #4). **This doc is the source of truth.** Where the two disagree, vision.md wins. The engine, netcode and persistence choices are in [`docs/tech/stack.md`](../tech/stack.md). Detailed anti-cheat and anomaly-detection thresholds live in a **private ops doc** (owned by Economy Ops) and are deliberately not in this public repo.
+
+**Hosting (D17):** there are no official servers for now, only offline solo and player-hosted lobbies (§11). "The server" in this doc means the lobby's host server. Sections that assumed one trusted official server are marked **⚠ Hosting** and reconciled in §11.5.
 
 Legend: **[v0.1]** is in the first playable slice. **[Later]** is a later-phase idea, written down so v0.1 doesn't block it.
 
@@ -114,6 +116,54 @@ Why: tying XP to `m` means progress is measured in kills, not raw numbers. Kills
 
 Use 64-bit integers for XP. Total XP passes 2³¹ at about level 3,545 (in whole XP; tenths are 10× that).
 
+### 3.5 Group scaling by peak players in range (n_peak) [v0.1]
+
+Karyu's rule: enemy scaling follows the players **in range**, and it stays at the **highest count reached** during an encounter, even if players leave, die or the count fluctuates. It applies everywhere enemies exist: the Wilds, dungeon rooms and the boss arena. In offline solo, `n_peak` is always 1.
+
+**What scales:** enemy **max HP only**.
+- **Not scaled:** damage, Ward, bullet count, pattern density, speeds and attack intervals. Dodging stays the skill test at any group size (§3.2), and a 50-player crowd doesn't turn the screen into an undodgeable wall.
+- **Rewards are not scaled by n:** loot stays **personal** (§4.2). Every eligible player gets their own normal rolls, XP (§3.4), Glint (§5), Riftstone (§6) and Sparks (§9), exactly as solo. Total loot grows with the group only because each extra eligible player rolls their own.
+
+**Encounter groups.** `n_peak` is tracked per encounter group, not per player:
+
+| Content | Encounter group | "In range" (`n_now`) | Starts | Ends (and resets `n_peak`) |
+|---|---|---|---|---|
+| **Wilds** | One enemy, or one pack spawned together (e.g. a Burrmite pack of 3) | Living players within **12 tiles** of any living member | On **aggro**: the first tick a player is inside the member's aggro radius (content §2.3) or damages it | **Death** of the last member; **leash** (pulled > 16 tiles from spawn or into another ring, content §2.1); or **de-aggro**: no player within its aggro radius for **10 s** in a row. On leash and de-aggro the members walk back and heal to full max HP at `n = 1` |
+| **Dungeon room** (rooms 1–5) | All enemies of the room, every wave included | Living players **inside the room's bounds** or within **12 tiles** of any living enemy of the room (covers shooting from the doorway) | **Room activation**: the first player enters the room (content §3.1) | **Cleared** (every enemy of every wave dead), or **room reset**: no player in range for **30 s** in a row. On reset, surviving enemies heal to full at `n = 1`, unspawned waves stay unspawned, and the room re-activates on the next entry |
+| **Boss arena** (room 6) | The boss plus all its adds | Living players **inside the arena bounds** | The first tick a living player is inside the arena | **Boss death**, or **boss reset** (no living player left in the arena, §6.1 rule 6a), or instance collapse |
+
+- **Counting:** `n_now` counts distinct, connected, living characters of the lobby (lingering characters, §7.3, count). Dead characters don't count, but they don't lower `n_peak` either. It is evaluated **every tick** (20 Hz).
+- **Never decreases:** `n_peak = max(n_peak, n_now)` each tick, with `n_peak ≥ 1` from the encounter's start. Only the end events above reset it.
+- **Why 12 tiles:** the longest player weapon range is 9 tiles (Gale Sling) and the loot-proximity radius is 10 (§4.2). Anyone who can hit the enemy or share its loot is counted.
+- **Spawns inside an encounter:** a later wave or a summoned add spawns at the group's current `n_peak`.
+
+**Curve.** One kink at 8 players: the approved v0.1 coefficients hold exactly up to 8 (so every 8-player number in `content-v0.1.md` stays valid), and each player past 8 adds half as much:
+
+```
+s100(n) = 100 + k × (min(n, 8) − 1) + t × max(0, n − 8)
+
+normal enemies: k = 60, t = 30
+boss:           k = 75, t = 38
+(boss adds are normal enemies: normal k and t, with the boss encounter's n_peak)
+
+maxHP = (baseHP × m100(E) × s100(n_peak) + 5000) div 10000     (exact integer math, half-up; m100(E) = 100 + 5 × (E − 1))
+```
+
+**Raising max HP mid-encounter:** when `n_peak` rises, the new max HP is computed from the formula, and current HP keeps its fraction: `curHP' = (curHP × maxHP' + maxHP div 2) div maxHP` (half-up). Phase thresholds always compare against the current max HP. Max HP never goes down during an encounter.
+
+| n (peak) | 1 | 2 | 4 | 8 | 16 | 32 | 50 |
+|---|---|---|---|---|---|---|---|
+| Normal enemy HP × | 1.00 | 1.60 | 2.80 | 5.20 | 7.60 | 12.40 | 17.80 |
+| Boss HP × | 1.00 | 1.75 | 3.25 | 6.25 | 9.29 | 15.37 | 22.21 |
+| Tallow Warden max HP at E = 10 | 7,975 | 13,956 | 25,919 | 49,844 | 74,088 | 122,576 | 177,125 |
+| Ideal boss fight (100 s solo × s / n) | 100 s | 88 s | 81 s | 78 s | 58 s | 48 s | 44 s |
+
+The ideal fight time assumes damage grows linearly with players. Real crowds lose some damage to dodging and overlap, so large fights should land at about 50–70 s. **Tuning (Design's call):** the kink at 8 and the tail coefficients `t` are playtest knobs. Because rewards stay per player while HP grows half as fast past 8, rewards per unit of enemy HP rise in big groups (about 2.8× solo at n = 50 for normal enemies, vs 1.5× at n = 8). That is intended to make big lobbies feel good; watch it in playtests. Full curve for n = 1…50 is in Appendix A.
+
+**Golden values (acceptance tests):** Tallow Warden at E = 10: n = 8 → 49,844, n = 16 → 74,088, n = 50 → 177,125. A normal enemy with baseHP 100 at E = 1: n = 9 → 550, n = 50 → 1,780. A boss at 60% HP when `n_peak` goes 8 → 9 at E = 10: max 49,844 → 52,874, current 29,906 → 31,724.
+
+**[Later]** Bigger arenas for large lobbies. The 21×21 Warden's Sanctum gets crowded past about 16 players; that is a content-tuning follow-up, not a rule change.
+
 ## 4. Endless gear tiers
 
 ### 4.1 Tier formula
@@ -195,10 +245,10 @@ Whoever opens a portal (a dungeon instance; a whole server instance or shard is 
 2. **Join floor:** players with real `Lp < 0.5 × E` can't enter. If `Lp < E − 10`, they get a confirm dialog ("Content level E, you are level Lp"). This stops luring new players into a death trap.
 3. **Level sync down:** inside the portal, players use `Le = min(Lp, E + 5)` (§3.2a), with the tier clamp from §4.1. High-level carries can't faceroll, and low-M runs can't be farmed by high levels.
 4. **Anti power-leveling:** under-level XP is credited at no more than `Le + 10` (§3.4). There is no per-kill cap.
-5. **Party cap:** 8 players per instance. The portal entrance closes once 8 players have entered.
-6. **Per-player scaling:** enemy HP is multiplied by `1 + 0.6 × (n − 1)` for normal enemies and `1 + 0.75 × (n − 1)` for the boss. Damage is not scaled. For a normal enemy, n is the number of players in the instance when it spawns. For the boss, n is snapshotted when the arena seals (rule 6a). The boss's HP never rescales during a fight, including when players leave, die or disconnect.
+5. **Player cap:** a portal instance holds up to the lobby's **max players** (host setting, 1–50, default 50, §11.2). The portal entrance closes once that many players have entered. Offline solo is always 1.
+6. **Group scaling:** enemy max HP scales with the **peak** number of players in range, `n_peak`, per encounter (§3.5): rooms track it from activation to clear or reset, and the boss arena from the first player entering to the boss's death or reset. Damage and patterns are not scaled. Max HP only ever rises during an encounter (keeping the current HP fraction), never falls when players leave, die or disconnect.
 6a. **Boss-arena seal:**
-   - **Start:** the arena seals on the tick the boss first takes damage, and that tick is also the fight start.
+   - **Start:** the arena seals on the tick the boss first takes damage, and that tick is also the fight start. The boss encounter's `n_peak` (§3.5) has been counting since the first player entered the arena; it keeps counting while sealed, and since nobody can enter, it only changes before the seal.
    - **While sealed:** nobody can enter the arena. That includes new joiners and Standard players rejoining, who can enter the instance but wait outside the arena door. Nobody inside can leave except by dying or disconnecting (§7.3 linger).
    - **Lifting:** the seal lifts when the boss dies, when no living player is left in the arena (the boss then resets to full HP and is untouched for 5 s before a new fight can start), or when the instance collapses.
 7. **Boss eligibility (contribution check):** a player is eligible for the boss rewards if any one of these is true during the fight (which starts when the boss first takes damage):
@@ -208,7 +258,7 @@ Whoever opens a portal (a dungeon instance; a whole server instance or shard is 
 
    In every case they must also have sent non-idle input in the 30 s before the kill. **Non-idle input** means at least one input frame (`move, aim, fire_held, seq`, per `stack.md`) in which the move vector differs from the previous frame, the aim angle changed by ≥ 1°, `fire_held` is true, or an ability was used.
 8. **Lifetimes:**
-   - The entrance stays open 120 s after creation, or until 8 players have entered.
+   - The entrance stays open 120 s after creation, or until the lobby's max players have entered (rule 5).
    - An instance lasts at most 30 min. At that point it collapses and players are moved to the Hearth, which banks their loot (§7).
    - An instance closes 60 s after it empties.
    - A deposit (above) is forfeited if the instance closes without a boss kill, except when it is lost to a server fault (§7.3).
@@ -242,6 +292,7 @@ The server applies these steps in order, in one transaction:
   - **After linger:** if it survives, the character is removed from the instance. On reconnect it appears in the Hearth, and its pending loot banks (§7.1).
   - **Logout:** a voluntary logout or quit outside the Hearth uses the same 5 s linger. A logout inside the Hearth is instant.
   - **Incident windows:** these protect players from server faults.
+    - **⚠ Hosting:** "on-call" below means the lobby's **host admin** (§11.5).
     - **Opening:** the server opens one automatically when an instance worker crashes or restarts, or its tick stalls for more than 2 s. On-call ops can also open one manually for an outage, with a required reason.
     - **Scope:** a window covers the instance, or the whole server for a manual one, from 30 s before the fault until it ends.
     - **End:**
@@ -253,7 +304,7 @@ The server applies these steps in order, in one transaction:
       - The opener gets back the Riftstone deposit and a freshly minted Vault Sigil (new `item_uid`, reason `INCIDENT_REFUND`).
       - Ground drops nobody picked up are tombstoned `EXPIRED`, with no further compensation in v0.1.
     - **Reverts:** deaths inside a window are reverted. The character is restored, tombstoned items are un-tombstoned, and the fee and pending loss are refunded. One audit row is written per revert, with the incident id, actor, character and items. Manual reverts are allowed up to 72 h after the death.
-- **Leaderboard:** there are boards for all time and for each season. Ranking is by level, then total XP, then the earliest time the level was reached, with filters per class. Alive and Fallen characters are both listed, with a status badge.
+- **Leaderboard (⚠ Hosting: per lobby in v0.1, no global board; Offline-flagged characters are never listed, §11.4–11.5):** there are boards for all time and for each season. Ranking is by level, then total XP, then the earliest time the level was reached, with filters per class. Alive and Fallen characters are both listed, with a status badge.
 - **Reward:** hardcore earns no power bonus. Leaderboard ranks and milestones (level 20/50/100 reached in hardcore) give cosmetic titles and portal trails only.
 
 Why: keeping the hardcore economy fully separate is the only way its scarcity stays meaningful. If gear could flow in from standard, permadeath would cost nothing.
@@ -271,6 +322,8 @@ Full trading is allowed: items **and** currencies (Glint, Echo Dust, Riftstone) 
 6. **Timers:** the window is cancelled after 60 s with no offer change or button press, and it lasts at most 5 min.
 
 ### 8.2 Data integrity (server-authoritative)
+**⚠ Hosting:** all of §8 runs **per lobby** on the host's server and store. The rules are unchanged; "Economy Ops", "on-call" and `econ_admin` mean the lobby's host admin. Offline-flagged characters can't trade with non-Offline ones (§11.4). See §11.5.
+
 - **One item table:** every item, gear or cosmetic token, is exactly one row in `items`, keyed by a server-minted UUIDv7 `item_uid` (the primary key).
   - **Fields:** each row has `mode`, `owner_account`, `owner_character`, `location`, `slot`, `pending`, `trade_lock` and `state`.
   - **Locations:** `location` is one of `EQUIPPED`, `INVENTORY`, `STASH`, `GROUND` (owned by an instance, for a personal drop not yet picked up) or **[Later]** `MAIL`. Offered items stay where they are, with `trade_lock = trade_id`, so there is no escrow copy.
@@ -298,6 +351,8 @@ Full trading is allowed: items **and** currencies (Glint, Echo Dust, Riftstone) 
   - **Owners:** the kill switch trips automatically or by the on-call server engineer. Freezes are applied automatically and reviewed by **Economy Ops** (in v0.1, the on-call server engineer with the `econ_admin` role). Only `econ_admin` can clear a freeze or the pause, and every action is audited. The on-call engineer is paged within **5 min** of detection.
 
 ### 8.3 Trade log and retention
+**⚠ Hosting:** v0.1 position in §11.5: the host keeps its own log, no IP or device hashes are stored (`trade_log_net` is dropped), and the host software ships an erase command. Until Q5 (§12) is answered, the text below is the reference design for the host software.
+
 - **What's logged:** every trade window that reaches at least one Lock writes exactly one `trade_log` row: committed, rejected, failed, timed out or cancelled. The row has `trade_id`, UTC timestamps (open, lock, confirm, commit), both account and character IDs, mode, item_uids with tiers, currency amounts, NTV and the result. Windows cancelled before any Lock produce metrics only.
 - **Write access:** the game server's database role can only INSERT. Corrections are written as new compensating rows.
 - **Retention (D14):**
@@ -307,6 +362,8 @@ Full trading is allowed: items **and** currencies (Glint, Echo Dust, Riftstone) 
 - **GDPR erasure:** on an erasure request, the account's personal data (email and login identifiers) is deleted, and `retention_job` deletes that account's `trade_log_net` rows immediately. That targeted delete is audited. `trade_log` rows then reference only a pseudonymous account ID and expire on the 24-month schedule, kept under fraud-prevention legitimate interest. Privacy counsel must confirm this before launch.
 
 ### 8.4 Trade value and limits
+**⚠ Hosting:** account age and hours played are counted **per lobby** (time since the account first joined this lobby, hours in this lobby). Hosts can turn the gate and cap off (§11.2).
+
 **Normalized trade value (NTV):** the value one side gives away, in Glint at the giving character's **real** level `L` at commit time.
 
 ```
@@ -331,6 +388,8 @@ Test rows for the cap: a 15-day-old account with 10 h played is **capped**. A 10
 Gifts (one side empty) are allowed and count toward the giver's cap.
 
 ### 8.5 Abuse review (public summary)
+**⚠ Hosting:** flags go to the lobby's host admin and bans are per lobby. Thresholds inside the open-source host server are effectively public, so v0.1 relies on server authority, not secrecy (§11.5, §12 Q6).
+
 The server flags unusual activity into a human review queue. Examples include very one-sided trades, many new accounts sending to one account, many accounts on one device trading into one account, and implausible earn rates. The only automatic actions are:
 - hold the received assets of a flagged trade for up to 48 h (auto-released if nobody acts, with the flag kept on record);
 - pause one account's trading pending review;
@@ -344,6 +403,8 @@ Why: full currency trading means real-money traders will come. Server-side atomi
 
 ## 9. Seasonal cosmetic track [v0.1, Season 0]
 
+**⚠ Hosting:** season dates ship in the data pack (UTC). Sparks, the track and unlocks are per lobby, and per device for offline play; "account-wide" below means account-wide within one lobby (§11.5, §12 Q7).
+
 - **Season:** 10 weeks. The track has 30 tiers, and each tier costs 200 **Sparks** (6,000 in total).
 - **Sparks:** 1 per 10 kills (only kills with `E ≥ Le − 5` count), 20 per boss when eligible (§6.1), and +50 for the first dungeon clear each UTC day. That is about 250 Sparks per hour, so the full track takes about 24 h of play over 10 weeks. Sparks past tier 30, and unspent Sparks, are discarded at season end.
 - **30 tiers (all cosmetic, no Prism in v0.1):** 2 class skins, 6 dyes, 3 portal trails, 2 emotes, 1 title, 6 nameplate frames, 4 projectile tints and 6 Hearth banners.
@@ -355,7 +416,7 @@ Why: full currency trading means real-money traders will come. Server-side atomi
 
 ## 10. Decisions (2026-11-23)
 
-D1–D7 are Karyu's decisions. D8–D16 are design defaults accepted by Chief of Staff and can be tuned after playtests.
+D1–D7 and D17–D21 are Karyu's decisions. D8–D16 are design defaults accepted by Chief of Staff and can be tuned after playtests.
 
 | # | Decision |
 |---|---|
@@ -375,7 +436,127 @@ D1–D7 are Karyu's decisions. D8–D16 are design defaults accepted by Chief of
 | D14 | *Default, tunable after playtests.* Trade log rows are kept for 24 months. Salted IP and device hashes are kept for 90 days, and both are stated in the privacy policy (§8.3). |
 | D15 | *Default, tunable after playtests.* No paid premium season track. Paid cosmetics are sold only as separate store items (§9). |
 | D16 | *Default, tunable after playtests.* Enforcement in v0.1 uses automatic holds and pauses only. Bans are human-only. Revisit once flag precision has been measured (§8.5). |
+| D17 | No official servers for now: offline solo and player-hosted lobbies only (§11). |
+| D18 | The host sets the lobby's max players, default 50 (§11.2). |
+| D19 | The lobby browser shows the multipliers of open portals; with more than 5 open it shows at least the 2 lowest and 2 highest (§11.3). |
+| D20 | Enemy scaling is dynamic with the players in range and stays at the peak count reached during an encounter (§3.5). |
+| D21 | Offline characters aren't tracked but are flagged, and lobbies can disable them (§11.4). |
 
 **Tuning ownership:** Design decides tuning numbers (rates, caps, costs, timers, curves) and records them here. They are escalated to Karyu only when a change would alter the game's direction or touch money (monetization, pay-to-win boundaries, real-money flows).
 
-There are no open questions right now. New ones will go in a §11 when they come up.
+## 11. Hosting model: offline solo and player-hosted lobbies [v0.1]
+
+Karyu's decision (2026-11-23, D17–D21): **there are no official servers for now.** The game runs in two ways:
+- **Offline solo:** the client's `LocalSim` (`stack.md`), with no server and no network. `n_peak` is always 1.
+- **Player-hosted lobbies:** a player runs the authoritative game server (the same Go server, same rules, same `data/` pack) and others join it. A lobby is one Hearth, one Wilds and its portal instances.
+
+Everything in this doc that said "the server" now means **the lobby's host server**. Its authority is unchanged against clients (the host server still validates movement, hits, loot and XP, §8.2, `stack.md`), but nobody validates the host itself. Sections that assumed one trusted official server are marked **⚠ Hosting** below with their v0.1 position (§11.5). Direction questions are in §12.
+
+### 11.1 Trust model (v0.1 position)
+- **Host-authoritative per lobby.** Each lobby is its own world: its own accounts, characters, stash, wallets, ledger, trade log, leaderboards and season progress, stored by the host. Nothing is shared between lobbies in v0.1 except the game version and data pack.
+- **A lobby is exactly as trustworthy as its host.** The host can edit its own database. The game never claims that a lobby character's progress is "verified" beyond "recorded by this host". The lobby browser shows this plainly (§11.3).
+- **Offline characters** are the only characters that live on the player's device. They are marked with the Offline flag (§11.4).
+- **Version lock:** a client can join only a lobby with the same protocol version and `data/` pack hash. Hosts cannot change formulas or tuning in v0.1. **[Later]** Modded or custom-rule lobbies, shown with their own badge.
+
+### 11.2 Host lobby settings
+Set by the host when the lobby starts. Fields marked *live* can change while it runs; the rest need a restart.
+
+| Setting | Range | Default | Notes |
+|---|---|---|---|
+| Lobby name | 3–32 characters | "<host name>'s lobby" | Shown in the browser |
+| Password | optional, 0–64 characters | none | Shown as a lock icon; the password is never listed |
+| Mode | Standard or Hardcore | Standard | One mode per lobby. Hardcore lobbies are the separate realm of §7.3 |
+| **Max players** | **1–50** | **50** | Hard ceiling 50 in v0.1 (tuning; raise after a 50-client soak test). *Live:* lowering it never kicks anyone, it only blocks new joins. Also caps every portal instance (§6.1 rule 5) |
+| **Allow Offline characters** | on / off | **on** | *Live.* Turning it off blocks new joins by Offline-flagged characters; ones already inside stay until they leave |
+| **Allowed multiplier range** | `M_min` to `M_max` in hundredths, each in `[50, 150]`, step 5, `M_min ≤ 100 ≤ M_max` | 50 to 150 (the full v0.1 range) | *Live* for new portals. Opening outside it is rejected with `MULTIPLIER_NOT_ALLOWED`. 1.00 must stay in range, because found portals (§6) are always M = 1.00 |
+| Listing | public (in the browser) or invite-only (address/invite code) | public | Invite-only lobbies never appear in the browser |
+| Trading | on / off | on | *Live.* Off rejects new trade windows; open ones are cancelled |
+| Trading gate and daily cap (§8.4) | on / off | on | *Live.* The thresholds themselves are fixed by the data pack |
+
+The host also has a **host admin** role (§11.5) for kicks, bans, freezes, incident windows and reverts in that lobby.
+
+### 11.3 Lobby browser
+**Row fields (one row per lobby):**
+
+| Field | Content |
+|---|---|
+| Name and host | Lobby name, host's display name |
+| Mode | Standard / Hardcore badge |
+| Players | `current / max` (e.g. `12 / 50`). A full lobby shows "Full" and its join button is disabled |
+| Offline characters | "Offline OK" or "No Offline" badge |
+| Multiplier range | The host's allowed range, e.g. `×0.50–×1.50` |
+| **Open portals** | Count, plus up to 5 portal chips (rule below). Each chip shows `×M` and the content level `E`, e.g. `×1.25 · E 25`. Found portals have a small "found" mark |
+| Ping | Measured by the client, in ms |
+| Lock | Lock icon if a password is set |
+| Version | Hidden when it matches. A mismatched lobby is greyed out with "Different version" |
+| Trust note | Every row's tooltip: "Hosted by a player. Progress here is recorded by this host only." |
+
+**Open portal:** a portal instance in that lobby whose entrance is still accepting entries (within 120 s of creation and not at the player cap, §6.1 rule 8). It drops off the list the moment its entrance closes.
+
+**Chip selection rule.** Let `N` be the number of open portals, sorted by **M100 ascending**, then **E ascending**, then **creation time ascending**, then **portal id ascending** (this order is the tie-break everywhere):
+- `N ≤ 5`: show all `N` chips in that order.
+- `N > 5`: show **exactly 5 chips**: positions `0` and `1` (the 2 lowest), position `floor((N − 1) / 2)` (the median), and positions `N − 2` and `N − 1` (the 2 highest), left to right, followed by a "+`N − 5` more" chip. For `N ≥ 6` these five positions are always distinct. Clicking the row expands the full sorted list.
+- Equal multipliers are separate chips (two portals at ×1.25 can both show).
+- Example: open portals at ×0.50, ×0.80, ×1.00, ×1.00, ×1.20, ×1.35, ×1.50 (N = 7) → chips ×0.50, ×0.80, ×1.00 (position 3), ×1.35, ×1.50, "+2 more".
+
+**Sorting the list:** default is joinable first (compatible version, not full), then ping ascending, then players descending, then lobby name A–Z. The player can sort instead by players, ping, name, or highest open M (the last chip). **Filters:** mode, hide full, hide password-protected, "Offline OK only", and "has an open portal in my M range".
+
+**Refresh:** rows update at least every 5 s while the browser is open; portal chips update with them.
+
+**How lobbies get into the browser** is a direction question (§12 Q1). The v0.1 position is LAN discovery plus saved and invite-code lobbies, with the same row format whatever the source.
+
+### 11.4 Offline character flag
+- **What it is:** a permanent, per-character flag `offline = true`, set on every character created in offline solo. It is never cleared: once a character's state has been produced by `LocalSim`, no host can vouch for it. Lobby-created characters never carry it.
+- **Where it lives:** offline characters are saved on the player's device only. They aren't tracked: nothing about them is recorded anywhere but the device until they join a lobby.
+- **Joining a lobby:** only if the host allows Offline characters (§11.2). The client uploads the character snapshot; the host checks that it is well-formed for the data pack (schema, item ids, values reachable under this doc's formulas) and otherwise accepts it as-is. On leaving, the host hands the updated snapshot back to the device. The character stays flagged the whole time.
+- **Where it shows:** an "Offline" badge on the nameplate in the world, in the lobby's player list, in the trade window and on the character select screen. The lobby browser shows whether a lobby allows them (§11.3).
+- **What it can't do (v0.1 position, §12 Q3):**
+  - It never appears on any leaderboard, and its hardcore milestones give no cosmetics.
+  - It can't trade with non-Offline characters. Offline-to-Offline trades are allowed in lobbies with trading on.
+  - Hardcore permadeath still applies to it inside a lobby. Offline play can't be audited, so offline permadeath is on the honor system.
+  - It can't open a portal outside the host's multiplier range (same as anyone).
+- **What it can do:** everything else: play, join portals, earn loot and XP, and count toward `n_peak` like any player.
+
+### 11.5 Reconciling what assumed an official server
+Each row is the v0.1 position. Anything that changes direction or money is a question in §12.
+
+| Section | Assumed before | v0.1 position | Question |
+|---|---|---|---|
+| §8.2 Ledger, item table, anti-dupe | One central Postgres | Unchanged rules, **scoped per lobby** in the host's store. Dupe-safety holds against clients; a host can still edit its own data. Freezes, the kill switch and their clearing move from on-call/`econ_admin` to the **host admin** of that lobby | Q2 |
+| §8.3 Trade log, retention, GDPR | The project keeps logs and IP/device hashes and answers erasure requests | The host keeps its lobby's `trade_log` (24 months by default, host-configurable down to 0). **No IP or device hashes in v0.1** (`trade_log_net` is dropped). The host software ships an "erase player" command. The project itself collects no player data | Q5 |
+| §8.4 Account-age gate, new-account cap | Central account age and hours | **Per lobby:** "account age" means time since the account first joined *this lobby*, and hours played means hours *in this lobby*. Same thresholds (D11). Hosts can turn the gate off (§11.2) | Q4 |
+| §8.5 Abuse review, D16 | Central review queue and private ops doc | Flags go to the lobby's host admin. Bans are per lobby. Because the host server is open source and runs on players' machines, any detection threshold it contains is effectively public. v0.1 relies on server authority (§8.2, `stack.md`) rather than secret thresholds; the private ops doc covers only official-service operations if we ever run one | Q6 |
+| §7.3 Hardcore leaderboard | One global board | **Per-lobby boards only**, labelled with the lobby name. No global board in v0.1 | Q6 |
+| §7.3 Incident windows and reverts | On-call ops | Automatic windows still open on a worker crash or tick stall in the host server (unchanged triggers). Manual windows, extensions and reverts are done by the host admin, with the same audit rows | — |
+| §6.1 Party cap 8, n snapshots | 8-player instances, n fixed at room activation and arena seal | Instance cap = the lobby's max players. Scaling uses `n_peak` (§3.5) | — |
+| §9 Seasons and cosmetics | Central season service; account-wide unlocks | Season dates ship in the data pack (UTC), so every lobby and offline play share Season 0's dates. Sparks, the track and unlocks are **per lobby** (and per device for offline). Cosmetic tokens trade only inside their lobby | Q7 |
+| `stack.md` | Official Go server + Postgres via Docker Compose; email + password accounts | Accounts must work without a central auth server (§12 Q4). How hosts install and run the server (bundled binary, embedded store or Postgres, NAT/port forwarding, which platforms can host) is for the Server Engineer to settle in `stack.md` | Q1, Q4 |
+
+**Hosting platforms (tech note, not a decision):** a web-export client can't host, since browsers can't accept incoming connections. Hosting needs a desktop build or the standalone server binary; Android hosting is out of scope for v0.1.
+
+## 12. Open questions for Karyu (direction or money only)
+
+1. **How do players find lobbies?** A browser across the internet needs a listing service, which is a small official server (a cost, even if it stores no characters). **Recommendation:** v0.1 ships LAN discovery, direct address or invite code, and saved lobbies, all in the browser format of §11.3. Add a listing-only service later if you approve a small monthly hosting cost.
+2. **Where do lobby characters live, and can they move between lobbies?** **Recommendation:** per lobby. A lobby character is stored by that host and can't leave. Offline characters are the only portable ones, and they carry the Offline flag. Portable "verified" characters would need a central service.
+3. **What can Offline-flagged characters not do?** **Recommendation:** they play and earn normally in lobbies that allow them, but they never appear on leaderboards and can't trade with non-Offline characters (Offline-to-Offline is fine). That keeps unaudited items from washing into tracked economies.
+4. **Accounts without an official server.** `stack.md` decision 3 (email + password) assumed central auth. **Recommendation:** a device-held profile key pair that identifies the player to every host, with a per-lobby account created on first join. No email, no password, nothing for the project to store. Losing the device loses the key unless the player exports it.
+5. **Who is responsible for player data?** **Recommendation:** each host is responsible for its own lobby. The project collects nothing, the host software stores no IP or device hashes, and it ships an "erase player" command plus a short notice hosts can show. Get privacy counsel to confirm before any public release.
+6. **Is per-lobby, host-trusted competition acceptable for hardcore and anti-cheat?** Global leaderboards and hidden anti-cheat thresholds can't be trusted without an official server. **Recommendation:** yes for v0.1: per-lobby leaderboards, per-lobby bans, and anti-cheat that relies on server authority, not secrecy.
+7. **Cosmetics and money later.** Account-wide unlocks and any future paid cosmetics (Prism, the store) need a central service. **Recommendation:** v0.1 keeps unlocks per lobby and per device, with no paid cosmetics (as `stack.md` decision 6 already says). Revisit together with Q1 if an official service is approved.
+
+## Appendix A. Group scaling curve, n = 1…50
+
+`s100(n)` from §3.5 (divide by 100 for the multiplier). Normal: k 60, t 30. Boss: k 75, t 38.
+
+| n | normal | boss | n | normal | boss | n | normal | boss | n | normal | boss | n | normal | boss |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 100 | 100 | 11 | 610 | 739 | 21 | 910 | 1119 | 31 | 1210 | 1499 | 41 | 1510 | 1879 |
+| 2 | 160 | 175 | 12 | 640 | 777 | 22 | 940 | 1157 | 32 | 1240 | 1537 | 42 | 1540 | 1917 |
+| 3 | 220 | 250 | 13 | 670 | 815 | 23 | 970 | 1195 | 33 | 1270 | 1575 | 43 | 1570 | 1955 |
+| 4 | 280 | 325 | 14 | 700 | 853 | 24 | 1000 | 1233 | 34 | 1300 | 1613 | 44 | 1600 | 1993 |
+| 5 | 340 | 400 | 15 | 730 | 891 | 25 | 1030 | 1271 | 35 | 1330 | 1651 | 45 | 1630 | 2031 |
+| 6 | 400 | 475 | 16 | 760 | 929 | 26 | 1060 | 1309 | 36 | 1360 | 1689 | 46 | 1660 | 2069 |
+| 7 | 460 | 550 | 17 | 790 | 967 | 27 | 1090 | 1347 | 37 | 1390 | 1727 | 47 | 1690 | 2107 |
+| 8 | 520 | 625 | 18 | 820 | 1005 | 28 | 1120 | 1385 | 38 | 1420 | 1765 | 48 | 1720 | 2145 |
+| 9 | 550 | 663 | 19 | 850 | 1043 | 29 | 1150 | 1423 | 39 | 1450 | 1803 | 49 | 1750 | 2183 |
+| 10 | 580 | 701 | 20 | 880 | 1081 | 30 | 1180 | 1461 | 40 | 1480 | 1841 | 50 | 1780 | 2221 |
