@@ -807,6 +807,8 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# collides with an enemy, projectile or bag (or a sim-only player such
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
+	if not saved.is_empty() and not _stash_id_issued_here(saved):
+		saved = {}  # not an id this host's overworld sim issued: start fresh
 	if not saved.is_empty() and _find_player(int(saved["id"])) == null:
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
@@ -888,12 +890,21 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 
 
 func _stash_ability(key: String, saved: Dictionary) -> void:
+	saved["sim"] = sim.get_instance_id()  # the sim that issued saved["id"]
 	if _ability_stash.has(key):
 		_ability_stash_order.erase(key)
 	_ability_stash[key] = saved
 	_ability_stash_order.append(key)
 	while _ability_stash_order.size() > MAX_ABILITY_STASH:
 		_ability_stash.erase(_ability_stash_order.pop_front())
+
+
+## A rejoin re-adds an old player id only when the host itself recorded it
+## from this overworld sim (issued by its alloc_player_id or the built-in
+## player). The sim no longer has to tell returning ids from reused ones.
+func _stash_id_issued_here(saved: Dictionary) -> bool:
+	var id := int(saved.get("id", 0))
+	return id > 0 and id < INSTANCE_ID_BLOCK and int(saved.get("sim", 0)) == sim.get_instance_id()
 
 
 ## Applies p.restore_ability: a snapshot adjusted for the host ticks since
@@ -1484,11 +1495,15 @@ func _reset_instance(record: PortalRecord) -> bool:
 ## Moves `p` into `dest` as `dest_id` at (x, y), carrying class, level,
 ## inventory, HP and ability state (Focus and cooldown exactly as they are,
 ## never refreshed). Removal from the old sim takes effect at its next step.
-func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: float) -> void:
+func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: float,
+		issued_now: bool = false) -> bool:
 	var src: LocalSim = p.instance.sim
 	var from := src.get_player(p.sim_id)
 	if from == null or dest == p.instance:
-		return
+		return false
+	if not issued_now and not _dest_id_issued(p, dest, dest_id):
+		push_warning("LobbyHost: refusing to place player %d with an id the host did not issue" % p.id)
+		return false
 	var carry := PlayerCarry.from_sim(from, src.ability_state(p.sim_id))
 	_restore_entry_progression(p, carry)
 	if not dest.grants_persistent:
@@ -1508,6 +1523,7 @@ func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: 
 	p.y = y
 	p.interacts = []
 	p.interact_forward = 0
+	return true
 
 
 ## Instance lifetime follows vision §6.1: keep progress while empty,
@@ -1581,7 +1597,22 @@ func _spread_loadtest_players() -> void:
 		p.loadtest_spread = true
 		var dest: HostInstance = targets[p.id % targets.size()]
 		if dest != instances[0]:
-			_move_player(p, dest, dest.sim.alloc_player_id(), dest.arrival_x, dest.arrival_y)
+			_move_player(p, dest, dest.sim.alloc_player_id(), dest.arrival_x, dest.arrival_y, true)
+
+
+## An id is placed into `dest` only if the host's own records map it to `p`:
+## the overworld uses the player's lobby id; a dungeon uses the id its sim
+## issued for this player, held in that entrance's record.
+func _dest_id_issued(p: HostPlayer, dest: HostInstance, dest_id: int) -> bool:
+	for other in players:
+		if other != p and other.instance == dest and other.sim_id == dest_id:
+			return false
+	if dest.is_overworld():
+		return dest_id == p.id
+	for record: PortalRecord in _portal_records.values():
+		if record.instance == dest and int(record.sim_ids.get(p.id, 0)) == dest_id:
+			return true
+	return false
 
 
 ## Default on_interact: the sim applies the pickup in this tick's step.

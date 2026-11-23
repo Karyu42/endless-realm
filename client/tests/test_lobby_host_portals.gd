@@ -1590,3 +1590,45 @@ func test_practice_strips_copies_and_unlabelled_items() -> void:
 	assert_true(sp.inventory.add(blank))
 	_host.run_tick()
 	assert_eq(_inside(a).inventory.live_items().size(), before["items"], "only what was brought in")
+
+
+# --- host-issued player ids ---------------------------------------------------
+
+func test_host_refuses_to_place_an_id_it_never_issued() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var p := _host._find_player(a)
+	var real_id := p.sim_id
+	_exit_here(a, 5)
+	var forged := real_id + 3
+	assert_false(_host._move_player(p, inst, forged, inst.arrival_x, inst.arrival_y), "unissued dungeon id")
+	assert_true(_instance_of(a).is_overworld())
+	assert_null(inst.sim.get_player(forged))
+	assert_false(_host._move_player(p, _host.instances[0], a + 7, 1.0, 1.0), "unissued overworld id")
+	# The id the dungeon sim issued and the entrance record maps to this player still works.
+	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_enter(a, portal, 7)
+	assert_same(_instance_of(a), inst)
+	assert_eq(_host._find_player(a).sim_id, real_id)
+
+
+func test_rejoin_refuses_a_stash_id_the_host_never_issued() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	_host.run_tick()
+	var forged := 424242
+	_host._ability_stash["local:forged"] = {"id": forged, "cooldown": 0, "focus": 0.0, "left_tick": 0}
+	_host._ability_stash_order.append("local:forged")
+	var p := _host._add_player(null, "local:forged")
+	assert_ne(p.id, forged, "fresh id, not the claimed one")
+	assert_null(_host.sim.get_player(forged))
+	# A stash entry the host wrote from this sim is honoured.
+	var b := _host.add_local_player()
+	_host.run_tick()
+	_host._leave(_host._find_player(b), "local:real")
+	_host.run_tick()
+	var back := _host._add_player(null, "local:real")
+	assert_eq(back.id, b)
