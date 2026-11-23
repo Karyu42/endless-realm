@@ -15,6 +15,8 @@ extends SceneTree
 ##                          Not for real lobbies; prints a warning.
 ##   --emitters N           LOAD TEST: stand-in enemy emitters (default 0 = none;
 ##                          the load test uses 20, ~1000 live bullets)
+##   --loadtest-instances N LOAD TEST: spread remote players over the overworld and
+##                          N-1 dungeon instances (default 0 = overworld only)
 ##   --arena TILES          square arena edge in tiles (default 48)
 ##   --expect-clients N     record stats only while >= N players are connected
 ##   --run-seconds S        hard stop after S seconds (default 0 = no limit)
@@ -57,6 +59,8 @@ func _initialize() -> void:
 				_host.instance_seed = int(v); i += 1
 			"--emitters":
 				_host.emitter_count = int(v); i += 1
+			"--loadtest-instances":
+				_host.loadtest_instances = int(v); i += 1
 			"--arena":
 				_host.arena_size = float(v); i += 1
 			"--expect-clients":

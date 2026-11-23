@@ -313,6 +313,13 @@ func _player_id_allowed(id: int) -> bool:
 	return false
 
 
+## Raises the entity allocator to `floor` so a host running several sims
+## can give each a disjoint id range. Ids below it are never issued here.
+func set_id_floor(floor: int) -> void:
+	if floor > _next_id and floor < MAX_ENTITY_ID:
+		_next_id = floor
+
+
 ## A fresh player id from the shared entity allocator. Hosts use this so
 ## player ids can never collide with enemy, projectile or bag ids.
 func alloc_player_id() -> int:
