@@ -3,6 +3,8 @@ extends WorldSource
 ## In-process 20 Hz authority used for the offline slice. Sim lives in plain
 ## RefCounted classes, not Nodes.
 
+const READY_EPS: float = 1e-9
+
 var _config: SimConfig
 var _tick: int = 0
 var _player_id: int = 1
@@ -12,7 +14,9 @@ var _py: float = 0.0
 var _aim: float = 0.0
 var _applied_seq: int = 0
 var _intent: InputIntent = InputIntent.new()
-var _fire_cooldown: int = 0
+var _next_ready: float = 0.0
+var _hold_since_volley: bool = false
+var _fire_blocked: bool = false
 var _projectiles: Array[SimProjectile] = []
 var _has_bounds: bool = false
 var _bound_min_x: float = 0.0
@@ -48,12 +52,15 @@ func submit_input(intent: InputIntent) -> void:
 
 
 func step() -> void:
-	_tick += 1
+	# Time index of this tick (first processed tick is 0, now = tick × 0.05).
+	# tick() / snapshot.tick stay "completed ticks" (1 after the first step).
+	var sim_tick: int = _tick
 	_applied_seq = _intent.seq
 	_aim = _intent.aim
 	_apply_movement()
-	_apply_fire()
-	_cull_projectiles()
+	_apply_fire(sim_tick)
+	_cull_projectiles(sim_tick)
+	_tick += 1
 
 
 func tick() -> int:
@@ -76,8 +83,24 @@ func projectile_count() -> int:
 	return _projectiles.size()
 
 
-func fire_cooldown() -> int:
-	return _fire_cooldown
+func next_ready() -> float:
+	return _next_ready
+
+
+## Hook for a later ability lock (Kindle Pulse, PR #19). A blocked tick breaks
+## the continuous hold and does not reset next_ready, so there is no catch-up.
+func is_fire_blocked() -> bool:
+	return _fire_blocked
+
+
+func set_fire_blocked(blocked: bool) -> void:
+	_fire_blocked = blocked
+
+
+## Tempo × (1 + tempoBonus) is read when a volley is scheduled, so a mid-hold
+## rate change keeps the pending next_ready and applies the new cd after it.
+func _current_fire_cooldown_s() -> float:
+	return _config.fire_cooldown_s()
 
 
 func _apply_movement() -> void:
@@ -99,24 +122,35 @@ func _apply_movement() -> void:
 		_py = clampf(_py, _bound_min_y + r, _bound_max_y - r)
 
 
-func _apply_fire() -> void:
-	# First shot on the tick fire is pressed if the weapon is off cooldown.
-	# Cooldown is ceil(TICK_HZ / (Tempo * (1 + bonus))) ticks, counted from
-	# that shot (10 ticks at 2/s and 20 Hz). It keeps running after release,
-	# so tapping cannot beat the fire rate. Applies to every weapon.
-	if _fire_cooldown > 0:
-		_fire_cooldown -= 1
+func _apply_fire(sim_tick: int) -> void:
+	# content-v0.1.md §1: next_ready is float64 seconds (tick × 0.05), starts at 0.
+	# cd = 1 / (Tempo × (1 + tempoBonus)). One volley when fire_held and
+	# now ≥ next_ready − 1e-9. A continuous hold schedules the next ready
+	# time from the previous ready time (not the landing tick) so a fractional
+	# cd stays exact over the long run. A press after a release sets
+	# next_ready = now + cd. Release never resets next_ready.
+	var now: float = float(sim_tick) * SimConstants.TICK_DT
+	if is_fire_blocked():
+		_hold_since_volley = false
+		return
 	if not _intent.fire_held:
+		_hold_since_volley = false
 		return
-	var interval: int = _config.fire_interval_ticks()
-	if interval <= 0:
+	# Rate is read per scheduled shot, not cached for the whole hold.
+	var cd: float = _current_fire_cooldown_s()
+	if cd <= 0.0:
 		return
-	if _fire_cooldown == 0:
-		_spawn_projectile()
-		_fire_cooldown = interval
+	if now >= _next_ready - READY_EPS:
+		var continuous: bool = _hold_since_volley
+		_spawn_projectile(sim_tick)
+		if continuous:
+			_next_ready += cd
+		else:
+			_next_ready = now + cd
+		_hold_since_volley = true
 
 
-func _spawn_projectile() -> void:
+func _spawn_projectile(sim_tick: int) -> void:
 	var dir := SimVec2.from_angle(_aim)
 	# If aim is somehow NaN, skip rather than inject a bad shot.
 	if is_nan(dir.x) or is_nan(dir.y):
@@ -128,7 +162,7 @@ func _spawn_projectile() -> void:
 	var shot := SimProjectile.new()
 	shot.id = _next_id
 	_next_id += 1
-	shot.spawn_tick = _tick
+	shot.spawn_tick = sim_tick
 	shot.origin_x = _px
 	shot.origin_y = _py
 	shot.dir_x = dir.x
@@ -140,9 +174,9 @@ func _spawn_projectile() -> void:
 	_projectiles.append(shot)
 
 
-func _cull_projectiles() -> void:
+func _cull_projectiles(sim_tick: int) -> void:
 	var live: Array[SimProjectile] = []
 	for shot in _projectiles:
-		if shot.is_alive_at(_tick):
+		if shot.is_alive_at(sim_tick):
 			live.append(shot)
 	_projectiles = live

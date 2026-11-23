@@ -1,7 +1,7 @@
 class_name SimConfig
 extends Resource
 ## Tunables for the offline slice. Placeholder values until class data lands in data/.
-## Stride / Tempo numbers follow the unmerged design notes (vision §2, content-v0.1).
+## Stride / Tempo numbers follow vision §2 and docs/design/content-v0.1.md §1.
 
 @export var move_speed_tiles_per_s: float = 5.0
 @export var fire_rate_shots_per_s: float = 2.0
@@ -23,10 +23,10 @@ func projectile_lifetime_ticks() -> int:
 	return int(ceil(projectile_range_tiles / speed * float(SimConstants.TICK_HZ)))
 
 
-## Ticks between shots: ceil(TICK_HZ / rate). 0 means the weapon cannot fire
-## (rate is zero or negative). At 2 shots/s and 20 Hz this is exactly 10.
-func fire_interval_ticks() -> int:
+## Cooldown in seconds: 1 / (Tempo × (1 + tempoBonus)), per content-v0.1 §1.
+## 0 means the weapon cannot fire (rate is zero or negative).
+func fire_cooldown_s() -> float:
 	var rate: float = fire_rate_shots_per_s * (1.0 + tempo_bonus)
 	if rate <= SimConstants.MOVE_EPS:
-		return 0
-	return int(ceil(float(SimConstants.TICK_HZ) / rate))
+		return 0.0
+	return 1.0 / rate

@@ -54,7 +54,7 @@ godot --headless --path client --import
 godot --headless --path client -s addons/gut/gut_cmdln.gd -gdir=res://tests -gexit
 ```
 
-The tests cover 8-dir movement and diagonal normalization, the per-weapon
-fire cooldown (first shot on the press tick, a steady `ceil(20 / rate)` cadence,
-no tap-burst), projectile lifetime and range, tick stepping, and the
-`NetClient` stub.
+The tests cover 8-dir movement and diagonal normalization, fire-on-press
+timing from `docs/design/content-v0.1.md` §1 (float64 `next_ready` in seconds,
+Driftrunner golden ticks 0/6/12/18/23/29, Thornguard 0/10/20, no tap-burst),
+projectile lifetime and range, tick stepping, and the `NetClient` stub.
