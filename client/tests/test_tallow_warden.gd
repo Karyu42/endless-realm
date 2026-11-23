@@ -48,6 +48,13 @@ func test_encounter_hp_matches_content_examples() -> void:
 	assert_eq(s.hp_threshold(5500, 0.33), 1815)
 	assert_eq(s.riftstone_yield(100), 4)
 	assert_eq(s.riftstone_yield(150), 9)
+	# Mid-fight HP rise keeps the current fraction (vision §3.5).
+	var max8: int = s.encounter_hp(5500, 10, 8, "boss")
+	var max9: int = s.encounter_hp(5500, 10, 9, "boss")
+	assert_eq(max8, 49844)
+	var cur: int = s.keep_hp_fraction((max8 * 60 + 50) / 100, max8, max8)
+	assert_eq(cur, 29906, "60% of 49844")
+	assert_eq(s.keep_hp_fraction(29906, max8, max9), 31724, "n 8→9 at E=10 keeps the fraction")
 
 
 func test_getters_are_read_only_and_start_closed() -> void:
@@ -151,7 +158,9 @@ func test_death_opens_exit_grants_loot_and_clears_bullets() -> void:
 	var pid := _pid(sim)
 	var w := _warden(sim)
 	# Fire a few ticks so bullets exist, then kill the Warden.
-	for _i in range(16):
+	# Non-idle input is required for boss-loot eligibility (vision §6.1 rule 7).
+	for i in range(16):
+		_hold_fire(sim, pid, i + 1)
 		sim.step()
 	assert_gt(sim.snapshot().pattern_bullets.size(), 0)
 	sim.hurt_enemy(w.id, w.hp, pid)
@@ -217,3 +226,275 @@ func test_p2_and_p3_thresholds() -> void:
 			gaps += 1
 	assert_gt(spirals, 0, "P3 twin spirals should be running")
 	assert_gt(gaps, 0, "P3 gap ring fires on phase enter (tick 0 of P3)")
+
+
+func _hold_fire(sim: LocalSim, pid: int, seq: int) -> void:
+	var p := sim.get_player(pid)
+	var aim: float = p.aim if p != null else 0.0
+	sim.apply_input(pid, InputIntent.from_raw(seq, 0.0, 0.0, aim, true))
+
+
+func _add_at(sim: LocalSim, x: float, y: float) -> int:
+	var id: int = sim.alloc_player_id()
+	sim.place_player(id, x, y)
+	return id
+
+
+func test_antechamber_players_do_not_scale_the_warden() -> void:
+	var sim := _vault()
+	var w := _warden(sim)
+	assert_not_null(w)
+	assert_eq(sim.boss_n_peak(), 1)
+	assert_eq(w.max_hp, 5500)
+	# A second living player in the Antechamber is not in the arena.
+	var pid2: int = _add_at(sim, 6.0, 6.0)
+	assert_gt(pid2, 0)
+	sim.step()
+	var after := _warden(sim)
+	assert_eq(sim.boss_n_peak(), 1, "n_peak counts living characters in the arena only")
+	assert_eq(after.max_hp, 5500)
+	assert_eq(after.hp, 5500)
+	# Entering the arena raises n_peak; it never decreases if they leave.
+	var p2 := sim.get_player(pid2)
+	p2.x = 36.0
+	p2.y = 6.0
+	p2.prev_x = p2.x
+	p2.prev_y = p2.y
+	sim.step()
+	var scaled := _warden(sim)
+	var expect: int = _catalog().scaling.encounter_hp(5500, 1, 2, "boss")
+	assert_eq(sim.boss_n_peak(), 2)
+	assert_eq(scaled.max_hp, expect)
+	p2.x = 6.0
+	p2.y = 6.0
+	sim.step()
+	assert_eq(sim.boss_n_peak(), 2, "n_peak never decreases during the encounter")
+	assert_eq(_warden(sim).max_hp, expect)
+
+
+func test_far_wilds_players_do_not_scale_a_burrmite() -> void:
+	var catalog := _catalog()
+	var sim := LocalSim.new(SimConfig.new(), 16.0, 16.0, catalog)
+	sim.set_lobby_settings(LobbySettings.new())
+	sim.set_practice_yard(true)
+	var pid := _pid(sim)
+	sim.place_player(pid, 16.0, 16.0)
+	var eid: int = sim.spawn_enemy("burrmite", 16.0, 16.5, 1)
+	var cl: int = sim.get_enemy(eid).content_level
+	var solo: int = catalog.scaling.encounter_hp(60, cl, 1, "normal")
+	assert_eq(sim.get_enemy(eid).max_hp(), solo)
+	# Four living players well outside the 12-tile pack range.
+	for i in range(4):
+		_add_at(sim, 40.0 + float(i), 40.0)
+	# Aggro the burrmite on the nearby player.
+	for _i in range(4):
+		sim.step()
+	assert_eq(sim.get_enemy(eid).n_peak, 1)
+	assert_eq(sim.get_enemy(eid).max_hp(), solo)
+	# A second player entering range raises this pack's n_peak only.
+	var pid2: int = _add_at(sim, 16.5, 16.0)
+	for _j in range(4):
+		sim.step()
+	var expect: int = catalog.scaling.encounter_hp(60, cl, 2, "normal")
+	assert_eq(sim.get_enemy(eid).n_peak, 2)
+	assert_eq(sim.get_enemy(eid).max_hp(), expect)
+	assert_gt(pid2, 0)
+
+
+func test_boss_loot_follows_rule_7() -> void:
+	var sim := _vault()
+	var pid := _pid(sim)
+	var w := _warden(sim)
+	# A nearby fighter who damages the Warden but stays idle is not eligible.
+	for _i in range(8):
+		sim.step()
+	sim.hurt_enemy(w.id, 200, pid)
+	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid)
+	sim.step()
+	assert_true(sim.boss_defeated())
+	assert_eq(sim.snapshot().pending_glint, 0, "damage without recent non-idle input is not enough")
+	assert_eq(sim.snapshot().pending_riftstone, 0)
+	assert_eq(sim.snapshot().ground_drops.size(), 0)
+
+	# A second run: contribution plus recent non-idle input qualifies.
+	var sim2 := _vault()
+	var pid_a: int = _pid(sim2)
+	var w2 := _warden(sim2)
+	# A player who only arrives in loot range at the kill, with no contribution,
+	# is not eligible under vision §6.1 rule 7.
+	var pid_b: int = _add_at(sim2, 6.0, 6.0)
+	# Open the fight with a real hit so fight ticks accrue before B arrives.
+	_hold_fire(sim2, pid_a, 1)
+	sim2.step()
+	sim2.hurt_enemy(w2.id, 200, pid_a)
+	for i in range(16):
+		_hold_fire(sim2, pid_a, i + 2)
+		sim2.step()
+	# Move B next to the Warden only at the end, and give them input too.
+	var pb := sim2.get_player(pid_b)
+	pb.x = 42.0
+	pb.y = 6.5
+	_hold_fire(sim2, pid_b, 30)
+	sim2.step()
+	_hold_fire(sim2, pid_a, 31)
+	# Use current HP: B's arena entry can raise n_peak mid-fight.
+	sim2.hurt_enemy(w2.id, sim2.get_enemy(w2.id).hp, pid_a)
+	sim2.step()
+	assert_eq(sim2.get_player(pid_a).pending_glint, 30)
+	assert_eq(sim2.get_player(pid_a).pending_riftstone, 4)
+	assert_eq(sim2.get_player(pid_b).pending_glint, 0, "loot-range presence alone does not qualify")
+	assert_eq(sim2.get_player(pid_b).pending_riftstone, 0)
+	assert_eq(sim2.snapshot().ground_drops.size(), 2)
+
+
+func test_boss_seeds_use_their_own_domains() -> void:
+	var sim := _vault()
+	var w := _warden(sim)
+	var tick: int = 20
+	var aim: int = sim.boss_aim_seed(w.id, tick)
+	var pool: int = sim.boss_pool_seed(w.id, tick)
+	var volley: int = sim.pattern_volley_seed(w.id, tick, 0)
+	var collide_aim: int = sim.pattern_volley_seed(w.id, tick, 7919)
+	var collide_pool: int = sim.pattern_volley_seed(w.id, tick, 4243)
+	assert_ne(aim, collide_aim, "aim seed is not mix(world, id, tick+7919)")
+	assert_ne(pool, collide_pool, "pool seed is not mix(world, id, tick+4243)")
+	assert_ne(aim, pool)
+	assert_ne(aim, volley)
+	assert_ne(pool, volley)
+
+
+func test_one_hit_crossing_both_thresholds_latches_t1_then_t2() -> void:
+	var sim := _vault()
+	var pid := _pid(sim)
+	var w := _warden(sim)
+	# Drop below the 33% mark in one P1 hit: Melt (t1) starts, not P2.
+	sim.hurt_enemy(w.id, w.hp - 1815, pid)
+	assert_eq(sim.get_enemy(w.id).hp, 1815)
+	assert_eq(sim.get_enemy(w.id).phase_id(), "t1")
+	assert_true(sim.get_enemy(w.id).invulnerable)
+	# After Melt, P2 is entered and immediately latches Congeal (t2).
+	for _i in range(40):
+		sim.step()
+	assert_eq(sim.get_enemy(w.id).phase_id(), "t2")
+	assert_true(sim.get_enemy(w.id).invulnerable)
+	# Congeal (t2) holds for 60 ticks, then P3.
+	for _j in range(60):
+		sim.step()
+	assert_eq(sim.get_enemy(w.id).phase_id(), "p3")
+	assert_false(sim.get_enemy(w.id).invulnerable)
+
+
+func test_boss_rewards_are_not_granted_twice() -> void:
+	var sim := _vault()
+	var pid := _pid(sim)
+	var w := _warden(sim)
+	for i in range(4):
+		_hold_fire(sim, pid, i + 1)
+		sim.step()
+	sim.hurt_enemy(w.id, w.hp, pid)
+	assert_eq(sim.snapshot().pending_glint, 30)
+	assert_eq(sim.snapshot().pending_riftstone, 4)
+	assert_eq(sim.snapshot().ground_drops.size(), 2)
+	var xp: int = sim.snapshot().xp_tenths
+	# A second grant attempt (re-kill hook / extra step) must not add rewards.
+	# Don't defeat_all here: Wick Kennels also has a Driftcap whose trash loot
+	# would change the pending totals.
+	sim.hurt_enemy(w.id, 1, pid)
+	sim.step()
+	assert_eq(sim.snapshot().pending_glint, 30)
+	assert_eq(sim.snapshot().pending_riftstone, 4)
+	assert_eq(sim.snapshot().ground_drops.size(), 2)
+	assert_eq(sim.snapshot().xp_tenths, xp)
+
+
+func test_player_carry_round_trips_pending_riftstone() -> void:
+	var catalog := _catalog()
+	var src := LocalSim.new(SimConfig.new(), 16.0, 16.0, catalog)
+	src.set_lobby_settings(LobbySettings.new())
+	var pid := _pid(src)
+	var p := src.get_player(pid)
+	p.pending_riftstone = 7
+	p.pending_glint = 11
+	p.xp_tenths = 40
+	var carry := PlayerCarry.from_sim(p, src.ability_state(pid))
+	assert_eq(carry.pending_riftstone, 7)
+	var dst := LocalSim.new(SimConfig.new(), 6.0, 6.0, catalog)
+	dst.set_lobby_settings(LobbySettings.new())
+	if dst.get_player(pid) == null:
+		assert_true(dst.add_player(pid, {"x": 6.0, "y": 6.0}))
+		dst.step()
+	dst.apply_carried_player(carry, 6.0, 6.0)
+	var out := dst.get_player(pid)
+	assert_eq(out.pending_riftstone, 7)
+	assert_eq(out.pending_glint, 11)
+	assert_eq(out.xp_tenths, 40)
+	var carry2 := PlayerCarry.from_sim(out, dst.ability_state(pid))
+	assert_eq(carry2.pending_riftstone, 7)
+
+
+func test_acolytes_die_with_the_warden_no_rewards_and_death_flash() -> void:
+	var sim := _vault()
+	var pid := _pid(sim)
+	var w := _warden(sim)
+	sim.hurt_enemy(w.id, w.hp - 3630, pid)
+	for _i in range(40):
+		sim.step()
+	assert_eq(sim.get_enemy(w.id).phase_id(), "p2")
+	var acolyte_ids: Array[int] = []
+	for e in sim.snapshot().enemies:
+		if e.def_id == "waxen_acolyte":
+			acolyte_ids.append(e.id)
+	assert_eq(acolyte_ids.size(), 4)
+	for i in range(4):
+		_hold_fire(sim, pid, i + 1)
+		sim.step()
+	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid)
+	var living := 0
+	var flashing := 0
+	for e in sim.snapshot().enemies:
+		if e.def_id != "waxen_acolyte":
+			continue
+		if e.alive:
+			living += 1
+		else:
+			flashing += 1
+			assert_gt(e.flash_ticks, 0, "adds play the normal death flash, they do not silently despawn")
+	assert_eq(living, 0, "every living Waxen Acolyte dies on the Warden's death tick")
+	assert_eq(flashing, 4)
+	# Boss rewards only: no acolyte loot or XP (drops_loot is off).
+	assert_eq(sim.snapshot().pending_glint, 30)
+	assert_eq(sim.snapshot().pending_riftstone, 4)
+	assert_eq(sim.snapshot().ground_drops.size(), 2)
+
+
+func test_acolyte_third_cycle_fires_aim_and_sidesteps() -> void:
+	var catalog := _catalog()
+	var sim := LocalSim.new(SimConfig.new(), 8.0, 8.0, catalog)
+	sim.set_lobby_settings(LobbySettings.new())
+	sim.set_practice_yard(true)
+	var pid := _pid(sim)
+	sim.place_player(pid, 8.0, 8.0)
+	var eid: int = sim.spawn_enemy("waxen_acolyte", 8.0, 10.0, 1)
+	var saw_cross := 0
+	var saw_aim := 0
+	var saw_sidestep := false
+	for _i in range(200):
+		sim.step()
+		var pids := sim.live_pattern_ids()
+		if "acolyte_cross" in pids:
+			saw_cross += 1
+		if "acolyte_aim" in pids:
+			saw_aim += 1
+		for b in sim.snapshot().pattern_bullets:
+			if b.pattern_id == "acolyte_aim":
+				saw_aim += 1
+		var st: EnemyState = sim.get_enemy(eid)
+		if st != null and st.sidestep_left > 0:
+			saw_sidestep = true
+	var st_end: EnemyState = sim.get_enemy(eid)
+	assert_not_null(st_end)
+	assert_gte(st_end.fire_cycle, 3, "three fire cycles should have completed")
+	assert_gt(saw_cross, 0, "the first cycles fire acolyte_cross")
+	assert_gt(saw_aim, 0, "every third cycle fires acolyte_aim")
+	assert_true(saw_sidestep, "the Acolyte starts a sidestep on its 60-tick timer")
+

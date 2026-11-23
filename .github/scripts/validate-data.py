@@ -82,7 +82,7 @@ if enemies_path.exists() and patterns_path.exists():
             fire = obj.get("fire")
             if isinstance(fire, str) and fire:
                 acc.append((f"{path}.fire" if path else "fire", fire))
-            for key in ("pattern", "pattern_id"):
+            for key in ("pattern", "pattern_id", "alt_pattern"):
                 val = obj.get(key)
                 if isinstance(val, str) and val:
                     acc.append((f"{path}.{key}" if path else key, val))
@@ -90,7 +90,7 @@ if enemies_path.exists() and patterns_path.exists():
             if isinstance(child, str) and child:
                 acc.append((f"{path}.child" if path else "child", child))
             for k, v in obj.items():
-                if k in ("pattern", "pattern_id", "fire", "child") and isinstance(v, str):
+                if k in ("pattern", "pattern_id", "alt_pattern", "fire", "child") and isinstance(v, str):
                     continue
                 pattern_refs(v, acc, f"{path}.{k}" if path else k)
         elif isinstance(obj, list):

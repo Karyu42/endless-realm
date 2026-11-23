@@ -269,3 +269,17 @@ func hp_threshold(max_hp: int, fraction: float) -> int:
 ## Riftstone grant: (yield_coef × M100² + 5000) div 10000, i.e. round(4 × M²).
 func riftstone_yield(m100: int) -> int:
 	return (riftstone_yield_coef * m100 * m100 + 5000) / 10000
+
+
+## Mid-encounter HP: curHP' = (curHP × maxHP' + maxHP div 2) div maxHP (vision §3.5).
+func keep_hp_fraction(cur_hp: int, old_max: int, new_max: int) -> int:
+	if old_max <= 0:
+		return new_max
+	if cur_hp <= 0:
+		return 0
+	var hp: int = (cur_hp * new_max + int(old_max / 2)) / old_max
+	if hp < 1:
+		hp = 1
+	if hp > new_max:
+		hp = new_max
+	return hp

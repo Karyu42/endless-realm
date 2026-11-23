@@ -27,6 +27,11 @@ var strafe_switch_ticks: int = 40
 var ai_type: String = ""
 var pattern_id: String = ""
 var fire_interval_ticks: int = 0
+var alt_pattern_id: String = ""
+var alt_every_cycles: int = 0
+var sidestep_tiles: float = 0.0
+var sidestep_interval_ticks: int = 0
+var sidestep_duration_ticks: int = 10
 var party_scaling: String = "normal"
 var target_rule: String = ""
 var phases: Array[Dictionary] = []
@@ -64,6 +69,12 @@ static func from_json(d: Dictionary) -> EnemyDef:
 		e.pattern_id = String(ai.get("pattern", ""))
 		if e._ai_fields.has("fire_interval_ticks"):
 			e.fire_interval_ticks = int(ai.get("fire_interval_ticks", 0))
+		e.alt_pattern_id = String(ai.get("alt_pattern", ""))
+		e.alt_every_cycles = int(ai.get("alt_every_cycles", 0))
+		e.sidestep_tiles = float(ai.get("sidestep_tiles", 0.0))
+		e.sidestep_interval_ticks = int(ai.get("sidestep_interval_ticks", 0))
+		if e._ai_fields.has("sidestep_duration_ticks"):
+			e.sidestep_duration_ticks = int(ai.get("sidestep_duration_ticks", 10))
 	e.party_scaling = String(d.get("party_scaling", "normal"))
 	e.target_rule = String(d.get("target_rule", ""))
 	var raw_phases: Variant = d.get("phases", [])
@@ -88,6 +99,9 @@ func pattern_ids() -> PackedStringArray:
 	if pattern_id != "" and not seen.has(pattern_id):
 		out.append(pattern_id)
 		seen[pattern_id] = true
+	if alt_pattern_id != "" and not seen.has(alt_pattern_id):
+		out.append(alt_pattern_id)
+		seen[alt_pattern_id] = true
 	for phase in phases:
 		var loops: Variant = phase.get("loops", [])
 		if loops is Array:

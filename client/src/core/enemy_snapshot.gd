@@ -12,6 +12,7 @@ var max_hp: int = 0
 var radius: float = 0.35
 var content_level: int = 1
 var flash_ticks: int = 0
+var alive: bool = true
 var phase_id: String = ""
 var invulnerable: bool = false
 

@@ -37,6 +37,12 @@ var last_aim_target_id: int = 0
 var same_target_streak: int = 0
 var drops_loot: bool = true
 var summoned: bool = false
+var room_id: String = ""
+var fire_cycle: int = 0
+var sidestep_cooldown: int = 0
+var sidestep_left: int = 0
+var sidestep_dx: float = 0.0
+var sidestep_dy: float = 0.0
 var loop_once_fired: Dictionary = {}
 
 

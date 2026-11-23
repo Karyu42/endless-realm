@@ -57,7 +57,8 @@
         "ward": 8,
         "contact": 12,
         "damage": {
-          "cross": 18
+          "cross": 18,
+          "aim": 18
         }
       },
       "move_speed": 2.5,
@@ -69,7 +70,11 @@
       "ai": {
         "type": "chase_hover",
         "pattern": "acolyte_cross",
-        "fire_interval_ticks": 48
+        "alt_pattern": "acolyte_aim",
+        "alt_every_cycles": 3,
+        "fire_interval_ticks": 48,
+        "sidestep_tiles": 2,
+        "sidestep_interval_ticks": 60
       }
     },
     {

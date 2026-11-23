@@ -21,6 +21,16 @@ const PLAYER_RNG_STREAM: int = 0xA51C11E57EA1
 ## Domain for a dungeon instance seed, so derived_instance_seed is not a bare
 ## _mix_seed(world, id, tick) like enemy volley seeds. "DNGN".
 const DUNGEON_INSTANCE_SEED_DOMAIN: int = 0x444E474E
+## Boss aim-target PCG32 domain, distinct from pattern volley seeds. "BAIM".
+const BOSS_AIM_SEED_DOMAIN: int = 0x4241494D
+## Boss wax-pool placement PCG32 domain, distinct from pattern volley seeds. "BPOL".
+const BOSS_POOL_SEED_DOMAIN: int = 0x42504F4C
+## vision §3.5 "in range" for Wilds packs and dungeon-room doorway shots, tiles.
+const N_PEAK_RANGE_TILES: float = 12.0
+## vision §6.1 rule 7: proximity and non-idle window.
+const BOSS_PROXIMITY_TILES: float = 12.0
+const NON_IDLE_WINDOW_TICKS: int = 600
+const NON_IDLE_AIM_RAD: float = 0.017453292519943295  # 1 degree
 
 var _config: SimConfig
 var _catalog: DataCatalog
@@ -74,7 +84,15 @@ var _opener_lp: int = 0
 var _room_activated: Dictionary = {} # room id -> true
 var _exit_spawned: bool = false
 var _boss_defeated: bool = false
-var _n_peak: int = 0
+## Boss-arena n_peak (vision §3.5). 0 means the encounter has not started.
+var _boss_n_peak: int = 0
+## Per-room n_peak for non-arena dungeon rooms, keyed by room id.
+var _room_n_peak: Dictionary = {}
+var _boss_fight_ticks: int = 0
+var _boss_fight_sampled_tick: int = -1
+var _boss_damage_by: Dictionary = {} # player_id -> damage dealt during the fight
+var _boss_near_ticks: Dictionary = {} # player_id -> ticks within 12 tiles
+var _boss_ally_heals: Dictionary = {} # player_id -> ally-affecting casts during the fight
 var _hazards: Array[HazardState] = []
 var _pattern_jobs: Array[PatternJob] = []
 var _lobby_settings: LobbySettings = null
@@ -349,7 +367,7 @@ func spawn_enemy_from_def(def: EnemyDef, x: float, y: float, content_level: int 
 	e.home_x = x
 	e.home_y = y
 	e.content_level = _scaling.practice_yard_content_level if _practice_yard else maxi(1, content_level)
-	e.n_peak = maxi(_n_peak, 1)
+	e.n_peak = 1
 	var kind: String = def.party_scaling if def.party_scaling != "" else "normal"
 	e.scaled_max_hp = _scaling.encounter_hp(def.base_hp, e.content_level, e.n_peak, kind)
 	e.hp = e.scaled_max_hp
@@ -371,7 +389,6 @@ func step() -> void:
 	# Time index of this tick (first processed tick is 0, now = tick × 0.05).
 	# tick() / snapshot.tick stay "completed ticks" (1 after the first step).
 	var sim_tick: int = _tick
-	_refresh_n_peak()
 	# Players are processed in ascending id order, never apply_input order.
 	# Ability is applied after movement (Slipstep starts from the post-move
 	# position) and before fire (Kindle Pulse's cast lock).
@@ -384,18 +401,24 @@ func step() -> void:
 		_apply_movement(p)
 		_apply_ability(id, p.intent, sim_tick)
 		_apply_fire(p, sim_tick)
+		_note_non_idle(p, sim_tick)
 	for e in _enemies:
 		if e.flash_ticks > 0:
 			e.flash_ticks -= 1
+	# vision §3.5 tick order: movement, then sample n_peak and rescale, then attacks.
+	_refresh_encounter_scaling()
 	_step_enemies(sim_tick)
+	_refresh_encounter_scaling()
 	_tick_pattern_jobs(sim_tick)
 	_tick_hazards(sim_tick)
 	_apply_combat(sim_tick)
+	_sample_boss_fight_tick(sim_tick)
 	_tick_ability_clocks()
 	# Focus regen is at the end of the tick, after any spend.
 	_regen_focus()
 	_expire_ground_drops(sim_tick)
 	_activate_rooms()
+	_refresh_encounter_scaling()
 	for id in _sorted_ids:
 		var p: SimPlayerState = _players[id]
 		_apply_interact(p, sim_tick)
@@ -453,11 +476,12 @@ func world_view(player_id: int) -> WorldSnapshot:
 	snap.pattern_bullets = _pattern_bullets.duplicate()
 	var enemy_snaps: Array[EnemySnapshot] = []
 	for e in _enemies:
-		if not e.alive:
+		if not e.alive and e.flash_ticks <= 0:
 			continue
 		var es := EnemySnapshot.new()
 		es.id = e.id
 		es.def_id = e.def.id if e.def != null else ""
+		es.alive = e.alive
 		es.x = e.x
 		es.y = e.y
 		es.aim = e.aim
@@ -514,7 +538,11 @@ func pattern_bullet_count() -> int:
 
 
 func enemy_count() -> int:
-	return _enemies.size()
+	var n: int = 0
+	for e in _enemies:
+		if e.alive:
+			n += 1
+	return n
 
 
 func next_ready() -> float:
@@ -725,6 +753,7 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 			# Leashed, or nobody alive in deaggro range: idle and return toward spawn.
 			e.aggro = false
 			e.target_id = 0
+			_reset_wilds_encounter(e)
 	elif nearest_id != 0 and not leashed:
 		e.aggro = true
 	# content-v0.1 §2.3: first attack comes fire_interval after aggro (and re-aggro).
@@ -733,6 +762,8 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 		e.fire_cooldown = e.def.fire_interval_ticks
 		e.target_id = nearest_id
 		e.target_repick_tick = sim_tick + TARGET_REPICK_TICKS
+		if e.def.sidestep_interval_ticks > 0:
+			e.sidestep_cooldown = e.def.sidestep_interval_ticks
 	elif e.aggro:
 		if (not _target_is_valid(e)) or sim_tick >= e.target_repick_tick:
 			e.target_id = nearest_id if nearest_id != 0 else e.target_id
@@ -796,6 +827,7 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 	var step: float = speed * SimConstants.TICK_DT
 	e.x += mx * step
 	e.y += my * step
+	_tick_sidestep(e, sim_tick)
 	if _has_bounds:
 		var r: float = e.radius()
 		e.x = clampf(e.x, _bound_min_x + r, _bound_max_x - r)
@@ -803,15 +835,17 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 
 
 func _emit_enemy_pattern(e: EnemyState, sim_tick: int) -> void:
-	if e.def.pattern_id == "":
+	var pattern_id: String = _pattern_id_for_fire(e)
+	if pattern_id == "":
 		return
 	if _catalog == null:
 		return
-	var def := _catalog.pattern(e.def.pattern_id)
+	var def := _catalog.pattern(pattern_id)
 	if def == null:
 		return
 	_fire_pattern(e, def, sim_tick, e.aim, e.volley_index)
 	e.volley_index += 1
+	e.fire_cycle += 1
 
 
 func _mix_seed(a: int, b: int, c: int) -> int:
@@ -964,7 +998,7 @@ func _cull_pattern_bullets(sim_tick: int) -> void:
 func _cull_enemies() -> void:
 	var write: int = 0
 	for e in _enemies:
-		if e.alive:
+		if e.alive or e.flash_ticks > 0:
 			_enemies[write] = e
 			write += 1
 	_enemies.resize(write)
@@ -1094,6 +1128,10 @@ func defeat_all_enemies() -> void:
 		if e.alive:
 			e.invulnerable = false
 			_kill_enemy(e, _tick)
+	# Test hook: wipe immediately so leftover death flashes don't show up in
+	# later room-count assertions. Live combat deaths keep their flash.
+	for e in _enemies:
+		e.flash_ticks = 0
 
 
 func instance_content_level() -> int:
@@ -1136,6 +1174,40 @@ func get_enemy(id: int) -> EnemyState:
 
 
 ## Test / tooling hook. Goes through invuln, the seal, phase thresholds and death.
+func boss_n_peak() -> int:
+	return _boss_n_peak
+
+
+func room_n_peak(room_id: String) -> int:
+	return int(_room_n_peak.get(room_id, 0))
+
+
+func boss_aim_seed(entity_id: int, tick: int) -> int:
+	return _domain_seed(entity_id, tick, BOSS_AIM_SEED_DOMAIN)
+
+
+func boss_pool_seed(entity_id: int, tick: int) -> int:
+	return _domain_seed(entity_id, tick, BOSS_POOL_SEED_DOMAIN)
+
+
+func pattern_volley_seed(entity_id: int, tick: int, volley_index: int) -> int:
+	return _mix_seed(_world_seed, entity_id, tick + volley_index)
+
+
+func live_pattern_ids() -> PackedStringArray:
+	var ids := PackedStringArray()
+	var seen: Dictionary = {}
+	for b in _pattern_bullets:
+		if b.pattern_id != "" and not seen.has(b.pattern_id):
+			ids.append(b.pattern_id)
+			seen[b.pattern_id] = true
+	for job in _pattern_jobs:
+		if job.live and job.def != null and job.def.id != "" and not seen.has(job.def.id):
+			ids.append(job.def.id)
+			seen[job.def.id] = true
+	return ids
+
+
 func hurt_enemy(enemy_id: int, amount: int, attacker_id: int = 0) -> void:
 	var e: EnemyState = _enemy_by_id(enemy_id)
 	if e != null:
@@ -1161,6 +1233,10 @@ func derived_instance_seed(portal_id: int, enter_tick: int) -> int:
 		0,
 		DUNGEON_INSTANCE_SEED_DOMAIN
 	)
+
+
+func _domain_seed(entity_id: int, tick: int, domain: int) -> int:
+	return _mix_seed(_mix_seed(_world_seed, entity_id, tick), 0, domain)
 
 
 ## Place the packed practice-yard entrance (found-portal rules, M locked at creation).
@@ -1208,7 +1284,9 @@ func configure_dungeon(
 	_room_activated.clear()
 	_exit_spawned = false
 	_boss_defeated = false
-	_n_peak = 0
+	_boss_n_peak = 0
+	_room_n_peak.clear()
+	_reset_boss_fight_trackers()
 	_portals.clear()
 	_enemies.clear()
 	_projectiles.clear()
@@ -1386,7 +1464,9 @@ func _recompute_player_stats(p: SimPlayerState, fill: bool) -> void:
 		st.invuln_ticks = 0
 
 
-func _is_eligible(e: EnemyState, player_id: int, px: float, py: float) -> bool:
+func _is_eligible(e: EnemyState, player_id: int, px: float, py: float, sim_tick: int = 0) -> bool:
+	if e.is_boss() and _reward_rank(e) == "boss":
+		return _is_boss_eligible(e, player_id, sim_tick)
 	if e.damaged_by.has(player_id):
 		return true
 	var dx: float = px - e.x
@@ -1403,7 +1483,7 @@ func _grant_kill_rewards(e: EnemyState, sim_tick: int) -> void:
 	var rank: String = _reward_rank(e)
 	for id in _sorted_ids:
 		var p: SimPlayerState = _players[id]
-		if not _is_eligible(e, p.id, p.x, p.y):
+		if not _is_eligible(e, p.id, p.x, p.y, sim_tick):
 			continue
 		var le: int = _player_le(p)
 		var xp: int = _scaling.credited_kill_tenths(e.content_level, le, rank)
@@ -1629,6 +1709,9 @@ func _apply_kindle_pulse(player_id: int, st: PlayerAbilityState) -> void:
 			healed_ally = true
 	if healed_ally:
 		st.ally_ability_heals += 1
+		if _boss_fight_active() and not _boss_defeated:
+			var n: int = int(_boss_ally_heals.get(player_id, 0))
+			_boss_ally_heals[player_id] = n + 1
 
 
 func _heal_target(id: int, _x: float, _y: float, max_hp: int, is_self: bool, st: PlayerAbilityState) -> void:
@@ -1922,7 +2005,10 @@ func _activate_rooms() -> void:
 			var eid: String = String(spawn.get("enemy_id", ""))
 			if eid == "":
 				continue
-			spawn_enemy(eid, float(spawn["x"]), float(spawn["y"]), _instance_content_level)
+			var sid: int = spawn_enemy(eid, float(spawn["x"]), float(spawn["y"]), _instance_content_level)
+			var spawned: EnemyState = _enemy_by_id(sid)
+			if spawned != null:
+				spawned.room_id = rid
 
 
 func _maybe_spawn_exit() -> void:
@@ -2008,30 +2094,283 @@ func _rebuild_ids() -> void:
 		_sorted_ids.append(int(id))
 
 
-func _refresh_n_peak() -> void:
-	var n: int = 0
-	for id in _sorted_ids:
-		var p: SimPlayerState = _players[id]
-		if p.hp > 0:
-			n += 1
-	if n <= _n_peak:
+func _refresh_encounter_scaling() -> void:
+	if _dungeon != null:
+		if not _boss_defeated:
+			_refresh_boss_n_peak()
+		_refresh_room_n_peaks()
+	else:
+		_refresh_wilds_n_peaks()
+
+
+func _refresh_boss_n_peak() -> void:
+	if _boss_defeated:
 		return
-	_n_peak = n
+	var n: int = _count_living_in_arena()
+	if _boss_n_peak <= 0:
+		if n <= 0:
+			return
+		_boss_n_peak = n
+	elif n > _boss_n_peak:
+		_boss_n_peak = n
 	for e in _enemies:
 		if not e.alive or e.def == null:
 			continue
-		e.n_peak = _n_peak
-		var kind: String = e.def.party_scaling if e.def.party_scaling != "" else "normal"
-		var new_max: int = _scaling.encounter_hp(e.def.base_hp, e.content_level, e.n_peak, kind)
-		var old_max: int = e.max_hp()
-		if new_max == old_max or old_max <= 0:
-			e.scaled_max_hp = new_max
+		if e.is_boss() or e.summoned:
+			_apply_n_peak(e, _boss_n_peak)
+
+
+func _refresh_room_n_peaks() -> void:
+	if _dungeon == null:
+		return
+	for room in _dungeon.rooms:
+		var rid: String = String(room.get("id", ""))
+		if rid == "" or not _room_activated.has(rid):
 			continue
-		if e.hp > 0:
-			e.hp = maxi(1, SimScaling.round_half_up(float(e.hp) * float(new_max) / float(old_max)))
-			if e.hp > new_max:
-				e.hp = new_max
+		var n: int = _count_living_for_room(room)
+		if not _room_n_peak.has(rid):
+			_room_n_peak[rid] = n if n > 0 else 1
+		elif n > int(_room_n_peak[rid]):
+			_room_n_peak[rid] = n
+		var peak: int = int(_room_n_peak[rid])
+		for e in _enemies:
+			if e.alive and e.room_id == rid and not e.is_boss() and not e.summoned:
+				_apply_n_peak(e, peak)
+
+
+func _refresh_wilds_n_peaks() -> void:
+	for e in _enemies:
+		if not e.alive or e.def == null or e.is_boss() or not e.aggro:
+			continue
+		var n: int = _count_living_near(e.x, e.y, N_PEAK_RANGE_TILES)
+		if n > e.n_peak:
+			_apply_n_peak(e, n)
+
+
+func _apply_n_peak(e: EnemyState, n: int) -> void:
+	if e == null or not e.alive or e.def == null:
+		return
+	n = maxi(n, 1)
+	var kind: String = e.def.party_scaling if e.def.party_scaling != "" else "normal"
+	var new_max: int = _scaling.encounter_hp(e.def.base_hp, e.content_level, n, kind)
+	var old_max: int = e.max_hp()
+	e.n_peak = n
+	if new_max == old_max or old_max <= 0:
 		e.scaled_max_hp = new_max
+		return
+	if e.hp > 0:
+		e.hp = _scaling.keep_hp_fraction(e.hp, old_max, new_max)
+	e.scaled_max_hp = new_max
+
+
+func _arena_room() -> Dictionary:
+	if _dungeon == null:
+		return {}
+	for e in _enemies:
+		if e.is_boss():
+			var room: Dictionary = _room_containing(e.x, e.y)
+			if not room.is_empty():
+				return room
+	for room in _dungeon.rooms:
+		var spawns: Variant = room.get("spawns", [])
+		if not (spawns is Array):
+			continue
+		for spawn in spawns:
+			if not (spawn is Dictionary):
+				continue
+			if String(spawn.get("enemy_id", "")) == "tallow_warden":
+				return room
+	return {}
+
+
+func _count_living_in_arena() -> int:
+	var room: Dictionary = _arena_room()
+	if room.is_empty() or _dungeon == null:
+		return 0
+	var n: int = 0
+	for id in _sorted_ids:
+		var p: SimPlayerState = _players[id]
+		if p.hp > 0 and _dungeon.room_contains(room, p.x, p.y):
+			n += 1
+	return n
+
+
+func _count_living_for_room(room: Dictionary) -> int:
+	if _dungeon == null or room.is_empty():
+		return 0
+	var rid: String = String(room.get("id", ""))
+	var n: int = 0
+	for id in _sorted_ids:
+		var p: SimPlayerState = _players[id]
+		if p.hp <= 0:
+			continue
+		if _dungeon.room_contains(room, p.x, p.y):
+			n += 1
+			continue
+		var near: bool = false
+		for e in _enemies:
+			if not e.alive or e.room_id != rid or e.is_boss() or e.summoned:
+				continue
+			var dx: float = p.x - e.x
+			var dy: float = p.y - e.y
+			if dx * dx + dy * dy <= N_PEAK_RANGE_TILES * N_PEAK_RANGE_TILES:
+				near = true
+				break
+		if near:
+			n += 1
+	return n
+
+
+func _count_living_near(x: float, y: float, radius: float) -> int:
+	var n: int = 0
+	var r2: float = radius * radius
+	for id in _sorted_ids:
+		var p: SimPlayerState = _players[id]
+		if p.hp <= 0:
+			continue
+		var dx: float = p.x - x
+		var dy: float = p.y - y
+		if dx * dx + dy * dy <= r2:
+			n += 1
+	return n
+
+
+func _reset_wilds_encounter(e: EnemyState) -> void:
+	if _dungeon != null or e == null or e.def == null:
+		return
+	_apply_n_peak(e, 1)
+	e.hp = e.scaled_max_hp
+
+
+func _reset_boss_fight_trackers() -> void:
+	_boss_fight_ticks = 0
+	_boss_fight_sampled_tick = -1
+	_boss_damage_by.clear()
+	_boss_near_ticks.clear()
+	_boss_ally_heals.clear()
+
+
+func _boss_fight_active() -> bool:
+	if _boss_defeated:
+		return false
+	for e in _enemies:
+		if e.is_boss() and e.seal_tick >= 0:
+			return true
+	return false
+
+
+func _living_boss() -> EnemyState:
+	for e in _enemies:
+		if e.is_boss() and e.alive:
+			return e
+	return null
+
+
+func _begin_boss_fight(_e: EnemyState, sim_tick: int) -> void:
+	_sample_boss_fight_tick(sim_tick)
+
+
+func _sample_boss_fight_tick(sim_tick: int) -> void:
+	if _boss_defeated or not _boss_fight_active():
+		return
+	if _boss_fight_sampled_tick == sim_tick:
+		return
+	_boss_fight_sampled_tick = sim_tick
+	_boss_fight_ticks += 1
+	var boss: EnemyState = _living_boss()
+	if boss == null:
+		return
+	var r2: float = BOSS_PROXIMITY_TILES * BOSS_PROXIMITY_TILES
+	for id in _sorted_ids:
+		var p: SimPlayerState = _players[id]
+		if p.hp <= 0:
+			continue
+		var dx: float = p.x - boss.x
+		var dy: float = p.y - boss.y
+		if dx * dx + dy * dy <= r2:
+			_boss_near_ticks[id] = int(_boss_near_ticks.get(id, 0)) + 1
+
+
+func _is_boss_eligible(e: EnemyState, player_id: int, sim_tick: int) -> bool:
+	var contributed: bool = false
+	var dmg: int = int(_boss_damage_by.get(player_id, 0))
+	# (a) dealt at least 2% of the boss's max HP at kill time.
+	if e.max_hp() > 0 and dmg * 100 >= e.max_hp() * 2:
+		contributed = true
+	# (b) used an ability that affected an ally at least twice during the fight.
+	if int(_boss_ally_heals.get(player_id, 0)) >= 2:
+		contributed = true
+	# (c) were within 12 tiles of the boss for at least half the fight's ticks.
+	var near: int = int(_boss_near_ticks.get(player_id, 0))
+	if _boss_fight_ticks > 0 and near * 2 >= _boss_fight_ticks:
+		contributed = true
+	if not contributed:
+		return false
+	var p: SimPlayerState = _players.get(player_id, null) as SimPlayerState
+	if p == null or p.last_non_idle_tick < 0:
+		return false
+	return sim_tick - p.last_non_idle_tick <= NON_IDLE_WINDOW_TICKS
+
+
+func _note_non_idle(p: SimPlayerState, sim_tick: int) -> void:
+	var intent: InputIntent = p.intent
+	var non_idle: bool = intent.fire_held or intent.ability_pressed or intent.interact_pressed
+	if p.idle_sample_ready:
+		if intent.move_x != p.idle_move_x or intent.move_y != p.idle_move_y:
+			non_idle = true
+		if absf(angle_difference(intent.aim, p.idle_aim)) >= NON_IDLE_AIM_RAD:
+			non_idle = true
+	p.idle_move_x = intent.move_x
+	p.idle_move_y = intent.move_y
+	p.idle_aim = intent.aim
+	p.idle_sample_ready = true
+	if non_idle:
+		p.last_non_idle_tick = sim_tick
+
+
+func _pattern_id_for_fire(e: EnemyState) -> String:
+	if e.def == null:
+		return ""
+	if e.def.alt_pattern_id != "" and e.def.alt_every_cycles > 0:
+		if (e.fire_cycle + 1) % e.def.alt_every_cycles == 0:
+			return e.def.alt_pattern_id
+	return e.def.pattern_id
+
+
+func _tick_sidestep(e: EnemyState, _sim_tick: int) -> void:
+	if e.def == null or e.def.sidestep_tiles <= 0.0 or e.def.sidestep_interval_ticks <= 0:
+		return
+	if not e.aggro:
+		return
+	if e.sidestep_left > 0:
+		e.x += e.sidestep_dx
+		e.y += e.sidestep_dy
+		e.sidestep_left -= 1
+		return
+	if e.sidestep_cooldown > 0:
+		e.sidestep_cooldown -= 1
+	if e.sidestep_cooldown > 0:
+		return
+	var dur: int = maxi(e.def.sidestep_duration_ticks, 1)
+	var px: float = -sin(e.aim)
+	var py: float = cos(e.aim)
+	if (e.fire_cycle % 2) == 1:
+		px = -px
+		py = -py
+	var plen: float = sqrt(px * px + py * py)
+	if plen <= READY_EPS:
+		px = 1.0
+		py = 0.0
+		plen = 1.0
+	px /= plen
+	py /= plen
+	e.sidestep_dx = px * e.def.sidestep_tiles / float(dur)
+	e.sidestep_dy = py * e.def.sidestep_tiles / float(dur)
+	e.sidestep_left = dur
+	e.sidestep_cooldown = e.def.sidestep_interval_ticks
+	e.x += e.sidestep_dx
+	e.y += e.sidestep_dy
+	e.sidestep_left -= 1
 
 
 func _player_stride_mult(p: SimPlayerState) -> float:
@@ -2051,9 +2390,14 @@ func _hurt_enemy(e: EnemyState, amount: int, attacker_id: int, sim_tick: int) ->
 		return
 	if e.is_boss() and e.seal_tick < 0:
 		e.seal_tick = sim_tick
+		_begin_boss_fight(e, sim_tick)
+	var dealt: int = mini(amount, e.hp)
 	e.hp -= amount
 	if attacker_id != 0:
 		e.damaged_by[attacker_id] = true
+		if e.is_boss() and dealt > 0:
+			var acc: int = int(_boss_damage_by.get(attacker_id, 0))
+			_boss_damage_by[attacker_id] = acc + dealt
 	e.flash_ticks = _config.player_flash_ticks
 	if e.hp <= 0:
 		_kill_enemy(e, sim_tick)
@@ -2069,22 +2413,26 @@ func _kill_enemy(e: EnemyState, sim_tick: int) -> void:
 	e.hp = 0
 	e.alive = false
 	e.invulnerable = false
+	if e.flash_ticks <= 0:
+		e.flash_ticks = _config.player_flash_ticks
 	if e.is_boss() and not _boss_defeated:
 		_on_boss_defeated(e, sim_tick)
 	_grant_kill_rewards(e, sim_tick)
 
 
-func _on_boss_defeated(e: EnemyState, _sim_tick: int) -> void:
+func _on_boss_defeated(e: EnemyState, sim_tick: int) -> void:
 	_boss_defeated = true
+	_boss_n_peak = 0
 	_pattern_bullets.clear()
 	_hazards.clear()
 	_cancel_jobs_from(e.id)
+	# Living Waxen Acolytes die on the same tick, with no loot or XP, and
+	# play the normal death flash (content-v0.1, Design).
 	for other in _enemies:
 		if other.alive and other.summoned:
 			other.invulnerable = false
-			other.hp = 0
-			other.alive = false
-			other.rewards_granted = true
+			other.drops_loot = false
+			_kill_enemy(other, sim_tick)
 
 
 func _maybe_boss_transition(e: EnemyState) -> void:
@@ -2111,6 +2459,11 @@ func _enter_boss_phase(e: EnemyState, index: int) -> void:
 	var phase: Dictionary = e.current_phase()
 	e.invulnerable = bool(phase.get("invulnerable", false))
 	_run_phase_enter(e, phase)
+	# A hit can cross more than one threshold: after a transition ends (or a
+	# combat phase is entered), latch immediately if HP is already at or below
+	# the new phase's threshold (content-v0.1 §3.4).
+	if not bool(phase.get("transition", false)):
+		_maybe_boss_transition(e)
 
 
 func _run_phase_enter(e: EnemyState, phase: Dictionary) -> void:
@@ -2157,9 +2510,8 @@ func _summon_at_corners(boss: EnemyState, enemy_id: String, count: int, loot: bo
 			continue
 		add.drops_loot = loot
 		add.summoned = true
-		add.n_peak = boss.n_peak
-		var kind: String = add.def.party_scaling if add.def != null and add.def.party_scaling != "" else "normal"
-		add.scaled_max_hp = _scaling.encounter_hp(add.def.base_hp, add.content_level, add.n_peak, kind)
+		add.room_id = boss.room_id
+		_apply_n_peak(add, maxi(_boss_n_peak, 1))
 		add.hp = add.scaled_max_hp
 
 
@@ -2328,7 +2680,7 @@ func _pick_boss_aim_target(e: EnemyState, sim_tick: int) -> int:
 		candidates.append(id)
 	if candidates.is_empty():
 		candidates = ids
-	var rng := PCG32.new(_mix_seed(_world_seed, e.id, sim_tick + 7919), 1)
+	var rng := PCG32.new(_domain_seed(e.id, sim_tick, BOSS_AIM_SEED_DOMAIN), 1)
 	var pick: int = candidates[int(rng.uint32() % (candidates.size() as int))]
 	if pick == e.last_aim_target_id:
 		e.same_target_streak += 1
@@ -2499,7 +2851,7 @@ func _spawn_hazards(e: EnemyState, def: PatternDef, sim_tick: int) -> void:
 	if ids.is_empty():
 		return
 	var cap: int = def.max_targets if def.max_targets > 0 else ids.size()
-	var rng := PCG32.new(_mix_seed(_world_seed, e.id, sim_tick + 4243), 1)
+	var rng := PCG32.new(_domain_seed(e.id, sim_tick, BOSS_POOL_SEED_DOMAIN), 1)
 	var picked: Array[int] = []
 	var pool: Array[int] = ids.duplicate()
 	while picked.size() < cap and not pool.is_empty():
