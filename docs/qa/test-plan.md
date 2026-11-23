@@ -29,11 +29,12 @@ for real and can fail.
 - **Fixtures:** each golden fixture is one JSON input plus its expected output in `fixtures/`, read by both the Go and GDScript tests. Changing the expected output needs a design or engineering note in the PR saying why.
 - **Makefile targets CI calls when they exist:** `proto`, `tools` (installs the pinned protoc, protoc-gen-go and godobuf), `fixtures-parity`, `data-validate`.
 - **Supply chain:** actions are pinned to commit SHAs. The Godot editor and export templates are checked against pinned SHA512s from the release's published sums, and GUT against a pinned sha256.
-- **No secrets in the repo.** Signing keys for release builds will come from repository secrets later. Debug builds use a throwaway keystore made in CI.
+- **No secrets in the repo.** Signing keys for release builds will come from repository secrets later (separate decision).
+- **Android debug signing:** the debug keystore lives only in the repo secret `ANDROID_DEBUG_KEYSTORE_B64` (alias `androiddebugkey`, standard debug passwords, `CN=Endless Realm Debug, O=Endless Realm, C=AT`). It is for debug builds only and is never committed. Its public cert SHA-256 is `7352700cdd924eafaf67061a87d75999e0655caed6c9b178420779ecbf5c552f`; `export-builds (android)` fails if an APK built with the secret has any other signer. Because the key is fixed, a new debug APK installs over the previous one. Fork PRs get no secrets, so they fall back to an ephemeral keystore made with keytool (CI posts a notice); those APKs must be uninstalled before installing another build. CI has no `pull_request_target` trigger.
 
 ### Android playable check (manual, per release candidate)
 
-1. Download the `endless-realm-android-<sha>` artifact from the PR's CI run.
+1. Download the `endless-realm-android-debug-apk` artifact from the PR's CI run (CI already checks it with `aapt dump badging` and `apksigner verify`; the Linux build is smoke-run headless).
 2. Install it with `adb install -r endless-realm.apk` on one physical device (Android 10 or later) and one emulator.
 3. Launch the app, reach the title screen, connect to a local compose server (set the address in-game; the debug build allows cleartext `ws://`), log in, move, fire, and open a portal at multipliers 0.5, 1.0 and 1.5.
 4. Background the app, bring it back, and check that the session either resumes or shows a clear reconnect message.
