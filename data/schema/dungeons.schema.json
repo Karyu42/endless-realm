@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://endless-realm.local/schema/dungeons.schema.json",
+  "title": "Endless Realm dungeon layouts",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "base_level", "rooms", "corridors"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "base_level": { "type": "integer", "minimum": 1 },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/room" }
+    },
+    "corridors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rect" }
+    },
+    "practice_yard_portal": { "$ref": "#/$defs/practice_portal" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "type": "object",
+        "properties": { "id": { "const": "hollowmere_vault" } },
+        "required": ["id"]
+      },
+      "then": {
+        "required": ["practice_yard_portal"]
+      }
+    }
+  ],
+  "$defs": {
+    "vec2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "type": "number" }
+    },
+    "rect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "size"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/vec2" },
+        "size": { "$ref": "#/$defs/vec2" }
+      }
+    },
+    "spawn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enemy_id", "x", "y"],
+      "properties": {
+        "enemy_id": { "type": "string", "minLength": 1 },
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "boss_placeholder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "x", "y"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "exit_portal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "radius"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "radius": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "practice_portal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "radius", "m100", "practice_base_level", "placeholder"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "radius": { "type": "number", "exclusiveMinimum": 0 },
+        "m100": { "type": "integer" },
+        "practice_base_level": { "type": "integer", "minimum": 1 },
+        "placeholder": { "type": "string", "minLength": 1 }
+      }
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "origin", "size"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "origin": { "$ref": "#/$defs/vec2" },
+        "size": { "$ref": "#/$defs/vec2" },
+        "arrival": { "$ref": "#/$defs/vec2" },
+        "spawns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/spawn" }
+        },
+        "boss_placeholder": { "$ref": "#/$defs/boss_placeholder" },
+        "exit_portal": { "$ref": "#/$defs/exit_portal" }
+      }
+    }
+  }
+}

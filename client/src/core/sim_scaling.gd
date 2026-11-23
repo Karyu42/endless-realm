@@ -24,6 +24,15 @@ var interact_prompt_range_tiles: float = 0.0
 var interact_accept_range_tiles: float = 0.0
 ## Fixed E for every practice-yard enemy (content-v0.1 §2.4).
 var practice_yard_content_level: int = 0
+## Portal M100 accept window and join floor (vision §6). 0 means the packed
+## field was missing; is_valid_m100 then fails closed.
+var portal_m100_min: int = 0
+var portal_m100_max: int = 0
+var portal_m100_step: int = 0
+var portal_join_floor_numer: int = 0
+var portal_join_floor_denom: int = 0
+var portal_entrance_lifetime_ticks: int = 0
+var _portal_present: Dictionary = {}
 
 
 static func from_json(d: Dictionary) -> SimScaling:
@@ -51,6 +60,23 @@ static func from_json(d: Dictionary) -> SimScaling:
 	s.interact_prompt_range_tiles = float(d.get("interact_prompt_range_tiles", 0.0))
 	s.interact_accept_range_tiles = float(d.get("interact_accept_range_tiles", 0.0))
 	s.practice_yard_content_level = int(d.get("practice_yard_content_level", 0))
+	var portal: Variant = d.get("portal", {})
+	if portal is Dictionary:
+		var pd: Dictionary = portal
+		for key in pd.keys():
+			s._portal_present[String(key)] = true
+		if pd.has("m100_min"):
+			s.portal_m100_min = int(pd["m100_min"])
+		if pd.has("m100_max"):
+			s.portal_m100_max = int(pd["m100_max"])
+		if pd.has("m100_step"):
+			s.portal_m100_step = int(pd["m100_step"])
+		if pd.has("join_floor_numer"):
+			s.portal_join_floor_numer = int(pd["join_floor_numer"])
+		if pd.has("join_floor_denom"):
+			s.portal_join_floor_denom = int(pd["join_floor_denom"])
+		if pd.has("entrance_lifetime_ticks"):
+			s.portal_entrance_lifetime_ticks = int(pd["entrance_lifetime_ticks"])
 	return s
 
 
@@ -149,3 +175,40 @@ func in_prompt_range(distance: float) -> bool:
 
 func in_accept_range(distance: float) -> bool:
 	return distance <= interact_accept_range_tiles
+
+
+func missing_pack_ids() -> PackedStringArray:
+	var ids: PackedStringArray = PackedStringArray()
+	for field in [
+		"m100_min", "m100_max", "m100_step",
+		"join_floor_numer", "join_floor_denom", "entrance_lifetime_ticks"
+	]:
+		if not _portal_present.has(field):
+			ids.append("scaling.portal.%s" % field)
+	return ids
+
+
+## Vision §6: 50 ≤ M100 ≤ 150 and M100 % step == 0. Fails closed if step is 0.
+func is_valid_m100(m100: int) -> bool:
+	if portal_m100_step <= 0:
+		return false
+	if m100 < portal_m100_min or m100 > portal_m100_max:
+		return false
+	return m100 % portal_m100_step == 0
+
+
+## B is the higher of the dungeon base level and the opener's real Lp.
+func instance_base_level(dungeon_base: int, opener_lp: int) -> int:
+	return maxi(dungeon_base, opener_lp)
+
+
+## E = max(1, (B × M100 + 50) div 100), vision §6.
+func portal_content_level(base_level: int, m100: int) -> int:
+	return maxi(1, (base_level * m100 + 50) / 100)
+
+
+## True when real Lp is below the join floor (Lp < numer/denom × E).
+func below_join_floor(lp: int, content_level: int) -> bool:
+	if portal_join_floor_denom <= 0:
+		return true
+	return lp * portal_join_floor_denom < portal_join_floor_numer * content_level

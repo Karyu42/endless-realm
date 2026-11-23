@@ -1,0 +1,107 @@
+{
+  "id": "hollowmere_vault",
+  "name": "the Hollowmere Vault",
+  "base_level": 10,
+  "rooms": [
+    {
+      "id": "antechamber",
+      "name": "Antechamber",
+      "origin": [
+        0.0,
+        0.0
+      ],
+      "size": [
+        12.0,
+        12.0
+      ],
+      "arrival": [
+        6.0,
+        6.0
+      ]
+    },
+    {
+      "id": "drip_hall",
+      "name": "Drip Hall",
+      "origin": [
+        15.0,
+        0.0
+      ],
+      "size": [
+        16.0,
+        12.0
+      ],
+      "spawns": [
+        {
+          "enemy_id": "burrmite",
+          "x": 19.0,
+          "y": 4.0
+        },
+        {
+          "enemy_id": "burrmite",
+          "x": 26.0,
+          "y": 8.0
+        }
+      ]
+    },
+    {
+      "id": "wick_kennels",
+      "name": "Wick Kennels",
+      "origin": [
+        34.0,
+        0.0
+      ],
+      "size": [
+        12.0,
+        12.0
+      ],
+      "spawns": [
+        {
+          "enemy_id": "driftcap_spore",
+          "x": 38.0,
+          "y": 5.0
+        }
+      ],
+      "boss_placeholder": {
+        "id": "tallow_warden",
+        "name": "the Tallow Warden",
+        "x": 42.0,
+        "y": 6.0
+      },
+      "exit_portal": {
+        "x": 44.0,
+        "y": 6.0,
+        "radius": 0.75
+      }
+    }
+  ],
+  "corridors": [
+    {
+      "origin": [
+        12.0,
+        4.5
+      ],
+      "size": [
+        3.0,
+        3.0
+      ]
+    },
+    {
+      "origin": [
+        31.0,
+        4.5
+      ],
+      "size": [
+        3.0,
+        3.0
+      ]
+    }
+  ],
+  "practice_yard_portal": {
+    "x": 8.0,
+    "y": 16.0,
+    "radius": 0.75,
+    "m100": 100,
+    "practice_base_level": 1,
+    "placeholder": "Practice-slice portal. Official vault base_level is 10 (content-v0.1 \u00a73). This entrance uses practice_base_level so a new character can enter. Found-portal rules: M = 1.00, no deposit (vision \u00a76)."
+  }
+}
