@@ -33,7 +33,7 @@ for real and can fail.
 
 ### Android playable check (manual, per release candidate)
 
-1. Download the `endless-realm-android-<sha>` artifact from the PR's CI run.
+1. Download the `endless-realm-android-debug-apk` artifact from the PR's CI run (CI already checks it with `aapt dump badging` and `apksigner verify`; the Linux build is smoke-run headless).
 2. Install it with `adb install -r endless-realm.apk` on one physical device (Android 10 or later) and one emulator.
 3. Launch the app, reach the title screen, connect to a local compose server (set the address in-game; the debug build allows cleartext `ws://`), log in, move, fire, and open a portal at multipliers 0.5, 1.0 and 1.5.
 4. Background the app, bring it back, and check that the session either resumes or shows a clear reconnect message.

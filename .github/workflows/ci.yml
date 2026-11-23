@@ -347,12 +347,15 @@ jobs:
           - target: linux
             preset: Linux
             output: endless-realm.x86_64
+            artifact: endless-realm-linux-debug
           - target: windows
             preset: Windows Desktop
             output: endless-realm.exe
+            artifact: endless-realm-windows-debug
           - target: android
             preset: Android
             output: endless-realm.apk
+            artifact: endless-realm-android-debug-apk
     env:
       PRESET: ${{ matrix.preset }}
       OUT_DIR: ${{ github.workspace }}/export-out/${{ matrix.target }}
@@ -389,7 +392,8 @@ jobs:
       - if: steps.inputs.outputs.present == 'true' && matrix.target == 'android'
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
-          packages: platform-tools build-tools;35.0.0 platforms;android-35
+          # Godot 4.7.2's Android template targets SDK 36 (min 24); match build-tools to it.
+          packages: platform-tools build-tools;36.0.0 platforms;android-36
       - name: Debug keystore + Godot Android editor settings
         if: steps.inputs.outputs.present == 'true' && matrix.target == 'android'
         run: |
@@ -437,11 +441,32 @@ jobs:
           godot --headless --path client --export-debug "$PRESET" "${OUT_DIR}/${OUT_FILE}"
           test -s "${OUT_DIR}/${OUT_FILE}" || { echo "::error::export produced no ${OUT_FILE}"; exit 1; }
           ls -la "$OUT_DIR"
+      - name: Verify APK (aapt badging + apksigner)
+        if: steps.inputs.outputs.present == 'true' && matrix.target == 'android'
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          bt="$(find "${sdk}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          apk="${OUT_DIR}/${OUT_FILE}"
+          "${bt}/aapt" dump badging "$apk" | tee "${RUNNER_TEMP}/badging.txt" | grep -E "^(package|sdkVersion|targetSdkVersion|native-code|uses-permission|application-label):"
+          grep -q "^package: name='dev.karyu.endlessrealm'" "${RUNNER_TEMP}/badging.txt" || { echo "::error::unexpected package name"; exit 1; }
+          grep -q "^native-code:.*'arm64-v8a'" "${RUNNER_TEMP}/badging.txt" || { echo "::error::APK has no arm64-v8a libs"; exit 1; }
+          grep -q "android.permission.INTERNET" "${RUNNER_TEMP}/badging.txt" || { echo "::error::APK lacks INTERNET permission"; exit 1; }
+          "${bt}/apksigner" verify --verbose --print-certs "$apk" | grep -vE '^WARNING'
+      - name: Smoke-run the Linux export headless
+        if: steps.inputs.outputs.present == 'true' && matrix.target == 'linux'
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/linux-smoke.log"
+          timeout 60 "${OUT_DIR}/${OUT_FILE}" --headless --quit-after 120 2>&1 | tee "$log"
+          if grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script' "$log"; then
+            echo "::error::Linux export hit script errors on startup"; exit 1
+          fi
       - name: Upload ${{ matrix.target }} build
         if: steps.inputs.outputs.present == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: endless-realm-${{ matrix.target }}-${{ github.sha }}
+          name: ${{ matrix.artifact }}
           path: ${{ env.OUT_DIR }}
           if-no-files-found: error
           retention-days: 14
