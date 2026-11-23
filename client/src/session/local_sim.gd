@@ -1438,7 +1438,12 @@ func _clip_blocked_tiles_t(sx: float, sy: float, ex: float, ey: float, t_end: fl
 			return t_end
 		var ntx: int = tx + (step_x if cross_x else 0)
 		var nty: int = ty + (step_y if cross_y else 0)
-		if _tile_is_blocked(ntx, nty):
+		# An exact-corner crossing is blocked if either side tile is solid,
+		# so the path cannot slip through a diagonal gap.
+		var side_blocked: bool = false
+		if cross_x and cross_y:
+			side_blocked = _tile_is_blocked(tx + step_x, ty) or _tile_is_blocked(tx, ty + step_y)
+		if side_blocked or _tile_is_blocked(ntx, nty):
 			# Stay on the free side of the boundary (floor(11.0) is tile 11).
 			return maxf(0.0, minf(t_end, t_hit) - SimConstants.MOVE_EPS)
 		tx = ntx
