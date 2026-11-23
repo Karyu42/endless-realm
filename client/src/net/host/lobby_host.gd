@@ -837,7 +837,7 @@ func _step_sim() -> Array[PackedFloat64Array]:
 	var done: int = sim.tick()
 	# Read-only walk of the sim's live shots (load-test projection and
 	# stand-in emitter hits); avoids building a full world_view per tick.
-	for shot in sim._projectiles:
+	for shot in sim.projectiles():
 		if shot.spawn_tick == done - 1:
 			shots.append(PackedFloat64Array([float(shot.owner_id), float(tick), shot.origin_x, shot.origin_y, atan2(shot.dir_y, shot.dir_x)]))
 		if bullets.emitters_x.size() > 0:
@@ -864,7 +864,7 @@ func _apply_interacts(p: HostPlayer, sp: SimPlayerState) -> void:
 ## interact_validator.resolver: a live bag in the shared sim owned by this
 ## player, as {"x", "y"}; {} for anything else (dropped silently).
 func _resolve_bag(target_id: int, player_id: int) -> Dictionary:
-	var bag: GroundDrop = sim._bag_by_id(target_id)
+	var bag: GroundDrop = sim.bag_by_id(target_id)
 	if bag == null or bag.item == null or bag.item.state != ItemState.STATE_LIVE \
 			or bag.item.owner_player_id != player_id:
 		return {}
@@ -918,7 +918,7 @@ func _encode_snapshot_for(bags: Array) -> PackedByteArray:
 ## Live bags in the shared sim, grouped by owner: owner_id -> Array[GroundDrop].
 func _bags_by_owner() -> Dictionary:
 	var out := {}
-	for bag in sim._ground_drops:
+	for bag in sim.ground_drops():
 		if bag.item == null or bag.item.state != ItemState.STATE_LIVE:
 			continue
 		var owner: int = bag.item.owner_player_id
