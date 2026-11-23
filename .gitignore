@@ -1,0 +1,11 @@
+.tools/
+server/bin/
+*.exe
+*.test
+.DS_Store
+
+# Godot (client)
+**/.godot/
+client/addons/gut/
+client/test_results/
+*.translation

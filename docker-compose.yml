@@ -1,0 +1,49 @@
+# Pin GO_VERSION and POSTGRES_IMAGE via:
+#   docker compose --env-file tools/versions.env up
+# or `make dev` / `make smoke`, which pass that --env-file.
+# The `:-` defaults keep a raw `docker compose up` working at the same pins.
+services:
+  postgres:
+    # Pinned in tools/versions.env (POSTGRES_IMAGE). The game server does
+    # not connect to this database in the skeleton; it is here for local dev.
+    image: ${POSTGRES_IMAGE:-postgres:18.7-alpine3.24}
+    environment:
+      POSTGRES_USER: endless
+      POSTGRES_PASSWORD: endless_dev
+      POSTGRES_DB: endless_realm
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - er_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U endless -d endless_realm"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      args:
+        GO_VERSION: ${GO_VERSION:-1.27.4}
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      ER_LISTEN_ADDR: ":8080"
+      ER_SEED: "1"
+      ER_MULTIPLIER: "1.0"
+    # Postgres is started for local dev but is unused by the server yet.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Distroless image has no shell/curl; the server binary probes itself.
+    healthcheck:
+      test: ["CMD", "/server", "-healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  er_pgdata:

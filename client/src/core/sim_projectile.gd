@@ -1,0 +1,40 @@
+class_name SimProjectile
+extends RefCounted
+## Linear, closed-form shot: position = origin + dir * speed * elapsed * TICK_DT.
+
+var id: int = 0
+var spawn_tick: int = 0
+var origin_x: float = 0.0
+var origin_y: float = 0.0
+var dir_x: float = 1.0
+var dir_y: float = 0.0
+var speed: float = 0.0
+var range_tiles: float = 0.0
+var lifetime_ticks: int = 0
+var radius_tiles: float = 0.15
+
+
+func elapsed_ticks_at(tick: int) -> int:
+	return tick - spawn_tick
+
+
+func distance_at_time(time_ticks: float) -> float:
+	var elapsed: float = time_ticks - float(spawn_tick)
+	if elapsed <= 0.0:
+		return 0.0
+	return speed * elapsed * SimConstants.TICK_DT
+
+
+func is_alive_at(tick: int) -> bool:
+	var elapsed := elapsed_ticks_at(tick)
+	if elapsed < 0 or elapsed >= lifetime_ticks:
+		return false
+	return distance_at_time(float(tick)) < range_tiles
+
+
+func position_at_time(time_ticks: float) -> SimVec2:
+	var elapsed: float = time_ticks - float(spawn_tick)
+	if elapsed < 0.0:
+		elapsed = 0.0
+	var dist: float = speed * elapsed * SimConstants.TICK_DT
+	return SimVec2.from_xy(origin_x + dir_x * dist, origin_y + dir_y * dist)
