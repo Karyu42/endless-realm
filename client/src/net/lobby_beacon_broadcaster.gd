@@ -5,14 +5,14 @@ extends RefCounted
 
 const INTERVAL_S: float = 1.0
 
-var settings: LobbySettings
+var settings: LobbyConfig
 var player_count: int = 1
 var _udp: PacketPeerUDP = PacketPeerUDP.new()
 var _ready: bool = false
 var _accum: float = 0.0
 
 
-func start(p_settings: LobbySettings, bind_host: String) -> Error:
+func start(p_settings: LobbyConfig, bind_host: String) -> Error:
 	settings = p_settings
 	var bind := bind_host
 	if bind == "*" or bind == "":

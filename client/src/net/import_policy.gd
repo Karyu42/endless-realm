@@ -1,9 +1,9 @@
 class_name ImportPolicy
 extends RefCounted
-## Host policy for character imports (vision §11.3 / §11.5).
+## STUB: client-side import-refusal rules (vision §11.3 / §11.5).
 ## Applied when importing a character, not when joining a lobby.
-## Codes go on the wire via the Server Engineer's protocol PR; this is the
-## client-side rule used by the settings UI until that API lands.
+## Test and settings-UI only until the Server Engineer's IMPORT_RESULT_
+## enum and import_character() hook land. Do not treat this as the wire API.
 
 const REJECTED_IMPORTS_OFF := "REJECTED_IMPORTS_OFF"
 const REJECTED_OFFLINE_OFF := "REJECTED_OFFLINE_OFF"

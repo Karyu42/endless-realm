@@ -16,7 +16,7 @@ var alpha: float = 0.0
 var mode: Mode = Mode.SOLO
 var lobby_host: LobbyHost
 var lobby_client: LobbyClient
-var lobby_settings: LobbySettings
+var lobby_config: LobbyConfig
 var beacon: LobbyBeaconBroadcaster
 ## New characters default to not played-offline (QA #28).
 var played_offline: bool = false
@@ -55,33 +55,39 @@ func start_solo() -> void:
 	_reset_snapshots()
 
 
-func start_host(settings: LobbySettings, bind_host: String = "*") -> Error:
+func start_host(cfg: LobbyConfig, bind_host: String = "*") -> Error:
 	_teardown_net()
-	lobby_settings = settings
-	if settings.join_code == "":
-		settings.join_code = LobbySettings.generate_join_code()
+	lobby_config = cfg
+	var hs = cfg.host_settings
+	if hs.join_code == "":
+		hs.join_code = LobbyConfig.generate_join_code()
 	var bind := bind_host
 	if bind == "*" or bind == "":
 		bind = "0.0.0.0"
 	lobby_host = LobbyHost.new(config)
-	lobby_host.port = settings.ws_port
+	lobby_host.port = cfg.ws_port
 	lobby_host.bind_address = bind
-	lobby_host.max_players = settings.max_players
-	lobby_host.instance_seed = settings.instance_seed
-	lobby_host.multiplier_m100 = int(round(settings.display_multiplier * 100.0))
+	lobby_host.max_players = hs.max_players
+	lobby_host.instance_seed = cfg.instance_seed
+	lobby_host.multiplier_m100 = int(round(cfg.display_multiplier * 100.0))
+	# TODO(host-settings): once LobbyHost.apply_settings / settings() land,
+	# call apply_settings on a real LobbySettings instead of copying fields.
 	var err: Error = lobby_host.start()
 	if err != OK:
 		lobby_host = null
 		start_solo()
 		return err
-	settings.ws_port = lobby_host.port
-	# Local yard view until LobbyHost can register the host player and share a snapshot.
+	cfg.ws_port = lobby_host.port
+	# TODO(host-view): once add_local_player / submit_local_input /
+	# remove_local_player, world_view(player_id) and the ticked signal land,
+	# the host arena should render from lobby_host.world_view(local_player_id)
+	# and this separate LocalSim should be dropped.
 	var sim := _new_sim()
 	mode = Mode.HOST
 	local_player_id = 1
 	source = HostWorldSource.new(lobby_host, sim)
 	beacon = LobbyBeaconBroadcaster.new()
-	if beacon.start(settings, bind) != OK:
+	if beacon.start(cfg, bind) != OK:
 		# Discovery is optional; the host still listens on WebSocket.
 		beacon = null
 	_reset_snapshots()
@@ -151,7 +157,8 @@ func _process(delta: float) -> void:
 	if lobby_host != null:
 		lobby_host.service()
 		if beacon != null:
-			beacon.player_count = 1 + lobby_host.players.size()
+			beacon.player_count = LobbyConfig.beacon_player_count(
+				lobby_host.players.size(), lobby_host.max_players)
 			beacon.poll(delta)
 	if source == null:
 		return

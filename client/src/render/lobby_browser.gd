@@ -1,13 +1,17 @@
 extends Control
 ## Lists LAN beacons and starts solo, host, or a join by code / IP:port.
 
+const HostSettings := preload("res://src/lobby/lobby_settings_stub.gd")
+
 var args: LobbyArgs
 var _client: LobbyClient
 var _pending_code: String = ""
+var _setup_error: String = ""
 
 
-func setup(p_args: LobbyArgs) -> void:
+func setup(p_args: LobbyArgs, error_text: String = "") -> void:
 	args = p_args
+	_setup_error = error_text
 	if args != null and args.join_code != "":
 		_pending_code = args.join_code
 		var join_edit: LineEdit = %JoinCodeEdit
@@ -19,6 +23,10 @@ func _ready() -> void:
 		args = LobbyArgs.new()
 	var max_edit: LineEdit = %MaxPlayersEdit
 	max_edit.text = str(LobbyHost.DEFAULT_MAX_PLAYERS)
+	var m_min: LineEdit = %M100MinEdit
+	m_min.text = str(HostSettings.M100_DEFAULT)
+	var m_max: LineEdit = %M100MaxEdit
+	m_max.text = str(HostSettings.M100_DEFAULT)
 	var allow_check: CheckBox = %AllowImportsCheck
 	allow_check.button_pressed = true
 	var offline_imports: CheckBox = %AllowOfflineImportsCheck
@@ -39,11 +47,13 @@ func _ready() -> void:
 	# stack.md: Android is join-only in v0.1 (desktop / --headless hosts).
 	if OS.has_feature("android"):
 		for n in [
-			%HostTitle, %NameEdit, %MaxPlayersEdit, %HostCodeEdit,
+			%HostTitle, %NameEdit, %MaxPlayersEdit, %M100MinEdit, %M100MaxEdit, %HostCodeEdit,
 			%AllowImportsCheck, %AllowOfflineImportsCheck, %BroadcastJoinCodeCheck, %HostButton
 		]:
 			n.visible = false
 	_refresh_list()
+	if _setup_error != "":
+		%StatusLabel.text = _setup_error
 	if _pending_code != "":
 		# Wait a couple of beacons for a matching LAN host.
 		get_tree().create_timer(1.5).timeout.connect(_try_pending_code)
@@ -54,7 +64,8 @@ func _refresh_list() -> void:
 	list.clear()
 	for lobby in _client.lobbies:
 		list.add_item(_format_lobby(lobby))
-	%StatusLabel.text = "%d lobby(s) on LAN" % _client.lobbies.size()
+	if _setup_error == "":
+		%StatusLabel.text = "%d lobby(s) on LAN" % _client.lobbies.size()
 
 
 func _format_lobby(info: Dictionary) -> String:
@@ -90,27 +101,35 @@ func _on_solo() -> void:
 
 
 func _on_host() -> void:
-	var settings := LobbySettings.new()
+	var cfg := LobbyConfig.new()
+	var hs = cfg.host_settings
 	var name_edit: LineEdit = %NameEdit
-	settings.lobby_name = name_edit.text.strip_edges()
-	if settings.lobby_name == "":
-		settings.lobby_name = "Practice Lobby"
+	hs.lobby_name = name_edit.text.strip_edges()
+	if hs.lobby_name == "":
+		hs.lobby_name = "Practice Lobby"
 	var host_max: LineEdit = %MaxPlayersEdit
-	if not settings.try_set_max_players(host_max.text):
+	if not hs.try_set_max_players(host_max.text):
 		%StatusLabel.text = "Max players must be an integer from 1 to 50."
 		return
+	if not hs.try_set_m100_min(%M100MinEdit.text) or not hs.try_set_m100_max(%M100MaxEdit.text):
+		%StatusLabel.text = "M range must be integers from 50 to 150 in steps of 5."
+		return
+	var reasons: PackedStringArray = hs.validate()
+	if not reasons.is_empty():
+		%StatusLabel.text = " ".join(reasons)
+		return
 	var host_imports: CheckBox = %AllowImportsCheck
-	settings.allow_imports = host_imports.button_pressed
+	hs.imports_allowed = host_imports.button_pressed
 	var host_offline: CheckBox = %AllowOfflineImportsCheck
-	settings.allow_offline_imports = host_offline.button_pressed
+	hs.offline_allowed = host_offline.button_pressed
 	var broadcast: CheckBox = %BroadcastJoinCodeCheck
-	settings.broadcast_join_code = broadcast.button_pressed
+	cfg.broadcast_join_code = broadcast.button_pressed
 	var host_code_edit: LineEdit = %HostCodeEdit
 	var code: String = host_code_edit.text.strip_edges().to_upper()
 	if code != "":
-		settings.join_code = code
-	settings.open_portals = [1.0] as Array[float]
-	var err: Error = GameSession.start_host(settings, "*")
+		hs.join_code = code
+	cfg.open_portals = [1.0] as Array[float]
+	var err: Error = GameSession.start_host(cfg, "*")
 	if err != OK:
 		%StatusLabel.text = "Could not host (error %d). Is the port in use?" % err
 		return

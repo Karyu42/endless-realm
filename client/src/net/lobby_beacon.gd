@@ -20,8 +20,10 @@ static func encode(info: Dictionary) -> PackedByteArray:
 		"port": int(info.get("port", DEFAULT_WS_PORT)),
 		"path": String(info.get("path", "/ws")),
 		"portals": info.get("portals", []),
-		"allow_imports": bool(info.get("allow_imports", true)),
-		"allow_offline_imports": bool(info.get("allow_offline_imports", true)),
+		"imports_allowed": bool(info.get("imports_allowed", info.get("allow_imports", true))),
+		"offline_allowed": bool(info.get("offline_allowed", info.get("allow_offline_imports", true))),
+		"m100_min": int(info.get("m100_min", 100)),
+		"m100_max": int(info.get("m100_max", 100)),
 	}
 	var out := PackedByteArray()
 	out.append_array(MAGIC.to_utf8_buffer())
@@ -56,8 +58,10 @@ static func decode(buf: PackedByteArray) -> Dictionary:
 		"port": int(d.get("port", DEFAULT_WS_PORT)),
 		"path": String(d.get("path", "/ws")),
 		"portals": portals,
-		"allow_imports": bool(d.get("allow_imports", true)),
-		"allow_offline_imports": bool(d.get("allow_offline_imports", true)),
+		"imports_allowed": bool(d.get("imports_allowed", d.get("allow_imports", true))),
+		"offline_allowed": bool(d.get("offline_allowed", d.get("allow_offline_imports", true))),
+		"m100_min": int(d.get("m100_min", 100)),
+		"m100_max": int(d.get("m100_max", 100)),
 		"preview": PortalPreview.select(portals),
 		"more": PortalPreview.overflow_count(portals.size()),
 	}

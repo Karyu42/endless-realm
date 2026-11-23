@@ -38,15 +38,27 @@ func test_lobby_client_hello_on_loopback() -> void:
 
 
 func test_max_players_is_rejected_not_clamped() -> void:
-	var settings := LobbySettings.new()
-	assert_false(settings.try_set_max_players(""))
-	assert_false(settings.try_set_max_players("0"))
-	assert_false(settings.try_set_max_players("51"))
-	assert_false(settings.try_set_max_players("x"))
-	assert_eq(settings.max_players, LobbyHost.DEFAULT_MAX_PLAYERS)
-	assert_true(settings.try_set_max_players("8"))
-	assert_eq(settings.max_players, 8)
-	assert_true(settings.try_set_max_players("1"))
-	assert_eq(settings.max_players, 1)
-	assert_true(settings.try_set_max_players("50"))
-	assert_eq(settings.max_players, 50)
+	var hs = preload("res://src/lobby/lobby_settings_stub.gd").new()
+	assert_false(hs.try_set_max_players(""))
+	assert_false(hs.try_set_max_players("0"))
+	assert_false(hs.try_set_max_players("51"))
+	assert_false(hs.try_set_max_players("x"))
+	assert_eq(hs.max_players, LobbyHost.DEFAULT_MAX_PLAYERS)
+	assert_true(hs.try_set_max_players("8"))
+	assert_eq(hs.max_players, 8)
+	assert_true(hs.try_set_max_players("1"))
+	assert_eq(hs.max_players, 1)
+	assert_true(hs.try_set_max_players("50"))
+	assert_eq(hs.max_players, 50)
+
+
+func test_host_settings_validate_rejects_bad_m_range() -> void:
+	var hs = preload("res://src/lobby/lobby_settings_stub.gd").new()
+	assert_eq(hs.validate().size(), 0)
+	hs.m100_min = 80
+	hs.m100_max = 90
+	var reasons: PackedStringArray = hs.validate()
+	assert_gt(reasons.size(), 0, "min 80 max 90 does not contain 100")
+	hs.m100_min = 50
+	hs.m100_max = 150
+	assert_eq(hs.validate().size(), 0)

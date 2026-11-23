@@ -29,15 +29,30 @@ remote client. LAN discovery is a UDP beacon (magic `ERLB`) on port **18080**.
 The WebSocket listen port defaults to **8080**, path `/ws`. The join code is
 only included in the beacon when the host opts in.
 
+Until the Server Engineer's host hooks land, this listen-host path is
+temporary: the host plays in a separate local `LocalSim`, remotes see the
+host's stand-in bullet world, joiners get an empty arena (snapshot
+replication is stubbed), and lobby settings are client-side stubs
+(`validate()` is shown in the UI; `LobbyHost.apply_settings` is not called
+yet). The beacon player count counts the listen host as one but never
+reports more than max, so a full lobby cannot show 51/50 before
+`add_local_player` exists.
+
 ## Host or join a lobby
 
 From the boot screen: **Play solo**, **Host**, join a listed LAN lobby, join by
 code, or join by `IP:port`. The host sets max players (1–50, default 50;
-values outside that range are rejected, not clamped). Import policy uses two
-settings (`allow_imports` / `allow_offline_imports`) with refusal codes
-`REJECTED_IMPORTS_OFF` and `REJECTED_OFFLINE_OFF`, applied when importing a
-character, not when joining. Android is join-only in v0.1 (desktop or
-`--headless -- --host`; a phone listen-host cap is a later follow-up).
+values outside that range are rejected, not clamped). `--max-players` and
+`ER_MAX_PLAYERS` are accepted; the flag wins. An invalid cap exits with
+code 2 when headless (same as `host_main`) and, with a display, shows the
+error and stays on the lobby browser instead of entering the solo arena.
+The allowed portal M range is an integer `m100` in [50, 150] step 5, with
+min <= 100 <= max; `validate()` reasons are shown in the UI. Import policy
+uses two settings (`imports_allowed` / `offline_allowed`) with refusal
+codes `REJECTED_IMPORTS_OFF` and `REJECTED_OFFLINE_OFF`, applied when
+importing a character, not when joining. Android is join-only in v0.1
+(desktop or `--headless -- --host`; a phone listen-host cap is a later
+follow-up).
 
 The same export can host headless:
 

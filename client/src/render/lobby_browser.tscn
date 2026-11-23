@@ -82,6 +82,18 @@ unique_name_in_owner = true
 layout_mode = 2
 placeholder_text = "Max players (1–50)"
 
+[node name="M100MinEdit" type="LineEdit" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Min M (m100, 50–150 step 5)"
+text = "100"
+
+[node name="M100MaxEdit" type="LineEdit" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Max M (m100, 50–150 step 5)"
+text = "100"
+
 [node name="HostCodeEdit" type="LineEdit" parent="Margin/Cols/Right"]
 unique_name_in_owner = true
 layout_mode = 2
@@ -90,12 +102,12 @@ placeholder_text = "Join code (blank = random)"
 [node name="AllowImportsCheck" type="CheckBox" parent="Margin/Cols/Right"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Allow character imports"
+text = "Imports allowed"
 
 [node name="AllowOfflineImportsCheck" type="CheckBox" parent="Margin/Cols/Right"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Allow offline-flagged imports"
+text = "Offline-flagged imports allowed"
 
 [node name="BroadcastJoinCodeCheck" type="CheckBox" parent="Margin/Cols/Right"]
 unique_name_in_owner = true

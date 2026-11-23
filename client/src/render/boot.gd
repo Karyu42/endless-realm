@@ -2,13 +2,34 @@ extends Control
 ## Entry scene: solo, listen-host, join, or a simple LAN lobby browser.
 ## Headless does not host unless `--host` is passed, so the CI smoke run
 ## (no user args) stays a quiet practice-yard boot.
+## An invalid `--max-players` / ER_MAX_PLAYERS exits 2 when headless (same
+## as host_main) and stays on the browser, with the error shown, when a
+## display is attached.
 
 
 func _ready() -> void:
 	var args := LobbyArgs.parse(OS.get_cmdline_user_args())
 	var headless := DisplayServer.get_name() == "headless" or OS.has_feature("headless")
 	if args.host:
-		_start_host(args)
+		var decision: Dictionary = LobbyArgs.plan_host(args, headless)
+		if not bool(decision["ok"]):
+			var err: String = String(decision["error"])
+			if headless:
+				printerr(err)
+				get_tree().quit(int(decision["exit_code"]))
+				return
+			_show_browser(args, err)
+			return
+		var cfg: LobbyConfig = decision["config"]
+		var start_err: Error = GameSession.start_host(cfg, args.bind_host)
+		if start_err != OK:
+			var listen_err := "HOST_ERROR listen failed: error %d" % start_err
+			if headless:
+				printerr(listen_err)
+				get_tree().quit(1)
+				return
+			_show_browser(args, listen_err)
+			return
 		if not headless:
 			_go_arena()
 		return
@@ -26,31 +47,10 @@ func _ready() -> void:
 	_show_browser(args)
 
 
-func _start_host(args: LobbyArgs) -> void:
-	var settings := LobbySettings.new()
-	settings.lobby_name = args.lobby_name
-	settings.ws_port = args.port
-	settings.bind_host = args.bind_host
-	settings.allow_imports = args.allow_imports
-	settings.allow_offline_imports = args.allow_offline_imports
-	settings.broadcast_join_code = args.broadcast_join_code
-	if args.join_code != "":
-		settings.join_code = args.join_code.to_upper()
-	if args.max_players_raw != "":
-		if not settings.try_set_max_players(args.max_players_raw):
-			push_warning("Max players must be an integer from 1 to 50, got %s" % args.max_players_raw)
-			return
-	if settings.open_portals.is_empty():
-		settings.open_portals = [1.0] as Array[float]
-	var err: Error = GameSession.start_host(settings, args.bind_host)
-	if err != OK:
-		push_warning("Failed to host on port %d (error %d)" % [settings.ws_port, err])
-
-
-func _show_browser(args: LobbyArgs) -> void:
+func _show_browser(args: LobbyArgs, error_text: String = "") -> void:
 	var browser: Control = preload("res://src/render/lobby_browser.tscn").instantiate() as Control
 	if browser.has_method("setup"):
-		browser.setup(args)
+		browser.setup(args, error_text)
 	add_child(browser)
 
 
