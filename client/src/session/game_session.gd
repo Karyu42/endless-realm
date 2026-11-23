@@ -1,6 +1,8 @@
 extends Node
 ## Autoload. Owns a WorldSource, steps it at 20 Hz, and exposes snapshots for
 ## render interpolation. Gameplay nodes emit input and read state only.
+## Solo play and a later player-hosted lobby both run LocalSim (plain
+## RefCounted game rules). This node is the session wrapper, not the sim.
 
 var config: SimConfig
 var source: WorldSource
@@ -23,8 +25,11 @@ func _ready() -> void:
 	config = load("res://resources/sim_config.tres") as SimConfig
 	if config == null:
 		config = SimConfig.new()
-	var sim := LocalSim.new(config, 16.0, 16.0)
+	var catalog := DataCatalog.load_default()
+	var sim := LocalSim.new(config, 16.0, 16.0, catalog)
 	sim.set_bounds(0.0, 0.0, 32.0, 32.0)
+	sim.set_world_seed(1)
+	sim.spawn_enemy("burrmite", 24.0, 10.0)
 	source = sim
 	curr_snapshot = source.snapshot()
 	prev_snapshot = curr_snapshot.duplicate_snapshot()
