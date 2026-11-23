@@ -155,12 +155,24 @@ func test_slipstep_blinks_in_move_or_aim_and_blocks_on_walls() -> void:
 	_act(walled, 1, true, false, 1.0, 0.0)
 	var r: float = walled.config().player_radius_tiles
 	assert_almost_eq(walled.snapshot().player_x, 16.0 - r, 1e-4)
-	# A blocking tile mid-path stops in the last free tile.
+	# A blocking tile mid-path stops at the last free point (just before x=11).
 	var tiled := _class_sim("driftrunner", 8.0, 8.0)
 	tiled.set_blocking_tile(11, 8, true)
 	_act(tiled, 1, true, false, 1.0, 0.0)
 	assert_lt(tiled.snapshot().player_x, 11.0)
-	assert_gt(tiled.snapshot().player_x, 10.0 - 1e-6)
+	assert_almost_eq(tiled.snapshot().player_x, 11.0 - SimConstants.MOVE_EPS, 1e-9)
+
+
+func test_slipstep_stops_on_a_diagonal_past_a_blocked_corner() -> void:
+	var sim := _class_sim("driftrunner", 8.5, 8.5)
+	sim.set_blocking_tile(10, 10, true)
+	_act(sim, 1, true, false, 1.0, 1.0)
+	assert_lt(sim.snapshot().player_x, 10.0)
+	assert_lt(sim.snapshot().player_y, 10.0)
+	assert_gt(sim.snapshot().player_x, 8.5)
+	assert_gt(sim.snapshot().player_y, 8.5)
+	assert_almost_eq(sim.snapshot().player_x, 10.0 - SimConstants.MOVE_EPS, 1e-9)
+	assert_almost_eq(sim.snapshot().player_y, 10.0 - SimConstants.MOVE_EPS, 1e-9)
 
 
 func test_slipstep_invuln_drops_damage_for_six_ticks() -> void:
@@ -211,6 +223,8 @@ func test_ability_rng_is_per_player_and_derived_from_instance_seed() -> void:
 	var a1: int = a.ability_rng_uint32(1)
 	var b1: int = b.ability_rng_uint32(1)
 	assert_eq(a1, b1, "same instance seed and player id")
+	# mix(42, 1, STREAM_DOMAIN=0x4142494C), then pcg32_init(..., 1).
+	assert_eq(a1, 3098369126, "golden first draw")
 	var a2: int = a.ability_rng_uint32(2)
 	assert_ne(a2, a1, "streams differ by player id")
 	# Reseeding the instance restores the stream.
@@ -233,3 +247,11 @@ func test_insufficient_focus_and_seq_zero_are_no_ops() -> void:
 	# The failed low-focus press already consumed seq 1; a new seq can cast.
 	_act(sim, 2, true)
 	assert_gt(sim.ward_ticks(pid), 0)
+
+
+func test_focus_defaults_to_zero_without_a_class() -> void:
+	var st := PlayerAbilityState.new()
+	assert_eq(st.focus_max(), 0)
+	assert_almost_eq(st.focus_regen(), 0.0, 0.0)
+	st.regen(SimConstants.TICK_DT)
+	assert_almost_eq(st.focus, 0.0, 0.0)

@@ -223,5 +223,49 @@ if class_ids:
                 f"(not in abilities.json)"
             )
 
+# Negative checks: each v0.1 ability must fail validation if an effect field is missing.
+_ABILITY_REQUIRED = {
+    "thorn_ward": ("duration_ticks", "damage_taken_mult"),
+    "kindle_pulse": ("cast_lock_ticks", "heal_radius_tiles", "heal_max_hp_frac"),
+    "slipstep": ("blink_tiles", "invuln_ticks"),
+}
+
+
+def _ability_schema_rejects_missing_fields():
+    schema = schema_dir / "abilities.schema.json"
+    pack = root / "abilities.json"
+    if not schema.exists() or not pack.exists():
+        return
+    import copy
+    import tempfile
+
+    doc = json.loads(pack.read_text(encoding="utf-8"))
+    found = {a.get("id") for a in doc.get("abilities") or [] if isinstance(a, dict)}
+    for aid, fields in _ABILITY_REQUIRED.items():
+        if aid not in found:
+            err(f"abilities.json: missing packed ability {aid!r}")
+            continue
+        for field in fields:
+            trial = copy.deepcopy(doc)
+            for a in trial.get("abilities") or []:
+                if isinstance(a, dict) and a.get("id") == aid:
+                    a.pop(field, None)
+                    break
+            with tempfile.TemporaryDirectory() as tmp:
+                path = pathlib.Path(tmp) / "abilities.json"
+                path.write_text(json.dumps(trial), encoding="utf-8")
+                r = subprocess.run(
+                    ["check-jsonschema", "--schemafile", str(schema), str(path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                if r.returncode == 0:
+                    err(
+                        f"abilities.schema.json: missing {aid}.{field} should fail validation"
+                    )
+
+
+_ability_schema_rejects_missing_fields()
+
 print(f"data-validate: {len(data_files)} data files, {len(schemas)} schemas, {errors} errors")
 sys.exit(1 if errors else 0)

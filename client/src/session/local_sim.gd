@@ -625,15 +625,12 @@ func _hurt_player(amount: int) -> bool:
 	var ast := _ability_of(_player_id)
 	if ast.invuln_ticks > 0:
 		return false
-	if ast.ward_ticks > 0:
-		var cut: float = 0.5
-		if ast.ability_def != null:
-			cut = ast.ability_def.damage_taken_mult
+	if ast.ward_ticks > 0 and ast.ability_def != null:
 		# vision §2: the cut multiplies final damage after mitigation and D.
 		# Incoming amounts are still raw until those land in _hurt_player.
-		amount = SimScaling.round_half_up(float(amount) * cut)
-		if amount < 1:
-			amount = 1
+		# The vision §3.2 "minimum of 1" applies after mitigation, which is
+		# not in this hook yet, so a product that rounds to 0 stays 0.
+		amount = SimScaling.round_half_up(float(amount) * ast.ability_def.damage_taken_mult)
 	_player_hp -= amount
 	if _player_hp < 0:
 		_player_hp = 0
@@ -1151,17 +1148,69 @@ func _clip_segment_t(start: float, dest: float, lo: float, hi: float, t_end: flo
 
 
 func _clip_blocked_tiles_t(sx: float, sy: float, ex: float, ey: float, t_end: float) -> float:
-	# March tile boundaries along the segment and stop at the first blocked tile.
-	var steps: int = 128
-	var last_ok: float = 0.0
-	for i in range(1, steps + 1):
-		var t: float = t_end * float(i) / float(steps)
-		var x: float = sx + (ex - sx) * t
-		var y: float = sy + (ey - sy) * t
-		# Nudge onto the incoming side of a boundary so floor() is stable.
-		if _tile_is_blocked(int(floor(x)), int(floor(y))):
-			return last_ok
-		last_ok = t
+	# Grid walk (DDA) along tile boundaries so a path that only clips a
+	# blocked tile's corner still stops at the last free point.
+	if t_end <= 0.0:
+		return 0.0
+	if _tile_is_blocked(int(floor(sx)), int(floor(sy))):
+		return 0.0
+	var dx: float = ex - sx
+	var dy: float = ey - sy
+	if abs(dx) <= SimConstants.MOVE_EPS and abs(dy) <= SimConstants.MOVE_EPS:
+		return t_end
+	var tx: int = int(floor(sx))
+	var ty: int = int(floor(sy))
+	var step_x: int = 0
+	if dx > SimConstants.MOVE_EPS:
+		step_x = 1
+	elif dx < -SimConstants.MOVE_EPS:
+		step_x = -1
+	var step_y: int = 0
+	if dy > SimConstants.MOVE_EPS:
+		step_y = 1
+	elif dy < -SimConstants.MOVE_EPS:
+		step_y = -1
+	var t_max_x: float = INF
+	var t_delta_x: float = INF
+	if step_x != 0:
+		var next_x: float = float(tx + (1 if step_x > 0 else 0))
+		t_max_x = (next_x - sx) / dx
+		t_delta_x = float(step_x) / dx
+		if t_max_x < 0.0:
+			t_max_x = 0.0
+	var t_max_y: float = INF
+	var t_delta_y: float = INF
+	if step_y != 0:
+		var next_y: float = float(ty + (1 if step_y > 0 else 0))
+		t_max_y = (next_y - sy) / dy
+		t_delta_y = float(step_y) / dy
+		if t_max_y < 0.0:
+			t_max_y = 0.0
+	while true:
+		var cross_x: bool = step_x != 0 and t_max_x <= t_max_y + SimConstants.MOVE_EPS
+		var cross_y: bool = step_y != 0 and t_max_y <= t_max_x + SimConstants.MOVE_EPS
+		if step_x == 0:
+			cross_x = false
+		if step_y == 0:
+			cross_y = false
+		if not cross_x and not cross_y:
+			return t_end
+		var t_hit: float = t_max_x if cross_x else t_max_y
+		if cross_x and cross_y:
+			t_hit = t_max_x
+		if t_hit > t_end + SimConstants.MOVE_EPS:
+			return t_end
+		var ntx: int = tx + (step_x if cross_x else 0)
+		var nty: int = ty + (step_y if cross_y else 0)
+		if _tile_is_blocked(ntx, nty):
+			# Stay on the free side of the boundary (floor(11.0) is tile 11).
+			return maxf(0.0, minf(t_end, t_hit) - SimConstants.MOVE_EPS)
+		tx = ntx
+		ty = nty
+		if cross_x:
+			t_max_x += t_delta_x
+		if cross_y:
+			t_max_y += t_delta_y
 	return t_end
 
 

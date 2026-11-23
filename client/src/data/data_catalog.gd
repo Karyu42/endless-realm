@@ -179,6 +179,14 @@ func unknown_reference_ids() -> PackedStringArray:
 			if not seen.has(def.ability_id):
 				ids.append(def.ability_id)
 				seen[def.ability_id] = true
+	for aid in abilities.keys():
+		var adef: AbilityDef = abilities[aid] as AbilityDef
+		if adef == null:
+			continue
+		for mid in adef.missing_effect_ids():
+			if not seen.has(mid):
+				ids.append(mid)
+				seen[mid] = true
 	return ids
 
 

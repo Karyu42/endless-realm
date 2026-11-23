@@ -10,23 +10,39 @@
       "type": "array",
       "minItems": 1,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "name", "class_id", "focus_cost", "cooldown_ticks"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 },
-          "class_id": { "type": "string", "minLength": 1 },
-          "focus_cost": { "type": "integer", "minimum": 0 },
-          "cooldown_ticks": { "type": "integer", "minimum": 0 },
-          "duration_ticks": { "type": "integer", "minimum": 0 },
-          "damage_taken_mult": { "type": "number", "minimum": 0 },
-          "cast_lock_ticks": { "type": "integer", "minimum": 0 },
-          "heal_radius_tiles": { "type": "number", "minimum": 0 },
-          "heal_max_hp_frac": { "type": "number", "minimum": 0, "maximum": 1 },
-          "blink_tiles": { "type": "number", "minimum": 0 },
-          "invuln_ticks": { "type": "integer", "minimum": 0 }
-        }
+        "allOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name", "class_id", "focus_cost", "cooldown_ticks"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "name": { "type": "string", "minLength": 1 },
+              "class_id": { "type": "string", "minLength": 1 },
+              "focus_cost": { "type": "integer", "minimum": 0 },
+              "cooldown_ticks": { "type": "integer", "minimum": 0 },
+              "duration_ticks": { "type": "integer", "minimum": 0 },
+              "damage_taken_mult": { "type": "number", "minimum": 0 },
+              "cast_lock_ticks": { "type": "integer", "minimum": 0 },
+              "heal_radius_tiles": { "type": "number", "minimum": 0 },
+              "heal_max_hp_frac": { "type": "number", "minimum": 0, "maximum": 1 },
+              "blink_tiles": { "type": "number", "minimum": 0 },
+              "invuln_ticks": { "type": "integer", "minimum": 0 }
+            }
+          },
+          {
+            "if": { "type": "object", "properties": { "id": { "const": "thorn_ward" } }, "required": ["id"] },
+            "then": { "required": ["duration_ticks", "damage_taken_mult"] }
+          },
+          {
+            "if": { "type": "object", "properties": { "id": { "const": "kindle_pulse" } }, "required": ["id"] },
+            "then": { "required": ["cast_lock_ticks", "heal_radius_tiles", "heal_max_hp_frac"] }
+          },
+          {
+            "if": { "type": "object", "properties": { "id": { "const": "slipstep" } }, "required": ["id"] },
+            "then": { "required": ["blink_tiles", "invuln_ticks"] }
+          }
+        ]
       }
     }
   }

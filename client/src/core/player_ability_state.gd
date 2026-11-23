@@ -4,6 +4,10 @@ extends RefCounted
 ## invuln, and a PCG32 stream). Keyed by player id so a later shared-world
 ## merge does not have to lift singletons off LocalSim.
 
+## Third mix_seed argument so this stream cannot overlap loot or wander.
+## ASCII "ABIL".
+const STREAM_DOMAIN: int = 0x4142494C
+
 var id: int = 0
 var ability_def: AbilityDef = null
 var class_def: ClassDef = null
@@ -14,11 +18,13 @@ var ward_ticks: int = 0
 var invuln_ticks: int = 0
 ## 0 means no ability press has been applied yet (Seq last == 0).
 var last_ability_seq: int = 0
+## Count of Kindle Pulse casts that actually healed an ally. Counts toward
+## boss eligibility (b); full wiring waits on the multiplayer LocalSim.
 var ally_ability_heals: int = 0
 var rng: PCG32 = PCG32.new(0, 1)
 
 
-## Stream is pcg32_init(mix(instance_seed, player_id), 1).
+## Stream is pcg32_init(mix(instance_seed, player_id, STREAM_DOMAIN), 1).
 func reseed(instance_seed: int, player_id: int) -> void:
 	id = player_id
 	rng = PCG32.new(_mix(instance_seed, player_id), 1)
@@ -40,8 +46,8 @@ func tick_clocks() -> void:
 
 
 func regen(dt: float) -> void:
-	# Regen is applied at the end of the tick, after a spend, so the same
-	# tick's regen cannot pay a cost. Design has not specified the order.
+	# Design confirmed: Focus regen is applied at the end of the tick, after
+	# a spend, so the same tick's regen cannot pay a cost.
 	var cap: float = float(focus_max())
 	focus = minf(cap, focus + focus_regen() * dt)
 
@@ -49,13 +55,13 @@ func regen(dt: float) -> void:
 func focus_max() -> int:
 	if class_def != null:
 		return class_def.focus
-	return 100
+	return 0
 
 
 func focus_regen() -> float:
 	if class_def != null:
 		return class_def.focus_regen
-	return 5.0
+	return 0.0
 
 
 func reset_for_class(c: ClassDef, a: AbilityDef) -> void:
@@ -71,5 +77,4 @@ func reset_for_class(c: ClassDef, a: AbilityDef) -> void:
 
 
 static func _mix(instance_seed: int, player_id: int) -> int:
-	# Same SplitMix-style mix as LocalSim._mix_seed / LootTables.mix_seed.
-	return LootTables.mix_seed(instance_seed, player_id, 0)
+	return LootTables.mix_seed(instance_seed, player_id, STREAM_DOMAIN)
