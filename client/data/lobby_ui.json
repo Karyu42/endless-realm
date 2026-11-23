@@ -49,5 +49,10 @@
     "REJECTED_BAD_SIGNATURE": "That character file couldn't be verified.",
     "REJECTED_ALREADY_EXISTS": "You already imported a character in this lobby.",
     "REJECTED_UNKNOWN_PLAYER": "You're not in this lobby."
+  },
+  "error_messages": {
+    "MULTIPLIER_NOT_ALLOWED": "This lobby doesn't allow that level multiplier.",
+    "INSTANCE_FULL": "That area is full right now. You can try again when someone leaves.",
+    "INSTANCE_NOT_FOUND": "That portal is no longer open."
   }
 }

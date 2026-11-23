@@ -38,6 +38,9 @@ var ability_pressed: bool = false
 ## Hits from the LocalSim tick that produced curr_snapshot, when the source is a LocalSim.
 var last_hits: Array[HitEvent] = []
 var last_hit_tick: int = -1
+## Packed portal / ErrorReply copy for the local player; empty when none.
+var portal_error_text: String = ""
+var portal_error_code: int = 0
 
 var _accum: float = 0.0
 var _seq: int = 0
@@ -82,6 +85,7 @@ func start_host(cfg: LobbyConfig, bind_host: String = "*") -> Error:
 		return settings_err
 	cfg.host_settings = lobby_host.settings()
 	lobby_host.settings_changed.connect(_on_host_settings_changed)
+	lobby_host.portal_rejected.connect(_on_host_portal_rejected)
 	var err: Error = lobby_host.start()
 	if err != OK:
 		lobby_host = null
@@ -198,6 +202,7 @@ func start_client(url: String, offline: bool = false, join_code: String = "") ->
 		start_solo()
 		return err
 	lobby_client.welcomed.connect(_on_client_welcomed)
+	lobby_client.error_received.connect(_on_client_portal_error)
 	mode = Mode.CLIENT
 	source = ClientWorldSource.new(lobby_client)
 	_reset_snapshots()
@@ -206,6 +211,36 @@ func start_client(url: String, offline: bool = false, join_code: String = "") ->
 
 func _on_client_welcomed(pid: int) -> void:
 	local_player_id = pid
+
+
+func _on_host_portal_rejected(player_id: int, code: int, _reason: String) -> void:
+	if player_id != local_player_id:
+		return
+	apply_portal_error(code)
+
+
+func _on_client_portal_error(code: int, _reason: String) -> void:
+	apply_portal_error(code)
+
+
+## Show packed copy for this ErrorCode and unlock interact so the player can retry.
+## Unknown codes are logged through DataCatalog and do not use a silent fallback.
+func apply_portal_error(code: int) -> String:
+	var ui := LobbyUiSettings.load_default()
+	if ui.maps_error(code):
+		portal_error_text = ui.error_message(code)
+	else:
+		DataCatalog.report_unknown_id(ErrorCodes.catalog_id(code))
+		portal_error_text = ""
+	portal_error_code = code
+	interact_pressed = false
+	interact_target_id = 0
+	return portal_error_text
+
+
+func clear_portal_error() -> void:
+	portal_error_text = ""
+	portal_error_code = 0
 
 
 func _new_sim() -> LocalSim:
@@ -236,12 +271,15 @@ func _reset_snapshots() -> void:
 
 
 func _teardown_net() -> void:
+	clear_portal_error()
 	if beacon != null:
 		beacon.stop()
 		beacon = null
 	if lobby_host != null:
 		if lobby_host.settings_changed.is_connected(_on_host_settings_changed):
 			lobby_host.settings_changed.disconnect(_on_host_settings_changed)
+		if lobby_host.portal_rejected.is_connected(_on_host_portal_rejected):
+			lobby_host.portal_rejected.disconnect(_on_host_portal_rejected)
 		lobby_host.stop()
 		lobby_host = null
 	local_join.reset()
