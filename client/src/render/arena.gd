@@ -13,6 +13,7 @@ var _hint_touch: bool = false
 
 
 func _ready() -> void:
+	push_error("QA probe: deliberate error to prove the Linux smoke ^ERROR gate (revert me)")
 	_shots = Node2D.new()
 	_shots.name = "Shots"
 	add_child(_shots)
