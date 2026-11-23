@@ -382,8 +382,8 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 		var f = msg.get_input()
 		var p := c.player
 		var seq: int = f.get_seq()
-		if seq <= p.seq:
-			return  # stale or duplicate
+		if not Seq.seq_is_next(seq, p.seq):
+			return  # stale or duplicate, including across the uint32 wrap
 		p.seq = seq
 		p.move_x = _finite_or_zero(f.get_move_x())
 		p.move_y = _finite_or_zero(f.get_move_y())

@@ -448,3 +448,65 @@ func TestInputForWanderSpreadsClientsAndKeepsStatic(t *testing.T) {
 		t.Fatalf("wander move length = %v, want 1", l)
 	}
 }
+
+func TestSeqNewer(t *testing.T) {
+	if seqNewer(5, 5) || seqNewer(4, 5) || !seqNewer(6, 5) {
+		t.Fatalf("in-range compares failed")
+	}
+	if !seqNewer(1, 0xFFFFFFFF) {
+		t.Fatalf("0xFFFFFFFF -> 1 should be newer")
+	}
+	// Difference of 2^31-1 is newer; 2^31 is not (the half-range boundary).
+	if !seqNewer(0x7FFFFFFE, 0xFFFFFFFF) {
+		t.Fatalf("2^31-1 ahead of 0xFFFFFFFF should be newer")
+	}
+	if seqNewer(0x7FFFFFFF, 0xFFFFFFFF) {
+		t.Fatalf("2^31 ahead of 0xFFFFFFFF should not be newer")
+	}
+	if seqNewer(0x80000000, 0) {
+		t.Fatalf("exactly 2^31 ahead of 0 should not be newer")
+	}
+	if !seqNewer(0x7FFFFFFF, 0) {
+		t.Fatalf("2^31-1 ahead of 0 should be newer")
+	}
+}
+
+func TestSeqIsNextTreatsLastZeroAsUninitialized(t *testing.T) {
+	if seqIsNext(0, 0) {
+		t.Fatalf("seq 0 is not a first seq")
+	}
+	if !seqIsNext(1, 0) || !seqIsNext(0x80000000, 0) || !seqIsNext(0xFFFFFFFF, 0) {
+		t.Fatalf("last 0 should accept any seq >= 1")
+	}
+	if seqIsNext(1, 1) {
+		t.Fatalf("equal seq is not next")
+	}
+	if !seqIsNext(1, 0xFFFFFFFF) {
+		t.Fatalf("1 after 0xFFFFFFFF should be next")
+	}
+}
+
+func TestSnapTrackerFollowsAppliedSeqAcrossWrap(t *testing.T) {
+	s := newSnapTracker(7)
+	s.note(&protocolv1.Snapshot{Tick: 10, Players: []*protocolv1.PlayerStub{{Id: 7, AppliedSeq: 0xFFFFFFFF}}})
+	if s.lastApplied != 0xFFFFFFFF {
+		t.Fatalf("lastApplied=%d, want 0xFFFFFFFF", s.lastApplied)
+	}
+	s.note(&protocolv1.Snapshot{Tick: 11, Players: []*protocolv1.PlayerStub{{Id: 7, AppliedSeq: 1}}})
+	if s.lastApplied != 1 {
+		t.Fatalf("lastApplied=%d after wrap, want 1", s.lastApplied)
+	}
+	s.note(&protocolv1.Snapshot{Tick: 12, Players: []*protocolv1.PlayerStub{{Id: 7, AppliedSeq: 0xFFFFFFFF}}})
+	if s.lastApplied != 1 {
+		t.Fatalf("resent pre-wrap applied_seq rolled lastApplied back to %d", s.lastApplied)
+	}
+	// Catch-up still holds when lastSeq has wrapped to 1 (slack 2).
+	if err := s.soakOK(10, 1); err != nil {
+		t.Fatalf("soakOK after wrap: %v", err)
+	}
+	// Far behind, even across the wrap, still fails.
+	s.lastApplied = 0xFFFFFF00
+	if err := s.soakOK(10, 1); err == nil {
+		t.Fatalf("soakOK should fail when applied_seq is more than slack behind")
+	}
+}

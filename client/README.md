@@ -111,8 +111,9 @@ Every practice-yard enemy is fixed at the data E: kills give normal
 `proto/v1.InputFrame.interact_target_id` is a uint64 entity id, not a boolean.
 Zero means none; a nonzero target is a press on that seq. `LobbyHost` queues
 presses from accepted inputs and evaluates them after movement using the
-host's position. Unknown / disallowed targets and targets beyond 2 tiles are
-silently dropped; the same seq cannot interact twice.
+host's position. Unknown / disallowed targets and targets beyond the accept range in
+`data/scaling.json` (`interact_accept_range_tiles`) are silently dropped;
+the same seq cannot interact twice, including across the uint32 wrap.
 
 The host has not wired the shared sim's interactables yet. For the loot work,
 set `host.interact_validator.resolver` to
