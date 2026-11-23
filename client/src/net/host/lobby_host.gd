@@ -261,10 +261,8 @@ func submit_local_input(player_id: int, intent: InputIntent) -> void:
 	var p := _find_player(player_id)
 	if p == null or not p.is_local or intent == null:
 		return
-	var target = intent.get("interact_target_id")
-	var ability = intent.get("ability_pressed")
 	_queue_input(p, intent.seq, intent.move_x, intent.move_y, intent.aim, intent.fire_held,
-			int(target) if target != null else 0, ability != null and bool(ability))
+			intent.interact_target_id, intent.ability_pressed)
 
 
 func remove_local_player(player_id: int) -> void:
@@ -661,8 +659,7 @@ func _step_sim() -> Array[PackedFloat64Array]:
 		if p.ability_pressed:
 			ability_presses += 1
 			# Field name matches InputIntent.ability_pressed (class abilities).
-			if "ability_pressed" in intent:
-				intent.set("ability_pressed", true)
+			intent.ability_pressed = true
 			p.ability_pressed = false  # one-shot
 		p.sim.submit_input(intent)
 		p.sim.step()

@@ -498,8 +498,7 @@ func test_ability_pressed_round_trips() -> void:
 
 func _ability_intent(seq: int, pressed: bool) -> InputIntent:
 	var it := InputIntent.from_raw(seq, 0.0, 0.0, 0.0, false)
-	if "ability_pressed" in it:
-		it.set("ability_pressed", pressed)
+	it.ability_pressed = pressed
 	return it
 
 
@@ -528,7 +527,7 @@ func test_ability_pressed_is_one_shot_per_seq() -> void:
 	_host.run_tick()
 	assert_eq(_host.ability_presses, 1)
 	# A press is kept if a later frame in the same tick does not repeat it.
-	press.call(2)
+	_host.submit_local_input(id, _ability_intent(2, true))
 	_host.submit_local_input(id, _ability_intent(3, false))
 	_host.run_tick()
 	assert_eq(_host.ability_presses, 2)
