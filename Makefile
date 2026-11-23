@@ -84,6 +84,11 @@ proto: $(PROTOC) $(TOOLS)/bin/protoc-gen-go
 		--go_opt=module=github.com/Karyu42/endless-realm/server \
 		proto/v1/protocol.proto
 
+# GDScript codecs for the Godot host (pinned generator, separate from the
+# Go `proto` target for now). See tools/proto/gen-gdscript-proto.sh.
+proto-gdscript:
+	GODOT="$(GODOT)" tools/proto/gen-gdscript-proto.sh
+
 # Fails if `make proto` would change or add committed files.
 proto-check: proto
 	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto server/internal/protocol/v1)" ]; then \
@@ -134,3 +139,15 @@ $(PROTOC):
 $(TOOLS)/bin/protoc-gen-go:
 	@mkdir -p $(TOOLS)/bin
 	GOBIN=$(TOOLS)/bin $(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+
+# Load test of the headless Godot lobby host (docs/tech/loadtest.md): 8, 25
+# and 50 Go bot clients, 60 s each. Override with LOADTEST_CLIENTS=8,50 and
+# LOADTEST_DURATION=30. Writes loadtest-results/results.{json,md}. Linux only.
+LOADTEST_CLIENTS  ?= 8,25,50
+LOADTEST_DURATION ?= 60
+LOADTEST_MAX_P99_MS ?= 40
+LOADTEST_MAX_SKIPPED_TICKS ?= 0
+loadtest-godot:
+	python3 tools/loadtest/godot_host_loadtest.py --godot "$(GODOT)" \
+		--clients $(LOADTEST_CLIENTS) --duration $(LOADTEST_DURATION) \
+		--max-p99-ms $(LOADTEST_MAX_P99_MS) --max-skipped-ticks $(LOADTEST_MAX_SKIPPED_TICKS)

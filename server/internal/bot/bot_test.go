@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -412,5 +413,38 @@ func (s *scriptedServer) handle(ctx context.Context, conn *websocket.Conn) {
 				return
 			}
 		}
+	}
+}
+
+func TestParseFlagsInputMode(t *testing.T) {
+	cfg, err := ParseFlags([]string{"-url=ws://x/ws"})
+	if err != nil || cfg.Input != InputStatic {
+		t.Fatalf("default input = %q, err %v; want %q", cfg.Input, err, InputStatic)
+	}
+	cfg, err = ParseFlags([]string{"-url=ws://x/ws", "-input=wander"})
+	if err != nil || cfg.Input != InputWander {
+		t.Fatalf("input = %q, err %v; want wander", cfg.Input, err)
+	}
+	if _, err := ParseFlags([]string{"-url=ws://x/ws", "-input=zigzag"}); err == nil {
+		t.Fatal("-input=zigzag: want error")
+	}
+}
+
+func TestInputForWanderSpreadsClientsAndKeepsStatic(t *testing.T) {
+	s := inputFor(InputStatic, 7, 3).GetInput()
+	if s.GetSeq() != 3 || s.GetMoveX() != 1 || s.GetMoveY() != 0 || !s.GetFireHeld() {
+		t.Fatalf("static input changed: %+v", s)
+	}
+	a := inputFor(InputWander, 0, 1).GetInput()
+	b := inputFor(InputWander, 1, 1).GetInput()
+	if a.GetSeq() != 1 || !a.GetFireHeld() {
+		t.Fatalf("wander input: %+v", a)
+	}
+	if a.GetMoveX() == b.GetMoveX() && a.GetMoveY() == b.GetMoveY() {
+		t.Fatal("wander: clients 0 and 1 got the same heading")
+	}
+	l := math.Hypot(float64(a.GetMoveX()), float64(a.GetMoveY()))
+	if math.Abs(l-1) > 1e-6 {
+		t.Fatalf("wander move length = %v, want 1", l)
 	}
 }
