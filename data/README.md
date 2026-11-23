@@ -6,7 +6,9 @@ and converted to radians (Godot 2D convention) at load. Distances are **tiles**.
 
 This pack has the practice-yard enemies `burrmite` (`burr_spit`) and
 `driftcap_spore` (`spore_ring`), class bases and the three v0.1 class
-abilities, vision scaling coefficients, and v0.1 loot tables.
+abilities, vision scaling coefficients, v0.1 loot tables, and a first tiny
+slice of **the Hollowmere Vault** (`data/dungeons/hollowmere_vault.json`,
+validated by `dungeons.schema.json`).
 The `fixture_gap_ring` pattern used only by golden tests (to cover PCG32
 `skip.start = "rng"`) lives in `fixtures/patterns/defs.json`, not in the
 shipped game pack. Names and numbers follow
@@ -14,6 +16,6 @@ shipped game pack. Names and numbers follow
 
 The Godot client ships a copy under [`client/data/`](../client/data/) so the
 JSON is packed into exports (`res://data`). `make sync-client-data` copies
-`data/*.json` there; `make data-validate` fails if the copies drift.
+`data/*.json` and `data/dungeons/*.json` there; `make data-validate` fails if the copies drift.
 
 The PCG32 seeding rule and fixture contract are in [`fixtures/README.md`](../fixtures/README.md).

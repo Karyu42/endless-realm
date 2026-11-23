@@ -15,7 +15,9 @@ The practice yard loads the shared pack from [`res://data/`](data/), a packed
 copy of repo-root [`data/`](../data/) (`make sync-client-data` keeps them
 equal). Editor and export both use that `res://` path, so the Burrmite and Driftcap Spore ship in the desktop and Android builds.
 A Burrmite wanders the yard and fires `burr_spit`. A rooted Driftcap Spore
-sits nearby and fires `spore_ring`.
+sits nearby and fires `spore_ring`. A Hollowmere Vault portal sits west of
+the start; E to enter uses the same interact path as loot (prompt 1.5 tiles,
+accept 2.0).
 
 There is no Godot MultiplayerAPI here and no RPCs for game state. Transport is
 `WebSocketPeer` / `TCPServer` only. Protocol v1 frames use the godobuf codec

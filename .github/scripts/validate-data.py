@@ -344,5 +344,80 @@ def _ability_schema_rejects_missing_fields():
 
 _ability_schema_rejects_missing_fields()
 
+# Dungeon spawn enemy ids must exist in enemies.json.
+enemy_ids = set()
+if enemies_path.exists():
+    if "enemies_doc" not in globals():
+        enemies_doc = json.loads(enemies_path.read_text(encoding="utf-8"))
+    enemy_ids = {
+        str(e.get("id"))
+        for e in enemies_doc.get("enemies") or []
+        if isinstance(e, dict) and e.get("id")
+    }
+dungeons_dir = root / "dungeons"
+if dungeons_dir.exists() and enemy_ids:
+    for path in sorted(dungeons_dir.glob("*.json")):
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        for room in doc.get("rooms") or []:
+            if not isinstance(room, dict):
+                continue
+            for spawn in room.get("spawns") or []:
+                if not isinstance(spawn, dict):
+                    continue
+                eid = spawn.get("enemy_id")
+                if eid and eid not in enemy_ids:
+                    err(
+                        f"{path}: spawn enemy_id {eid!r} is not in enemies.json"
+                    )
+
+# Negative checks: packed dungeon and practice portal fields are required.
+_DUNGEON_REQUIRED = ("id", "name", "base_level", "rooms", "corridors")
+_PRACTICE_PORTAL_REQUIRED = ("x", "y", "radius", "m100", "practice_base_level", "placeholder")
+
+
+def _dungeon_schema_rejects_missing():
+    schema = schema_dir / "dungeons.schema.json"
+    pack = root / "dungeons" / "hollowmere_vault.json"
+    if not schema.exists() or not pack.exists():
+        err("dungeons.schema.json or hollowmere_vault.json is missing")
+        return
+    import copy
+    import tempfile
+
+    doc = json.loads(pack.read_text(encoding="utf-8"))
+    for field in _DUNGEON_REQUIRED:
+        trial = copy.deepcopy(doc)
+        trial.pop(field, None)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "hollowmere_vault.json"
+            path.write_text(json.dumps(trial), encoding="utf-8")
+            r = subprocess.run(
+                ["check-jsonschema", "--schemafile", str(schema), str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if r.returncode == 0:
+                err(f"dungeons.schema.json: missing {field} should fail validation")
+    for field in _PRACTICE_PORTAL_REQUIRED:
+        trial = copy.deepcopy(doc)
+        portal = trial.get("practice_yard_portal")
+        if isinstance(portal, dict):
+            portal.pop(field, None)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "hollowmere_vault.json"
+            path.write_text(json.dumps(trial), encoding="utf-8")
+            r = subprocess.run(
+                ["check-jsonschema", "--schemafile", str(schema), str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if r.returncode == 0:
+                err(
+                    f"dungeons.schema.json: missing practice_yard_portal.{field} should fail validation"
+                )
+
+
+_dungeon_schema_rejects_missing()
+
 print(f"data-validate: {len(data_files)} data files, {len(schemas)} schemas, {errors} errors")
 sys.exit(1 if errors else 0)

@@ -129,11 +129,13 @@ func _new_sim() -> LocalSim:
 	sim.apply_class_motion()
 	# Practice yard: every enemy is fixed at the data E (killXP(1), Glint 1, T* = 0).
 	sim.set_practice_yard(true)
+	sim.set_lobby_settings(LobbySettings.new())
 	var yard_e: int = 1
 	if catalog != null and catalog.scaling != null:
 		yard_e = catalog.scaling.practice_yard_content_level
 	sim.spawn_enemy("burrmite", 24.0, 10.0, yard_e)
 	sim.spawn_enemy("driftcap_spore", 24.0, 20.0, yard_e)
+	sim.spawn_practice_portal("hollowmere_vault")
 	return sim
 
 
@@ -184,6 +186,7 @@ func _process(delta: float) -> void:
 		ability_pressed = false
 		source.submit_input(intent)
 		source.step()
+		_apply_solo_transfers()
 		prev_snapshot = curr_snapshot
 		curr_snapshot = source.snapshot()
 	# If we hit the catch-up cap, drop leftover time so the sim does not spiral.
@@ -239,3 +242,42 @@ func interpolated_aim() -> float:
 	var b: float = curr_snapshot.player_aim
 	var diff: float = fposmod(b - a + PI, TAU) - PI
 	return a + diff * alpha
+
+
+func _apply_solo_transfers() -> void:
+	var sim := source as LocalSim
+	if sim == null:
+		return
+	var transfers := sim.take_pending_transfers()
+	if transfers.is_empty():
+		return
+	# Solo play has one local player; take the first transfer this tick.
+	_switch_solo_instance(sim, transfers[0])
+
+
+func _switch_solo_instance(old: LocalSim, xfer: PortalTransfer) -> void:
+	var player := old.get_player(xfer.player_id)
+	if player == null:
+		return
+	var carry := PlayerCarry.from_sim(player, old.ability_state(xfer.player_id))
+	var next: LocalSim
+	if xfer.kind == PortalTransfer.KIND_ENTER:
+		next = _new_dungeon_sim(xfer)
+	else:
+		next = _new_sim()
+	next.apply_carried_player(carry, xfer.arrival_x, xfer.arrival_y)
+	source = next
+
+
+func _new_dungeon_sim(xfer: PortalTransfer) -> LocalSim:
+	if catalog == null:
+		catalog = DataCatalog.load_default()
+	var def: DungeonDef = catalog.dungeon(xfer.dungeon_id)
+	var sim := LocalSim.new(config, xfer.arrival_x, xfer.arrival_y, catalog)
+	if def != null:
+		sim.configure_dungeon(
+			def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
+			xfer.opener_id, xfer.opener_lp
+		)
+	return sim
+

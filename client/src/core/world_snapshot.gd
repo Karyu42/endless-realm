@@ -32,6 +32,7 @@ var ability_cooldown_ticks: int = 0
 var ability_cooldown_max: int = 0
 var ward_ticks: int = 0
 var invuln_ticks: int = 0
+var portals: Array[PortalSnapshot] = []
 
 
 func player_pixels() -> Vector2:
@@ -77,4 +78,5 @@ func duplicate_snapshot() -> WorldSnapshot:
 	copy.ability_cooldown_max = ability_cooldown_max
 	copy.ward_ticks = ward_ticks
 	copy.invuln_ticks = invuln_ticks
+	copy.portals = portals.duplicate()
 	return copy

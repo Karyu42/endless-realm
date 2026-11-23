@@ -91,3 +91,18 @@ func test_missing_slipstep_invuln_is_reported() -> void:
 	assert_true("slipstep.invuln_ticks" in ids)
 	catalog.report_unknown_ids()
 	assert_push_error("DataCatalog: unknown id slipstep.invuln_ticks")
+
+
+func test_packed_data_loads_hollowmere_vault() -> void:
+	assert_true(FileAccess.file_exists("res://data/dungeons/hollowmere_vault.json"))
+	var catalog := DataCatalog.load_default()
+	var vault := catalog.dungeon("hollowmere_vault")
+	assert_not_null(vault, "hollowmere_vault must load from res://data/dungeons")
+	assert_eq(vault.base_level, 10)
+	assert_eq(vault.rooms.size(), 3)
+	assert_eq(int(vault.practice_yard_portal["practice_base_level"]), 1)
+	assert_eq(catalog.scaling.portal_m100_min, 50)
+	assert_eq(catalog.scaling.portal_m100_max, 150)
+	assert_eq(catalog.scaling.portal_m100_step, 5)
+	assert_eq(catalog.unknown_reference_ids().size(), 0)
+

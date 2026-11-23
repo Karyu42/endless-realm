@@ -25,10 +25,12 @@ static func load_from(data_dir: String) -> DataCatalog:
 	cat.enemies = {}
 	cat.classes = {}
 	cat.abilities = {}
+	cat.dungeons = {}
 	cat._load_patterns(data_dir.path_join("patterns.json"))
 	cat._load_enemies(data_dir.path_join("enemies.json"))
 	cat._load_classes(data_dir.path_join("classes.json"))
 	cat._load_abilities(data_dir.path_join("abilities.json"))
+	cat._load_dungeons(data_dir.path_join("dungeons"))
 	cat.scaling = SimScaling.from_json(DataCatalog._read_json(data_dir.path_join("scaling.json")))
 	cat.loot = LootTables.from_json(DataCatalog._read_json(data_dir.path_join("loot.json")))
 	cat.report_unknown_ids()
@@ -39,6 +41,7 @@ var patterns: Dictionary = {} # String -> PatternDef
 var enemies: Dictionary = {} # String -> EnemyDef
 var classes: Dictionary = {} # String -> ClassDef
 var abilities: Dictionary = {} # String -> AbilityDef
+var dungeons: Dictionary = {} # String -> DungeonDef
 var scaling: SimScaling = SimScaling.new()
 var loot: LootTables = LootTables.new()
 
@@ -62,6 +65,10 @@ func class_def(id: String) -> ClassDef:
 
 func ability(id: String) -> AbilityDef:
 	return abilities.get(id, null) as AbilityDef
+
+
+func dungeon(id: String) -> DungeonDef:
+	return dungeons.get(id, null) as DungeonDef
 
 
 func _load_patterns(path: String) -> void:
@@ -114,6 +121,23 @@ func _load_abilities(path: String) -> void:
 				var a := AbilityDef.from_json(item)
 				if a.id != "":
 					abilities[a.id] = a
+
+
+func _load_dungeons(dir_path: String) -> void:
+	var da := DirAccess.open(dir_path)
+	if da == null:
+		return
+	da.list_dir_begin()
+	var fn := da.get_next()
+	while fn != "":
+		if not da.current_is_dir() and fn.ends_with(".json"):
+			var d := _read_json(dir_path.path_join(fn))
+			if not d.is_empty():
+				var def := DungeonDef.from_json(d)
+				if def.id != "":
+					dungeons[def.id] = def
+		fn = da.get_next()
+	da.list_dir_end()
 
 
 static func _read_json(path: String) -> Dictionary:
@@ -207,6 +231,30 @@ func unknown_reference_ids() -> PackedStringArray:
 			if not seen.has(mid):
 				ids.append(mid)
 				seen[mid] = true
+	if scaling != null:
+		for mid in scaling.missing_pack_ids():
+			if not seen.has(mid):
+				ids.append(mid)
+				seen[mid] = true
+	for did in dungeons.keys():
+		var ddef: DungeonDef = dungeons[did] as DungeonDef
+		if ddef == null:
+			continue
+		for mid in ddef.missing_pack_ids():
+			if not seen.has(mid):
+				ids.append(mid)
+				seen[mid] = true
+		for room in ddef.rooms:
+			var spawns: Variant = room.get("spawns", [])
+			if not (spawns is Array):
+				continue
+			for spawn in spawns:
+				if not (spawn is Dictionary):
+					continue
+				var eid: String = String(spawn.get("enemy_id", ""))
+				if eid != "" and not enemies.has(eid) and not seen.has(eid):
+					ids.append(eid)
+					seen[eid] = true
 	return ids
 
 

@@ -55,6 +55,16 @@ var _practice_yard: bool = false
 var _ability_by_player: Dictionary = {}
 ## Test / later dungeon walls: tile (tx, ty) -> true is blocking for Slipstep.
 var _blocking_tiles: Dictionary = {}
+var _portals: Array[PortalSnapshot] = []
+var _pending_transfers: Array[PortalTransfer] = []
+var _dungeon: DungeonDef = null
+var _instance_base_level: int = 0
+var _instance_content_level: int = 0
+var _opener_id: int = 0
+var _opener_lp: int = 0
+var _room_activated: Dictionary = {} # room id -> true
+var _exit_spawned: bool = false
+var _lobby_settings: LobbySettings = null
 
 
 func _init(config: SimConfig = null, start_x: float = 0.0, start_y: float = 0.0, catalog: DataCatalog = null) -> void:
@@ -319,6 +329,7 @@ func step() -> void:
 	# Focus regen is at the end of the tick, after any spend.
 	_regen_focus()
 	_expire_ground_drops(sim_tick)
+	_activate_rooms()
 	for id in _sorted_ids:
 		var p: SimPlayerState = _players[id]
 		_apply_interact(p, sim_tick)
@@ -327,6 +338,7 @@ func step() -> void:
 	_cull_projectiles(sim_tick)
 	_cull_pattern_bullets(sim_tick)
 	_cull_enemies()
+	_maybe_spawn_exit()
 	_tick += 1
 
 
@@ -387,6 +399,7 @@ func world_view(player_id: int) -> WorldSnapshot:
 		es.flash_ticks = e.flash_ticks
 		enemy_snaps.append(es)
 	snap.enemies = enemy_snaps
+	snap.portals = _portals.duplicate()
 	var plist: Array[PlayerSnapshot] = []
 	for id in _sorted_ids:
 		var p: SimPlayerState = _players[id]
@@ -944,6 +957,159 @@ func is_practice_yard() -> bool:
 	return _practice_yard
 
 
+func set_lobby_settings(settings: LobbySettings) -> void:
+	_lobby_settings = settings
+
+
+## True when m100 is in the packed [50, 150] step-5 window and the lobby range.
+func m100_allowed(m100: int) -> bool:
+	if not _scaling.is_valid_m100(m100):
+		return false
+	if _lobby_settings == null:
+		return false
+	return _lobby_settings.allows_m100(m100)
+
+
+func add_portal(portal: PortalSnapshot) -> void:
+	if portal != null:
+		_portals.append(portal)
+
+
+func defeat_all_enemies() -> void:
+	for e in _enemies:
+		e.hp = 0
+		e.alive = false
+
+
+func instance_content_level() -> int:
+	return _instance_content_level
+
+
+func instance_base_level() -> int:
+	return _instance_base_level
+
+
+func instance_m100() -> int:
+	return _instance_m100
+
+
+func dungeon_id() -> String:
+	return _dungeon.id if _dungeon != null else ""
+
+
+func take_pending_transfers() -> Array[PortalTransfer]:
+	var out: Array[PortalTransfer] = _pending_transfers.duplicate()
+	_pending_transfers.clear()
+	return out
+
+
+func portal_by_id(id: int) -> PortalSnapshot:
+	for portal in _portals:
+		if portal.id == id:
+			return portal
+	return null
+
+
+func derived_instance_seed(portal_id: int, enter_tick: int) -> int:
+	return _mix_seed(_world_seed, portal_id, enter_tick)
+
+
+## Place the packed practice-yard entrance (found-portal rules, M locked at creation).
+func spawn_practice_portal(dungeon_id: String) -> int:
+	if _catalog == null:
+		return 0
+	var def: DungeonDef = _catalog.dungeon(dungeon_id)
+	if def == null or def.practice_yard_portal.is_empty():
+		return 0
+	var src: Dictionary = def.practice_yard_portal
+	var portal := PortalSnapshot.new()
+	portal.id = _alloc_id()
+	portal.x = float(src["x"])
+	portal.y = float(src["y"])
+	portal.radius = float(src["radius"])
+	portal.kind = PortalSnapshot.KIND_ENTER
+	portal.dungeon_id = def.id
+	portal.dungeon_name = def.name
+	portal.m100 = int(src["m100"])
+	var practice_base: int = int(src["practice_base_level"])
+	portal.base_level = practice_base
+	portal.content_level = _scaling.portal_content_level(practice_base, portal.m100)
+	_portals.append(portal)
+	return portal.id
+
+
+## Turn this sim into a dungeon instance. Call on a fresh LocalSim.
+func configure_dungeon(
+	def: DungeonDef,
+	seed: int,
+	m100: int,
+	base_level: int,
+	content_level: int,
+	opener_id: int,
+	opener_lp: int
+) -> void:
+	_dungeon = def
+	_practice_yard = false
+	_in_portal = true
+	_instance_m100 = m100
+	_instance_base_level = base_level
+	_instance_content_level = content_level
+	_opener_id = opener_id
+	_opener_lp = opener_lp
+	_room_activated.clear()
+	_exit_spawned = false
+	_portals.clear()
+	_enemies.clear()
+	_projectiles.clear()
+	_pattern_bullets.clear()
+	_ground_drops.clear()
+	_granted_drop_ids.clear()
+	_blocking_tiles.clear()
+	set_world_seed(seed)
+	if def != null:
+		var r := def.bounds_rect()
+		set_bounds(r.position.x, r.position.y, r.position.x + r.size.x, r.position.y + r.size.y)
+		_build_dungeon_walls(def)
+		_spawn_boss_placeholders(def)
+
+
+## Copy a character into this instance at (x, y) after a portal transfer.
+func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
+	if carry == null:
+		return
+	var p: SimPlayerState = _players.get(carry.player_id, null) as SimPlayerState
+	if p == null:
+		return
+	if carry.class_id != "":
+		_set_player_class_on(p, carry.class_id, false)
+	p.level = carry.level
+	p.xp_tenths = carry.xp_tenths
+	p.pending_glint = carry.pending_glint
+	p.aim = carry.aim
+	p.x = x
+	p.y = y
+	p.prev_x = x
+	p.prev_y = y
+	p.last_interact_seq = carry.last_interact_seq
+	if carry.inventory != null:
+		p.inventory = carry.inventory
+	_recompute_player_stats(p, false)
+	if carry.hp > 0:
+		p.hp = mini(carry.hp, _current_max_hp(p))
+	if carry.ability != null:
+		var st := _ability_of(p.id)
+		st.class_def = carry.ability.class_def
+		st.ability_def = carry.ability.ability_def
+		st.focus = carry.ability.focus
+		st.cooldown_ticks = carry.ability.cooldown_ticks
+		st.cast_lock_ticks = carry.ability.cast_lock_ticks
+		st.ward_ticks = carry.ability.ward_ticks
+		st.invuln_ticks = carry.ability.invuln_ticks
+		st.last_ability_seq = carry.ability.last_ability_seq
+		st.ally_ability_heals = carry.ability.ally_ability_heals
+		st.reseed(_world_seed, p.id)
+
+
 func player_max_hp() -> int:
 	var p := _default_player()
 	return _current_max_hp(p) if p != null else 0
@@ -1027,11 +1193,11 @@ func _current_max_hp(p: SimPlayerState) -> int:
 
 
 func _player_le(p: SimPlayerState) -> int:
-	# Practice yard and the Wilds use Lp (vision §3.2a). Portals sync down later.
-	if not _in_portal:
-		return p.level
-	# Without an instance E, treat as Wilds; set_in_portal is for later portal instances.
-	return p.level
+	# Practice yard and the Wilds use Lp (vision §3.2a). Inside a portal,
+	# Le = min(Lp, E + sync_plus) (vision §6.1).
+	if p == null:
+		return 1
+	return _scaling.effective_level(p.level, _instance_content_level, _in_portal)
 
 
 func _apply_max_hp_delta(p: SimPlayerState, old_max: int) -> void:
@@ -1149,6 +1315,10 @@ func _bag_by_id(id: int) -> GroundDrop:
 		if bag.id == id:
 			return bag
 	return null
+
+
+func ability_state(player_id: int) -> PlayerAbilityState:
+	return _ability_of(player_id)
 
 
 func _ability_of(player_id: int) -> PlayerAbilityState:
@@ -1445,12 +1615,12 @@ func _tile_is_blocked(tx: int, ty: int) -> bool:
 	return false
 
 
-func _apply_interact(p: SimPlayerState, _sim_tick: int) -> void:
+func _apply_interact(p: SimPlayerState, sim_tick: int) -> void:
 	# InputFrame.interact_target_id: 0 means none. A nonzero value is a
 	# press on this seq, applied at most once per seq via Seq.seq_is_next
 	# (same rule as HostInteractValidator). Unknown ids, bags the player
-	# may not use, and targets beyond SimScaling.in_accept_range are
-	# dropped silently, with no ErrorReply.
+	# may not use, portals that fail the join floor, and targets beyond
+	# SimScaling.in_accept_range are dropped silently, with no ErrorReply.
 	var target_id: int = p.intent.interact_target_id
 
 	if target_id == 0:
@@ -1459,14 +1629,15 @@ func _apply_interact(p: SimPlayerState, _sim_tick: int) -> void:
 		return
 	p.last_interact_seq = p.intent.seq
 	var bag := _bag_by_id(target_id)
-	if not _live_own_bag(p, bag):
+	if _live_own_bag(p, bag):
+		if not _scaling.in_accept_range(_bag_distance(p, bag)):
+			return
+		if p.inventory.is_full():
+			return
+		if p.inventory.add(bag.item):
+			_ground_drops.erase(bag)
 		return
-	if not _scaling.in_accept_range(_bag_distance(p, bag)):
-		return
-	if p.inventory.is_full():
-		return
-	if p.inventory.add(bag.item):
-		_ground_drops.erase(bag)
+	_try_portal_enter(p, target_id, sim_tick)
 
 
 func _apply_inventory_hotkey(p: SimPlayerState) -> void:
@@ -1513,6 +1684,157 @@ func _apply_pending_roster() -> void:
 		_rebuild_ids()
 		if not _players.has(_player_id):
 			_player_id = _sorted_ids[0] if not _sorted_ids.is_empty() else 0
+
+
+func _try_portal_enter(p: SimPlayerState, target_id: int, sim_tick: int) -> void:
+	var portal := portal_by_id(target_id)
+	if portal == null or not portal.is_interactable():
+		return
+	var dist: float = SimConstants.interact_distance(p.x, p.y, portal.x, portal.y)
+	if not _scaling.in_accept_range(dist):
+		return
+	if portal.kind == PortalSnapshot.KIND_ENTER:
+		if not m100_allowed(portal.m100):
+			return
+		if _scaling.below_join_floor(p.level, portal.content_level):
+			return
+		var def: DungeonDef = null
+		if _catalog != null:
+			def = _catalog.dungeon(portal.dungeon_id)
+		if def == null:
+			return
+		var arrival := def.arrival_point()
+		var xfer := PortalTransfer.new()
+		xfer.kind = PortalTransfer.KIND_ENTER
+		xfer.player_id = p.id
+		xfer.portal_id = portal.id
+		xfer.dungeon_id = portal.dungeon_id
+		xfer.seed = derived_instance_seed(portal.id, sim_tick)
+		xfer.m100 = portal.m100
+		xfer.base_level = portal.base_level
+		xfer.content_level = portal.content_level
+		xfer.opener_id = p.id
+		xfer.opener_lp = p.level
+		xfer.arrival_x = arrival.x
+		xfer.arrival_y = arrival.y
+		_pending_transfers.append(xfer)
+		return
+	if portal.kind == PortalSnapshot.KIND_EXIT:
+		var xfer := PortalTransfer.new()
+		xfer.kind = PortalTransfer.KIND_EXIT
+		xfer.player_id = p.id
+		xfer.portal_id = portal.id
+		xfer.dungeon_id = portal.dungeon_id
+		xfer.arrival_x = 16.0
+		xfer.arrival_y = 16.0
+		_pending_transfers.append(xfer)
+
+
+func _activate_rooms() -> void:
+	if _dungeon == null:
+		return
+	for room in _dungeon.rooms:
+		var rid: String = String(room.get("id", ""))
+		if rid == "" or _room_activated.has(rid):
+			continue
+		var entered: bool = false
+		for id in _sorted_ids:
+			var p: SimPlayerState = _players[id]
+			if p.hp > 0 and _dungeon.room_contains(room, p.x, p.y):
+				entered = true
+				break
+		if not entered:
+			continue
+		_room_activated[rid] = true
+		var spawns: Variant = room.get("spawns", [])
+		if not (spawns is Array):
+			continue
+		for spawn in spawns:
+			if not (spawn is Dictionary):
+				continue
+			var eid: String = String(spawn.get("enemy_id", ""))
+			if eid == "":
+				continue
+			spawn_enemy(eid, float(spawn["x"]), float(spawn["y"]), _instance_content_level)
+
+
+func _maybe_spawn_exit() -> void:
+	if _dungeon == null or _exit_spawned:
+		return
+	for room in _dungeon.rooms:
+		var spawns: Variant = room.get("spawns", [])
+		if not (spawns is Array) or (spawns as Array).is_empty():
+			continue
+		var rid: String = String(room.get("id", ""))
+		if not _room_activated.has(rid):
+			return
+	for e in _enemies:
+		if e.alive:
+			return
+	for room in _dungeon.rooms:
+		if not room.has("exit_portal"):
+			continue
+		var src: Variant = room["exit_portal"]
+		if not (src is Dictionary):
+			continue
+		var portal := PortalSnapshot.new()
+		portal.id = _alloc_id()
+		portal.x = float(src["x"])
+		portal.y = float(src["y"])
+		portal.radius = float(src["radius"])
+		portal.kind = PortalSnapshot.KIND_EXIT
+		portal.dungeon_id = _dungeon.id
+		portal.dungeon_name = _dungeon.name
+		portal.m100 = _instance_m100
+		portal.base_level = _instance_base_level
+		portal.content_level = _instance_content_level
+		_portals.append(portal)
+		_exit_spawned = true
+		return
+
+
+func _spawn_boss_placeholders(def: DungeonDef) -> void:
+	for room in def.rooms:
+		if not room.has("boss_placeholder"):
+			continue
+		var src: Variant = room["boss_placeholder"]
+		if not (src is Dictionary):
+			continue
+		var mark := PortalSnapshot.new()
+		mark.id = _alloc_id()
+		mark.x = float(src["x"])
+		mark.y = float(src["y"])
+		mark.radius = 0.6
+		mark.kind = PortalSnapshot.KIND_PLACEHOLDER
+		mark.dungeon_id = def.id
+		mark.dungeon_name = def.name
+		mark.marker_id = String(src.get("id", ""))
+		mark.marker_name = String(src.get("name", ""))
+		_portals.append(mark)
+
+
+func _build_dungeon_walls(def: DungeonDef) -> void:
+	var r := def.bounds_rect()
+	var min_tx: int = int(floor(r.position.x))
+	var min_ty: int = int(floor(r.position.y))
+	var max_tx: int = int(ceil(r.position.x + r.size.x))
+	var max_ty: int = int(ceil(r.position.y + r.size.y))
+	for ty in range(min_ty, max_ty):
+		for tx in range(min_tx, max_tx):
+			var cx: float = float(tx) + 0.5
+			var cy: float = float(ty) + 0.5
+			if not _dungeon_walkable(def, cx, cy):
+				_blocking_tiles[Vector2i(tx, ty)] = true
+
+
+func _dungeon_walkable(def: DungeonDef, x: float, y: float) -> bool:
+	for room in def.rooms:
+		if def.room_contains(room, x, y):
+			return true
+	for corridor in def.corridors:
+		if def.room_contains(corridor, x, y):
+			return true
+	return false
 
 
 func _rebuild_ids() -> void:
