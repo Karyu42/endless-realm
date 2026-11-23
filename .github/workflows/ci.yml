@@ -394,14 +394,31 @@ jobs:
         with:
           # Godot 4.7.2's Android template targets SDK 36 (min 24); match build-tools to it.
           packages: platform-tools build-tools;36.0.0 platforms;android-36
+      # Debug signing only (release keys are a separate, later decision). Same-repo
+      # PRs and pushes get the fixed repo-secret key, so successive APKs install
+      # over each other. Fork PRs get an empty secret and fall back to an
+      # ephemeral key. This workflow has no pull_request_target trigger.
       - name: Debug keystore + Godot Android editor settings
         if: steps.inputs.outputs.present == 'true' && matrix.target == 'android'
+        env:
+          ANDROID_DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
         run: |
           set -euo pipefail
           ks="${RUNNER_TEMP}/debug.keystore"
-          keytool -genkeypair -v -keystore "$ks" -storepass android -keypass android \
-            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+          if [ -n "${ANDROID_DEBUG_KEYSTORE_B64:-}" ]; then
+            printf '%s' "$ANDROID_DEBUG_KEYSTORE_B64" | base64 -d > "$ks"
+            chmod 600 "$ks"
+            keytool -list -keystore "$ks" -storepass android -alias androiddebugkey >/dev/null \
+              || { echo "::error::ANDROID_DEBUG_KEYSTORE_B64 is not a keystore with alias androiddebugkey"; exit 1; }
+            echo "FIXED_DEBUG_KEY=true" >> "$GITHUB_ENV"
+            echo "Debug signing: fixed repo-secret keystore"
+          else
+            keytool -genkeypair -keystore "$ks" -storepass android -keypass android \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null
+            echo "FIXED_DEBUG_KEY=false" >> "$GITHUB_ENV"
+            echo "::notice title=export-builds (android)::Debug signing: ephemeral key (no ANDROID_DEBUG_KEYSTORE_B64, e.g. fork PR). This APK will not install over earlier builds."
+          fi
           sdk="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           cfg="${HOME}/.config/godot"
           mkdir -p "$cfg"
@@ -443,6 +460,9 @@ jobs:
           ls -la "$OUT_DIR"
       - name: Verify APK (aapt badging + apksigner)
         if: steps.inputs.outputs.present == 'true' && matrix.target == 'android'
+        env:
+          # Public cert digest of the ANDROID_DEBUG_KEYSTORE_B64 key (docs/qa/test-plan.md).
+          EXPECTED_DEBUG_CERT_SHA256: 7352700cdd924eafaf67061a87d75999e0655caed6c9b178420779ecbf5c552f
         run: |
           set -euo pipefail
           sdk="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
@@ -452,7 +472,12 @@ jobs:
           grep -q "^package: name='dev.karyu.endlessrealm'" "${RUNNER_TEMP}/badging.txt" || { echo "::error::unexpected package name"; exit 1; }
           grep -q "^native-code:.*'arm64-v8a'" "${RUNNER_TEMP}/badging.txt" || { echo "::error::APK has no arm64-v8a libs"; exit 1; }
           grep -q "android.permission.INTERNET" "${RUNNER_TEMP}/badging.txt" || { echo "::error::APK lacks INTERNET permission"; exit 1; }
-          "${bt}/apksigner" verify --verbose --print-certs "$apk" | grep -vE '^WARNING'
+          "${bt}/apksigner" verify --verbose --print-certs "$apk" | grep -vE '^WARNING' | tee "${RUNNER_TEMP}/certs.txt"
+          if [ "${FIXED_DEBUG_KEY:-false}" = "true" ]; then
+            grep -qx "Signer #1 certificate SHA-256 digest: ${EXPECTED_DEBUG_CERT_SHA256}" "${RUNNER_TEMP}/certs.txt" \
+              || { echo "::error::APK is not signed with the fixed debug cert ${EXPECTED_DEBUG_CERT_SHA256}"; exit 1; }
+            echo "Signed with the fixed debug cert ${EXPECTED_DEBUG_CERT_SHA256}"
+          fi
       - name: Smoke-run the Linux export headless
         if: steps.inputs.outputs.present == 'true' && matrix.target == 'linux'
         run: |
