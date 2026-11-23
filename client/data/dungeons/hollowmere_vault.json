@@ -103,6 +103,8 @@
     "m100": 100,
     "practice_base_level": 1,
     "persistent": true,
+    "no_persistent_rewards": true,
+    "reset_when_empty": true,
     "placeholder": "Practice-slice portal. Official vault base_level is 10 (content-v0.1 \u00a73). This entrance uses practice_base_level so a new character can enter. Found-portal rules: M = 1.00, no deposit (vision \u00a76)."
   }
 }

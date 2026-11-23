@@ -9,7 +9,18 @@ var _host: LobbyHost
 var _rejections: Array = []
 
 
+var _flag_restore: Dictionary = {}
+
+
 func after_each() -> void:
+	if _host != null and not _flag_restore.is_empty():
+		var src: Dictionary = _host.catalog.dungeon("hollowmere_vault").practice_yard_portal
+		for k in _flag_restore:
+			if _flag_restore[k] == null:
+				src.erase(k)
+			else:
+				src[k] = _flag_restore[k]
+	_flag_restore = {}
 	if _host != null:
 		_host.stop()
 		_host = null
@@ -25,6 +36,14 @@ func _new_host(max_players: int = 4) -> LobbyHost:
 	host.portal_rejected.connect(func(id: int, code: int, reason: String) -> void:
 		_rejections.append([id, code, reason]))
 	return host
+
+
+## Test-only change to the host's own packed data (restored after each test).
+func _set_practice_flag(key: String, value: Variant) -> void:
+	var src: Dictionary = _host.catalog.dungeon("hollowmere_vault").practice_yard_portal
+	if not _flag_restore.has(key):
+		_flag_restore[key] = src.get(key)
+	src[key] = value
 
 
 ## Practice portal in the overworld at its data position (8, 16).
@@ -637,6 +656,7 @@ func test_persistent_door_admits_new_player_after_lifetime() -> void:
 
 func test_persistent_instance_survives_empty_and_keeps_state_on_reentry() -> void:
 	_host = _new_host()
+	_set_practice_flag("reset_when_empty", false)
 	var portal := _open_portal(true)
 	var a := _join_near_portal(portal)
 	_enter(a, portal)
@@ -665,6 +685,7 @@ func test_persistent_instance_survives_empty_and_keeps_state_on_reentry() -> voi
 
 func test_persistent_capacity_counts_occupants_and_keeps_reentry_ids() -> void:
 	_host = _new_host(2)
+	_set_practice_flag("reset_when_empty", false)
 	var portal := _open_portal(true)
 	var a := _join_near_portal(portal)
 	var b := _join_near_portal(portal)
@@ -718,6 +739,7 @@ func _enter_persistent(id: int, portal: PortalSnapshot, seq: int) -> void:
 
 func test_persistent_never_respawns_after_clear_exit_and_long_empty() -> void:
 	_host = _new_host()
+	_set_practice_flag("reset_when_empty", false)
 	var portal := _open_portal(true)
 	var a := _join_near_portal(portal)
 	_enter(a, portal)
@@ -740,6 +762,7 @@ func test_persistent_never_respawns_after_clear_exit_and_long_empty() -> void:
 
 func test_persistent_late_arrivals_get_nothing_after_clear() -> void:
 	_host = _new_host()
+	_set_practice_flag("reset_when_empty", false)
 	var portal := _open_portal(true)
 	var a := _join_near_portal(portal)
 	_enter(a, portal)
@@ -770,6 +793,7 @@ func test_persistent_late_arrivals_get_nothing_after_clear() -> void:
 
 func test_persistent_is_not_rebuilt_by_settings_and_freed_on_stop() -> void:
 	_host = _new_host()
+	_set_practice_flag("reset_when_empty", false)
 	var portal := _open_portal(true)
 	var a := _join_near_portal(portal)
 	_enter(a, portal)
@@ -848,6 +872,7 @@ func test_nonpersistent_portal_still_expires() -> void:
 
 func test_persistent_long_session_stays_bounded() -> void:
 	_host = _new_host(8)
+	_set_practice_flag("reset_when_empty", false)
 	var portal := _open_portal(true)
 	var a := _join_near_portal(portal)
 	_enter(a, portal)
@@ -881,3 +906,147 @@ func test_persistent_long_session_stays_bounded() -> void:
 	assert_lte(rec.sim_ids.size(), _host.players.size())
 	assert_eq(inst.sim._skipped_ids.size(), 0, "no skipped id ranges in the instance")
 	assert_lte(inst.sim.player_ids().size(), 1)
+
+
+# --- practice vault: no lasting rewards, reset when empty --------------------
+
+func _grant_inside(id: int) -> ItemState:
+	var p := _host._find_player(id)
+	var sp := p.instance.sim.get_player(p.sim_id)
+	sp.xp_tenths += 70
+	sp.pending_glint += 3
+	var item := ItemState.new()
+	item.owner_player_id = p.sim_id
+	item.tier = 2
+	item.drop_id = "practice-test-item"
+	assert_true(sp.inventory.add(item))
+	return item
+
+
+func _progress(id: int) -> Dictionary:
+	var sp := _host.sim.get_player(id)
+	return {"level": sp.level, "xp": sp.xp_tenths, "glint": sp.pending_glint,
+			"items": sp.inventory.live_items().size()}
+
+
+func test_practice_vault_rewards_are_reverted_on_exit() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	var before := _progress(a)
+	_enter(a, portal)
+	assert_true(_instance_of(a).no_persistent_rewards)
+	_grant_inside(a)
+	_exit_here(a, 5)
+	assert_true(_instance_of(a).is_overworld())
+	assert_eq(_progress(a), before, "XP, currency and items gained inside are reverted")
+	_ticks(2)
+	assert_eq(_progress(a), before)
+	assert_false(_host._bags_by_owner().has(a), "no practice bags outside")
+
+
+func test_practice_vault_reverts_after_reset_cycles() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	var before := _progress(a)
+	var seq := 5
+	var seen := {}
+	for cycle in range(3):
+		_enter_persistent(a, portal, seq)
+		seq += 1
+		var inst := _instance_of(a)
+		assert_false(inst.is_overworld())
+		seen[inst.index] = true
+		assert_gt(_clear_vault(a), 0, "reset rebuilt the rooms")
+		_grant_inside(a)
+		_exit_here(a, seq)
+		seq += 1
+		assert_eq(_host.instances.size(), 1, "empty practice vault is reset")
+		assert_eq(_progress(a), before)
+	assert_eq(seen.size(), 3, "a fresh practice instance each run")
+	assert_eq(_host._portal_records.size(), 1)
+
+
+func test_practice_vault_leave_and_rejoin_reverts() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	var before := _progress(a)
+	_enter(a, portal)
+	_grant_inside(a)
+	var token := _host.remove_local_player(a)
+	_host.run_tick()
+	assert_eq(_host.instances.size(), 1)
+	var b := _host.add_local_player(null, token)
+	assert_eq(b, a)
+	_host.run_tick()
+	assert_eq(_progress(b), before, "a rejoin does not keep practice gains")
+
+
+func test_practice_vault_offers_no_onward_portals() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var p := _host._find_player(a)
+	var xfer := PortalTransfer.new()
+	xfer.player_id = p.sim_id
+	xfer.portal_id = portal.id
+	xfer.dungeon_id = "hollowmere_vault"
+	xfer.m100 = 100
+	_host._route_transfer(p.instance, xfer)
+	assert_eq(_instance_of(a), p.instance)
+	assert_eq(_host.instances.size(), 2)
+	assert_eq(_rejections.back()[1], PB.ErrorCode.INSTANCE_NOT_FOUND)
+
+
+func test_normal_portal_keeps_rewards() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	var before := _progress(a)
+	_enter(a, portal)
+	assert_false(_instance_of(a).no_persistent_rewards)
+	_grant_inside(a)
+	_exit_here(a, 5)
+	var after := _progress(a)
+	assert_true(after["level"] > before["level"] or after["xp"] == before["xp"] + 70, "XP kept")
+	assert_eq(after["glint"], before["glint"] + 3)
+	assert_eq(after["items"], before["items"] + 1)
+
+
+func test_reward_and_reset_flags_come_only_from_host_data() -> void:
+	_host = _new_host()
+	var practice := _open_portal(true)
+	var fake := PortalSnapshot.new()
+	fake.id = _host.sim._alloc_id()
+	fake.x = 30.0
+	fake.y = 30.0
+	fake.kind = PortalSnapshot.KIND_ENTER
+	fake.dungeon_id = "hollowmere_vault"
+	fake.m100 = 100
+	fake.base_level = 1
+	fake.content_level = 1
+	fake.persistent = true
+	fake.set_meta("no_persistent_rewards", true)
+	_host.sim.add_portal(fake)
+	_host.run_tick()
+	var recs := {}
+	for rec: LobbyHost.PortalRecord in _host._portal_records.values():
+		recs[rec.portal_id] = rec
+	assert_true(recs[practice.id].no_persistent_rewards)
+	assert_true(recs[practice.id].reset_when_empty)
+	assert_false(recs[fake.id].no_persistent_rewards)
+	assert_false(recs[fake.id].reset_when_empty)
+	assert_false("no_persistent_rewards" in PortalTransfer.new())
+	assert_false("reset_when_empty" in PortalTransfer.new())
+	# Reset is never enabled without the reward isolation in host data.
+	_host.stop()
+	_host = _new_host()
+	_set_practice_flag("no_persistent_rewards", false)
+	var p2 := _open_portal(true)
+	_host.run_tick()
+	var rec2: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	assert_eq(rec2.portal_id, p2.id)
+	assert_false(rec2.reset_when_empty)

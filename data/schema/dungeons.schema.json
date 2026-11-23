@@ -88,6 +88,8 @@
         "y": { "type": "number" },
         "radius": { "type": "number", "exclusiveMinimum": 0 },
         "persistent": { "type": "boolean" },
+        "no_persistent_rewards": { "type": "boolean" },
+        "reset_when_empty": { "type": "boolean" },
         "m100": { "type": "integer" },
         "practice_base_level": { "type": "integer", "minimum": 1 },
         "placeholder": { "type": "string", "minLength": 1 }

@@ -113,6 +113,7 @@ class HostInstance:
 	var portal_key: String = ""
 	var seed: int = 0
 	var m100: int = 100
+	var no_persistent_rewards: bool = false
 	var arrival_x: float = 0.0
 	var arrival_y: float = 0.0
 	## Distinct players this instance may admit, locked at creation (vision §6 rule 5).
@@ -143,6 +144,8 @@ class PortalRecord:
 	## Persistent entrance: no admission expiry, one instance for the life
 	## of the host (never closed or replaced), capacity counts occupants.
 	var persistent: bool = false
+	var no_persistent_rewards: bool = false
+	var reset_when_empty: bool = false
 
 
 class HostPlayer:
@@ -153,6 +156,8 @@ class HostPlayer:
 	var instance: HostInstance = null
 	var sim_id: int = 0
 	var loadtest_spread: bool = false
+	var progression_entries: Array[Dictionary] = []
+	var restore_progression: Dictionary = {}
 	var seq: int = 0
 	var move_x: float = 0.0
 	var move_y: float = 0.0
@@ -805,6 +810,7 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
 		p.id = int(saved["id"])
+		p.restore_progression = saved.get("progression", {})
 		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
 				"left_tick": int(saved["left_tick"])}
 	elif _sim_has_builtin_player():
@@ -846,6 +852,13 @@ func _sim_has_builtin_player() -> bool:
 ## identity, saves their ability state under it for a later rejoin.
 func _leave(p: HostPlayer, identity: String = "") -> void:
 	interact_validator.forget_player(p.id)
+	var progression: Dictionary = {}
+	var leaving := p.instance.sim.get_player(p.sim_id)
+	if leaving != null and not p.progression_entries.is_empty():
+		var carry := PlayerCarry.from_sim(leaving, p.instance.sim.ability_state(p.sim_id))
+		_restore_entry_progression(p, carry)
+		progression = _progression_fields(carry)
+		p.instance.sim.apply_carried_player(carry, leaving.x, leaving.y)
 	# Persistent entrances admit by occupancy, so per-player entries of
 	# players who left the lobby are dropped to keep them bounded.
 	for record: PortalRecord in _portal_records.values():
@@ -864,7 +877,7 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 		if saved.has("cooldown"):
 			# A pending restore that was never applied keeps its own left_tick.
 			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"],
-					"left_tick": saved["left_tick"]})
+					"left_tick": saved["left_tick"], "progression": progression})
 	p.instance.sim.remove_player(p.sim_id)
 	players.erase(p)
 
@@ -886,6 +899,11 @@ func _restore_ability(p: HostPlayer) -> void:
 	p.restore_ability = {}
 	var isim: LocalSim = p.instance.sim
 	var sid: int = p.sim_id
+	if not p.restore_progression.is_empty():
+		var carry := PlayerCarry.from_sim(isim.get_player(sid), isim.ability_state(sid))
+		_apply_progression(carry, p.restore_progression)
+		isim.apply_carried_player(carry, p.x, p.y)
+		p.restore_progression = {}
 	if saved.has("cooldown"):
 		var elapsed: int = maxi(0, tick - int(saved["left_tick"]))
 		isim.set_ability_cooldown_ticks(sid, maxi(0, int(saved["cooldown"]) - elapsed))
@@ -1067,22 +1085,19 @@ func _enter_refusal(p: HostPlayer, portal: PortalSnapshot) -> Array:
 	return _record_refusal(_record_for(p.instance, portal.id), p.id)
 
 
-## True only for an entrance the host's own data marks persistent: the
-## packed practice entrance of a dungeon whose definition sets
-## `persistent: true`, at its packed position, M and base level. The flag on
-## a PortalSnapshot is display-only and never trusted here.
-func _is_data_persistent(portal: PortalSnapshot) -> bool:
+## Policy is read only from the host's packed practice entrance definition.
+## Snapshot flags, transfers and network input cannot choose host policy.
+func _portal_policy(portal: PortalSnapshot) -> Dictionary:
 	if portal == null or portal.kind != PortalSnapshot.KIND_ENTER or catalog == null:
-		return false
+		return {}
 	var def: DungeonDef = catalog.dungeon(portal.dungeon_id)
 	if def == null or def.practice_yard_portal.is_empty():
-		return false
+		return {}
 	var src: Dictionary = def.practice_yard_portal
-	return bool(src.get("persistent", false)) \
-			and is_equal_approx(portal.x, float(src["x"])) \
-			and is_equal_approx(portal.y, float(src["y"])) \
-			and portal.m100 == int(src["m100"]) \
-			and portal.base_level == int(src["practice_base_level"])
+	if not is_equal_approx(portal.x, float(src["x"])) or not is_equal_approx(portal.y, float(src["y"])) \
+			or portal.m100 != int(src["m100"]) or portal.base_level != int(src["practice_base_level"]):
+		return {}
+	return src
 
 
 ## Players in `inst` other than `except_id` (lobby id).
@@ -1110,7 +1125,11 @@ func _record_for(source: HostInstance, portal_id: int) -> PortalRecord:
 		record.portal_id = portal_id
 		record.capacity = _settings.max_players
 		record.created_tick = tick
-		record.persistent = _is_data_persistent(source.sim.portal_by_id(portal_id))
+		var policy := _portal_policy(source.sim.portal_by_id(portal_id))
+		record.persistent = bool(policy.get("persistent", false))
+		record.no_persistent_rewards = bool(policy.get("no_persistent_rewards", false))
+		# Reset is permitted only with host-enforced progression isolation.
+		record.reset_when_empty = record.persistent and record.no_persistent_rewards and bool(policy.get("reset_when_empty", false))
 		record.closed = _retired_entrances.has(key)
 		_portal_records[key] = record
 	return _portal_records[key]
@@ -1168,6 +1187,9 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 		# for now an exit returns to the overworld.
 		_move_player(p, instances[0], p.id, xfer.arrival_x, xfer.arrival_y)
 		return
+	if source.no_persistent_rewards:
+		_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "only the practice exit is available here")
+		return
 	if not is_m100_allowed(xfer.m100) or not source.sim.m100_allowed(xfer.m100):
 		_reject_portal(p, PB.ErrorCode.MULTIPLIER_NOT_ALLOWED, "portal multiplier is not allowed in this lobby")
 		return
@@ -1183,7 +1205,7 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 	var dest: HostInstance = record.instance
 	if dest == null:
 		# A record with an assigned id is never restarted after closure.
-		if record.instance_id != 0:
+		if record.instance_id != 0 and not record.reset_when_empty:
 			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "portal instance is closed")
 			return
 		# The opener as they are in the source world (the sim that queued
@@ -1196,6 +1218,7 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "dungeon unavailable or instance id space exhausted")
 			return
 		dest.portal_key = key
+		dest.no_persistent_rewards = record.no_persistent_rewards
 		dest.capacity = record.capacity
 		dest.admitted = record.admitted
 		record.instance = dest
@@ -1243,6 +1266,50 @@ func _create_dungeon_instance(xfer: PortalTransfer) -> HostInstance:
 	return inst
 
 
+## Deep inventory snapshot, preserving equipment/slot references within it.
+func _copy_inventory(src: PlayerInventory) -> PlayerInventory:
+	if src == null:
+		return null
+	var dst := PlayerInventory.new(src.slot_count)
+	var copies: Dictionary = {}
+	for item in src.live_items():
+		copies[item] = item.duplicate_item()
+	for i in range(src.slots.size()):
+		dst.slots[i] = copies.get(src.slots[i])
+	for slot in ["weapon", "armor", "charm"]:
+		dst.set_equipped(slot, copies.get(src.equipped_for(slot)))
+	return dst
+
+
+## Capture all carried persistent fields, including future currencies or
+## vault fields, while excluding identity and transient combat/input state.
+func _progression_fields(carry: PlayerCarry) -> Dictionary:
+	var fields: Dictionary = {}
+	for prop in carry.get_property_list():
+		var key: String = prop["name"]
+		if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE == 0 or key in ["player_id", "hp", "aim", "ability", "last_interact_seq"]:
+			continue
+		var value: Variant = carry.get(key)
+		if value is PlayerInventory:
+			value = _copy_inventory(value)
+		elif value is Array or value is Dictionary:
+			value = value.duplicate(true)
+		fields[key] = value
+	return fields
+
+
+func _apply_progression(carry: PlayerCarry, fields: Dictionary) -> void:
+	for key in fields:
+		var value: Variant = fields[key]
+		carry.set(key, _copy_inventory(value) if value is PlayerInventory else value)
+
+
+func _restore_entry_progression(p: HostPlayer, carry: PlayerCarry) -> void:
+	if not p.progression_entries.is_empty():
+		_apply_progression(carry, p.progression_entries.back()["fields"])
+		p.progression_entries.pop_back()
+
+
 ## Moves `p` into `dest` as `dest_id` at (x, y), carrying class, level,
 ## inventory, HP and ability state (Focus and cooldown exactly as they are,
 ## never refreshed). Removal from the old sim takes effect at its next step.
@@ -1252,6 +1319,11 @@ func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: 
 	if from == null or dest == p.instance:
 		return
 	var carry := PlayerCarry.from_sim(from, src.ability_state(p.sim_id))
+	_restore_entry_progression(p, carry)
+	if dest.no_persistent_rewards:
+		p.progression_entries.append({"instance": dest.index, "fields": _progression_fields(carry)})
+		# The practice copy must not mutate the source inventory or entry copy.
+		carry.inventory = _copy_inventory(carry.inventory)
 	carry.player_id = dest_id
 	dest.sim.place_player(dest_id, x, y)
 	dest.sim.apply_carried_player(carry, x, y)
@@ -1275,13 +1347,21 @@ func _teardown_empty_instances() -> void:
 		# cleared is recorded for deposits and later lifetime rules.
 		if inst.sim.has_method("boss_defeated"):
 			record.cleared = record.cleared or bool(inst.sim.call("boss_defeated"))
-		if record.persistent:
+		if record.persistent and not record.reset_when_empty:
 			continue  # a persistent entrance keeps its one instance
 		var used := false
 		for p in players:
 			if p.instance == inst:
 				used = true
 				break
+		if not used and record.reset_when_empty:
+			instances.erase(inst)
+			_instance_by_portal.erase(inst.portal_key)
+			record.instance = null
+			record.sim_ids.clear()
+			record.admitted.clear()
+			record.cleared = false
+			continue
 		if used:
 			record.empty_since_tick = -1
 			continue
