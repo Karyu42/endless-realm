@@ -151,6 +151,8 @@ func test_sim_only_allies_are_not_host_players() -> void:
 	_host.apply_settings(_settings_with_max(2))
 	var a := _host.add_local_player()
 	_host.run_tick()
+	while _host.sim._next_id <= 2:
+		_host.sim.alloc_player_id()
 	_host.sim.place_ally(2, 1.0, 1.0, 50, 100)
 	var b := _host.add_local_player()
 	assert_ne(b, 2, "ally id is not reused")

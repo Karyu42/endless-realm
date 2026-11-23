@@ -168,6 +168,10 @@ class HostPlayer:
 	var progression_entries: Array[Dictionary] = []
 	var restore_progression: Dictionary = {}
 	var seq: int = 0
+	## Last seq handed to LocalSim.apply_input. rule 7 activity tracks
+	## received input frames: is_new_frame is true only when seq advanced
+	## since the last step.
+	var fed_seq: int = 0
 	var move_x: float = 0.0
 	var move_y: float = 0.0
 	var aim: float = 0.0
@@ -847,8 +851,7 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	p.y = float(rec["y"])
 	if sim.get_player(p.id) != null:
 		# Still in the sim (built-in player 1, or a leave not yet stepped):
-		# add_player cancels the pending removal; set it up in place.
-		sim.add_player(p.id)
+		# place_player keeps them and cancels the pending removal.
 		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if rec.has("hp") else -1)
 		sim.set_player_class_for(p.id, p.class_id)
 		_restore_ability(p)
@@ -1016,7 +1019,9 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			ability_presses += 1
 			intent.ability_pressed = true
 			p.ability_pressed = false  # one-shot
-		psim.apply_input(p.sim_id, intent)
+		# rule 7 activity tracks received input frames
+		psim.apply_input(p.sim_id, intent, p.seq != p.fed_seq)
+		p.fed_seq = p.seq
 	var stepped: Array[HostInstance] = instances.duplicate()
 	for inst in stepped:
 		inst.sim.step()

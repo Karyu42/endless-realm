@@ -40,13 +40,10 @@ var _world_seed: int = 1
 var _tick: int = 0
 ## Default / solo viewer id (player 1 is spawned in _init).
 var _player_id: int = 1
+## Next id the allocator will issue. The high-water mark is `_next_id - 1`
+## (the last id issued). The allocator never reuses an id and does not
+## store an entry per id ever issued.
 var _next_id: int = 2
-## Ids ever used for players (allocated or reserved). Only these, or ids the
-## allocator has not reached yet, may be passed to add_player / place_player.
-var _player_id_set: Dictionary = {1: true}
-## [lo, hi) ranges the allocator jumped over when a caller reserved a higher
-## id; never issued to entities. One entry per such reservation.
-var _skipped_ids: Array[PackedInt64Array] = []
 var _players: Dictionary = {} # id -> SimPlayerState
 var _sorted_ids: Array[int] = []
 var _pending_adds: Dictionary = {} # id -> {character: Variant, x: float, y: float, ...}
@@ -193,13 +190,16 @@ func player_count() -> int:
 
 ## Queue a player to join at the start of the next step(). character may be
 ## null, a class-id String, or a Dictionary {class_id, x, y, hp?}.
+## The caller guarantees `id` came from this sim's alloc_player_id() (or is
+## the pre-spawned player 1). Accepts an id at or below the high-water mark
+## that is not currently live. Refuses, and logs, an id above the mark or
+## any live player or entity id.
 ## Sealed arena placement invariants: a spawn inside a sealed arena is moved
 ## to a deterministic safe spot outside the doorway. A returning player never
 ## lands inside a live fight.
 func add_player(id: int, character: Variant = null) -> bool:
-	if not _player_id_allowed(id):
+	if not _player_id_accept(id):
 		return false
-	_reserve_id(id)
 	_pending_removes.erase(id)
 	if _players.has(id) or _pending_adds.has(id):
 		if _pending_adds.has(id):
@@ -220,7 +220,7 @@ func remove_player(id: int) -> void:
 
 ## Store the latest intent for this player. Nothing is applied until step().
 ## The host calls this at most once per player per tick.
-func apply_input(id: int, intent: InputIntent) -> void:
+func apply_input(id: int, intent: InputIntent, is_new_frame: bool = true) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p == null or intent == null:
 		return
@@ -233,6 +233,9 @@ func apply_input(id: int, intent: InputIntent) -> void:
 		p.intent.ability_pressed = true
 	if p.intent.interact_target_id == 0 and pending_target != 0:
 		p.intent.interact_target_id = pending_target
+	# rule 7 activity tracks received input frames
+	if is_new_frame:
+		_note_non_idle(p, _tick)
 
 
 ## Solo / existing WorldSource path: apply to the default player (id 1, or
@@ -326,38 +329,51 @@ func _apply_character(p: SimPlayerState, character: Variant) -> void:
 
 func _alloc_id() -> int:
 	# One id space for players, enemies, projectiles, pattern bullets and
-	# bags. Ids are handed out in increasing order and never reused;
-	# _reserve_id moves the counter past any id a caller picks itself.
+	# bags. Ids are handed out in increasing order and never reused.
 	var id: int = _next_id
 	if _next_id < MAX_ENTITY_ID:
 		_next_id += 1
 	return id
 
 
-## Reserves an externally chosen id (add_player / place_player) so the
-## entity allocator never hands it out again, and remembers it as a player id.
-func _reserve_id(id: int) -> void:
-	if id >= _next_id and id < MAX_ENTITY_ID:
-		if id > _next_id:
-			# The allocator never issues the ids it jumps over.
-			_skipped_ids.append(PackedInt64Array([_next_id, id]))
-		_next_id = id + 1
-	_player_id_set[id] = true
-
-
-## A caller-chosen player id is accepted only if the allocator has never
-## handed it to an entity: at or above the counter, jumped over by an
-## earlier reservation, or already a player id. Ids of entities that are
-## gone are never reused.
-func _player_id_allowed(id: int) -> bool:
-	if id <= 0 or id >= MAX_ENTITY_ID:
-		return false
-	if id >= _next_id or _player_id_set.has(id):
+## True when a player or entity with this id is currently in the sim.
+func _id_is_live(id: int) -> bool:
+	if _players.has(id):
 		return true
-	for r in _skipped_ids:
-		if id >= r[0] and id < r[1]:
+	for e in _enemies:
+		if e.id == id:
+			return true
+	for shot in _projectiles:
+		if shot.id == id:
+			return true
+	for b in _pattern_bullets:
+		if b.id == id:
+			return true
+	for bag in _ground_drops:
+		if bag.id == id:
+			return true
+	for portal in _portals:
+		if portal.id == id:
+			return true
+	for h in _hazards:
+		if h.id == id:
 			return true
 	return false
+
+
+## add_player / new place_player: id must be at or below the high-water
+## mark and not currently live.
+func _player_id_accept(id: int) -> bool:
+	if id <= 0 or id >= MAX_ENTITY_ID:
+		push_warning("LocalSim: id %d is not a valid player id" % id)
+		return false
+	if id >= _next_id:
+		push_warning("LocalSim: id %d is above the high-water mark" % id)
+		return false
+	if _id_is_live(id):
+		push_warning("LocalSim: id %d is already live" % id)
+		return false
+	return true
 
 
 ## Raises the entity allocator to `floor` so a host running several sims
@@ -373,9 +389,7 @@ func set_id_floor(floor: int) -> bool:
 ## A fresh player id from the shared entity allocator. Hosts use this so
 ## player ids can never collide with enemy, projectile or bag ids.
 func alloc_player_id() -> int:
-	var id := _alloc_id()
-	_player_id_set[id] = true
-	return id
+	return _alloc_id()
 
 
 func spawn_enemy(def_id: String, x: float, y: float, content_level: int = 1) -> int:
@@ -437,7 +451,6 @@ func step() -> void:
 		_apply_movement(p)
 		_apply_ability(id, p.intent, sim_tick)
 		_apply_fire(p, sim_tick)
-		_note_non_idle(p, sim_tick)
 	for e in _enemies:
 		if e.flash_ticks > 0:
 			e.flash_ticks -= 1
@@ -716,15 +729,18 @@ func _spawn_projectile(p: SimPlayerState, sim_tick: int) -> void:
 func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p == null:
-		if not _player_id_allowed(id):
+		if not _player_id_accept(id):
 			return
-		_reserve_id(id)
 		_pending_adds.erase(id)
 		_pending_removes.erase(id)
 		p = _make_player(id, x, y, null)
 		_players[id] = p
 		_rebuild_ids()
 		_recompute_player_stats(p, true)
+	else:
+		# Keep a live player who was queued to leave (host first-join of
+		# built-in player 1, or a same-tick re-add).
+		_pending_removes.erase(id)
 	_set_placed_position(p, x, y)
 	if hp >= 0:
 		p.hp = hp
@@ -2240,6 +2256,8 @@ func _apply_pending_roster() -> void:
 				# Ability state goes with the player; a host that wants it
 				# back on rejoin saves it first (focus / cooldown getters).
 				_ability_by_player.erase(pid)
+				for e in _enemies:
+					e.damaged_by.erase(pid)
 				changed = true
 		_pending_removes.clear()
 		# Drop that player's in-flight shots.
@@ -2816,6 +2834,8 @@ func _kill_enemy(e: EnemyState, sim_tick: int) -> void:
 	if e.is_boss() and not _boss_defeated:
 		_on_boss_defeated(e, sim_tick)
 	_grant_kill_rewards(e, sim_tick)
+	if e.is_boss():
+		_reset_boss_fight_trackers()
 
 
 func _on_boss_defeated(e: EnemyState, sim_tick: int) -> void:
