@@ -35,6 +35,10 @@ var ward_ticks: int = 0
 var invuln_ticks: int = 0
 var portals: Array[PortalSnapshot] = []
 var hazards: Array[HazardState] = []
+## vision §6.1 rule 6a: the boss arena is sealed from first damage until it lifts.
+var arena_sealed: bool = false
+var seal_tick: int = -1
+var seal_segments: Array[Dictionary] = []
 
 
 func player_pixels() -> Vector2:
@@ -83,4 +87,7 @@ func duplicate_snapshot() -> WorldSnapshot:
 	copy.invuln_ticks = invuln_ticks
 	copy.portals = portals.duplicate()
 	copy.hazards = hazards.duplicate()
+	copy.arena_sealed = arena_sealed
+	copy.seal_tick = seal_tick
+	copy.seal_segments = seal_segments.duplicate()
 	return copy

@@ -196,6 +196,9 @@ func test_internal_tracking_stays_bounded_after_many_cycles() -> void:
 	vp.y = 6.0
 	vp.prev_x = vp.x
 	vp.prev_y = vp.y
+	# A partner stays in the arena so a mid-fight leave does not reset it.
+	var partner: int = vault.alloc_player_id()
+	assert_true(vault.add_player(partner, {"x": 36.0, "y": 6.5}))
 	vault.step()
 	var warden: EnemyState = null
 	for e in vault._enemies:
@@ -209,6 +212,9 @@ func test_internal_tracking_stays_bounded_after_many_cycles() -> void:
 	assert_gt(int(vault._boss_near_ticks.get(vpid, 0)), 0)
 	vault.remove_player(vpid)
 	vault.step()
+	var stay := vault.get_player(partner)
+	if stay != null:
+		stay.hp = maxi(stay.hp, 200)
 	assert_gt(int(vault._boss_damage_by.get(vpid, 0)), 0, "mid-fight leave keeps credit")
 	assert_gt(int(vault._boss_near_ticks.get(vpid, 0)), 0)
 	assert_true(vault.add_player(vpid, {"x": 36.0, "y": 6.0}))
