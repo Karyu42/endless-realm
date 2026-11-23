@@ -268,7 +268,7 @@ func test_character_dict_hp_is_sanitized() -> void:
 	var fresh_zero: int = sim.alloc_player_id()
 	assert_true(sim.add_player(fresh_zero, {"x": 3.0, "y": 3.0, "hp": 0}))
 	sim.step()
-	assert_eq(sim.get_player(fresh_zero).hp, 0)
+	assert_eq(sim.get_player(fresh_zero).hp, 200, "fresh add ignores HP <= 0 and uses max")
 
 	var fresh_over: int = sim.alloc_player_id()
 	assert_true(sim.add_player(fresh_over, {"x": 3.0, "y": 3.0, "hp": 99999}))
@@ -319,9 +319,23 @@ func test_character_dict_hp_is_sanitized() -> void:
 	assert_eq(sim.get_player(readd).hp, 0, "cancelled leave does not revive a dead player")
 
 
-func test_cancelled_leave_applies_class_like_a_fresh_add() -> void:
-	# A cancelled leave applies class the same way a fresh add does: a class
-	# with no HP fills to the class max, and a class with HP is sanitized.
+func test_fresh_add_player_with_non_positive_hp_uses_max() -> void:
+	# A fresh add_player never creates a 0-HP player: HP <= 0 is ignored
+	# and the player starts at max.
+	var sim := _new_sim()
+	var zero: int = sim.alloc_player_id()
+	assert_true(sim.add_player(zero, {"x": 3.0, "y": 3.0, "hp": 0}))
+	sim.step()
+	assert_eq(sim.get_player(zero).hp, 200)
+	var neg: int = sim.alloc_player_id()
+	assert_true(sim.add_player(neg, {"x": 3.0, "y": 3.0, "hp": -5}))
+	sim.step()
+	assert_eq(sim.get_player(neg).hp, 200)
+
+
+func test_cancelled_leave_applies_class_without_resetting_state() -> void:
+	# A cancelled leave applies class only when it actually changes, and
+	# never refills HP or resets ability state. A fresh add still fills.
 	var sim := _new_sim()
 
 	var fresh: int = sim.alloc_player_id()
@@ -336,14 +350,14 @@ func test_cancelled_leave_applies_class_like_a_fresh_add() -> void:
 	assert_eq(sim.get_player(fresh_dict).class_id, "gleamwright")
 	assert_eq(sim.get_player(fresh_dict).hp, 140)
 
-	var fill: int = sim.alloc_player_id()
-	assert_true(sim.add_player(fill, {"x": 5.0, "y": 5.0}))
+	var changed: int = sim.alloc_player_id()
+	assert_true(sim.add_player(changed, {"x": 5.0, "y": 5.0}))
 	sim.step()
-	sim.get_player(fill).hp = 80
-	sim.remove_player(fill)
-	assert_true(sim.add_player(fill, "gleamwright"))
-	assert_eq(sim.get_player(fill).class_id, "gleamwright")
-	assert_eq(sim.get_player(fill).hp, 140, "class without hp fills to max, like a fresh add")
+	sim.get_player(changed).hp = 80
+	sim.remove_player(changed)
+	assert_true(sim.add_player(changed, "gleamwright"))
+	assert_eq(sim.get_player(changed).class_id, "gleamwright")
+	assert_eq(sim.get_player(changed).hp, 80, "a class change on cancelled leave does not refill HP")
 
 	var kept: int = sim.alloc_player_id()
 	assert_true(sim.add_player(kept, {"x": 5.0, "y": 5.0}))
@@ -361,3 +375,34 @@ func test_cancelled_leave_applies_class_like_a_fresh_add() -> void:
 	assert_true(sim.add_player(capped, {"class": "gleamwright", "hp": 99999}))
 	assert_eq(sim.get_player(capped).class_id, "gleamwright")
 	assert_eq(sim.get_player(capped).hp, 140, "HP is capped at the new class max")
+
+
+func test_cancelled_leave_with_a_class_does_not_revive_a_dead_player() -> void:
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, {"x": 5.0, "y": 5.0}))
+	sim.step()
+	sim.get_player(pid).hp = 0
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, "gleamwright"))
+	assert_eq(sim.get_player(pid).class_id, "gleamwright")
+	assert_eq(sim.get_player(pid).hp, 0, "a dead player re-added with a class stays dead")
+
+
+func test_cancelled_leave_with_the_same_class_keeps_ability_state() -> void:
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, "thornguard"))
+	sim.step()
+	var st := sim.ability_state(pid)
+	st.cooldown_ticks = 150
+	st.focus = 5.0
+	st.ally_ability_heals = 3
+	sim.get_player(pid).hp = 120
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, "thornguard"))
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.get_player(pid).hp, 120)
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
+	assert_eq(sim.ally_ability_heals(pid), 3)
