@@ -233,6 +233,8 @@ Why: full currency trading means real-money traders will come. Server-side atomi
 
 ## 10. Decisions (2026-11-23)
 
+D1–D7 are Karyu's decisions. D8–D16 are design defaults accepted by Chief of Staff and can be tuned after playtests.
+
 | # | Decision |
 |---|---|
 | D1 | Both death modes ship in v0.1: Standard (soft death) and Hardcore (permadeath) with a separate economy, trading pool and leaderboard (§7). |
@@ -242,15 +244,16 @@ Why: full currency trading means real-money traders will come. Server-side atomi
 | D5 | Shard (server-instance) multiplier is a later phase. v0.1 has the portal multiplier only. |
 | D6 | Stride (movement speed) and Tempo (fire rate) are fixed per class, with at most +10% from gear in total. |
 | D7 | The overgear clamp stays at on-level tier + 3 (§4.1). |
+| D8 | *Default, tunable after playtests.* Prism and paid cosmetics are account-bound and never tradeable. Earned cosmetics are tradeable (§8, §9). |
+| D9 | *Default, tunable after playtests.* Trade fee is 2% of Glint transferred, paid by the sender. Item-only trades are free (§8.4). |
+| D10 | *Default, tunable after playtests.* Re-trade hold is 1 h at launch. Raise it to 24 h only if funnel or lopsided flags show RMT at scale (§8.4). |
+| D11 | *Default, tunable after playtests.* Trading gate is 72 h account age + 5 h played + a level-10 character. New-account cap is 1,500 NTV/day and 20 trades/day until day 14 or 20 h played. Review the flag data after 2 weeks (§8.4). |
+| D12 | *Default, tunable after playtests.* On hardcore death, carried gear and inventory are destroyed. The hardcore stash and wallets survive (§7). |
+| D13 | *Default, tunable after playtests.* Fallen hardcore characters remain as memorials only, with no conversion to Standard (§7). |
+| D14 | *Default, tunable after playtests.* Trade log rows are kept for 24 months. Salted IP and device hashes are kept for 90 days, and both are stated in the privacy policy (§8.3). |
+| D15 | *Default, tunable after playtests.* No paid premium season track. Paid cosmetics are sold only as separate store items (§9). |
+| D16 | *Default, tunable after playtests.* Enforcement in v0.1 uses automatic holds and pauses only. Bans are human-only. Revisit once flag precision has been measured (§8.5). |
 
-## 11. Open questions for Karyu
+**Tuning ownership:** Design decides tuning numbers (rates, caps, costs, timers, curves) and records them here. They are escalated to Karyu only when a change would alter the game's direction or touch money (monetization, pay-to-win boundaries, real-money flows).
 
-1. **Prism and paid cosmetics tradeability:** *Recommendation:* account-bound and never tradeable. Because currency can be traded, tradeable Prism would turn into Glint, which means pay-to-win by the back door. Earned cosmetics can be traded.
-2. **Trade fee:** take 2% of Glint transferred? *Recommendation:* yes. It is a Glint sink, slows down currency laundering, and costs nothing on item-only trades.
-3. **Re-trade hold length:** *Recommendation:* 1 h at launch. Raise it to 24 h only if the funnel or lopsided flags show real-money traders at scale.
-4. **New-account gate and cap:** 72 h + 5 h played + level 10; 1,500 NTV per day until day 14. *Recommendation:* ship these values and tune them from flag data after 2 weeks.
-5. **Hardcore loss on death:** carried gear is destroyed and the hardcore stash and wallets survive. *Recommendation:* yes. Losing the whole account's hardcore stash is too punishing for an endless game.
-6. **Fallen hardcore characters:** stay as memorials, or convert to Standard? *Recommendation:* memorial only. Allowing conversion would make hardcore a risk-free way to farm.
-7. **Trade-log retention and privacy (EU/GDPR):** *Recommendation:* keep trade rows for 24 months. Keep salted IP and device hashes for 90 days, and state both in the privacy policy.
-8. **Paid premium season track:** *Recommendation:* none. Keep the seasonal track free and sell paid cosmetics only as separate store items, so nobody can pay to skip the track.
-9. **Enforcement:** automatic holds and pauses, but human-only bans? *Recommendation:* yes for v0.1. Revisit automatic bans once flag precision has been measured.
+There are no open questions right now. New ones will go in a §11 when they come up.
