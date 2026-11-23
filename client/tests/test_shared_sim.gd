@@ -361,3 +361,22 @@ func test_contact_skips_invulnerable_and_hits_the_next_player() -> void:
 	sim.step()
 	assert_eq(sim.get_player(pid1).hp, hp1, "Slipstep i-frames skip the first overlap")
 	assert_eq(sim.get_player(pid2).hp, hp2 - 8, "contact keeps checking other players")
+
+
+func test_diagonal_walk_slides_along_a_wall() -> void:
+	# Resolving X and Y separately: a diagonal into a vertical wall keeps the
+	# unblocked axis, so the player slides along the wall instead of stopping.
+	var sim := LocalSim.new(SimConfig.new(), 9.9, 8.5)
+	sim.set_bounds(0.0, 0.0, 16.0, 16.0)
+	for ty in range(0, 16):
+		sim.set_blocking_tile(10, ty, true)
+	var p := sim.get_player(1)
+	var start_y: float = p.y
+	sim.apply_input(1, _intent(1, 1.0, 1.0))
+	sim.step()
+	p = sim.get_player(1)
+	assert_lt(p.x, 10.0, "the blocked axis stops at the wall")
+	assert_almost_eq(p.x, 10.0 - SimConstants.MOVE_EPS, 1e-9)
+	assert_gt(p.y, start_y, "the free axis still moves, sliding along the wall")
+	var step: float = sim.config().move_speed_tiles_per_s * SimConstants.TICK_DT
+	assert_almost_eq(p.y, start_y + step / sqrt(2.0), 1e-9)

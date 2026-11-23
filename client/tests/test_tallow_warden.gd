@@ -655,3 +655,144 @@ func test_entrant_before_first_damage_still_counts() -> void:
 	assert_true(sim.arena_sealed())
 	assert_eq(sim.boss_n_peak(), 2, "n_peak stays at the pre-seal count")
 	assert_eq(_warden(sim).max_hp, expect)
+
+
+func _keep_alive(sim: LocalSim, pid: int) -> void:
+	var p := sim.get_player(pid)
+	if p != null:
+		p.hp = maxi(p.hp, 9999)
+
+
+func _in_wick_kennels(p: SimPlayerState) -> bool:
+	# Wick Kennels: origin (34, 0), size (12, 12). Inclusive west/south, exclusive east/north.
+	return p != null and p.x >= 34.0 and p.x < 46.0 and p.y >= 0.0 and p.y < 12.0
+
+
+func _assert_sealed_placement_outside(sim: LocalSim, p: SimPlayerState, n_peak: int, max_hp: int, hp: int) -> void:
+	assert_not_null(p)
+	assert_false(_in_wick_kennels(p), "sealed arena placement lands outside the arena")
+	# Deterministic safe spot: midpoint of the west doorway (34, 6), stepped
+	# 0.5 tiles outward (max of player radius and 0.5).
+	assert_almost_eq(p.x, 33.5, 1e-6)
+	assert_almost_eq(p.y, 6.0, 1e-6)
+	assert_true(sim.arena_sealed())
+	assert_eq(sim.boss_n_peak(), n_peak, "n_peak does not change after a sealed placement")
+	assert_eq(_warden(sim).max_hp, max_hp)
+	assert_eq(_warden(sim).hp, hp)
+
+
+func test_sealed_arena_placement_invariants_on_each_entry_point() -> void:
+	# After the seal, place_player, add_player with {x,y}, and apply_carried_player
+	# all land outside the doorway and leave n_peak and HP unchanged.
+	var inside_x := 40.0
+	var inside_y := 6.0
+	var sim := _vault()
+	var opener: int = sim.player_ids()[0]
+	sim.hurt_enemy(_warden(sim).id, 1, opener)
+	_keep_alive(sim, opener)
+	assert_true(sim.arena_sealed())
+	assert_eq(sim.boss_n_peak(), 1)
+	var max_hp: int = _warden(sim).max_hp
+	var hp: int = _warden(sim).hp
+	assert_eq(max_hp, 5500)
+
+	# place_player
+	var pid_place: int = sim.alloc_player_id()
+	sim.place_player(pid_place, inside_x, inside_y)
+	_assert_sealed_placement_outside(sim, sim.get_player(pid_place), 1, max_hp, hp)
+	_keep_alive(sim, opener)
+	sim.step()
+	_assert_sealed_placement_outside(sim, sim.get_player(pid_place), 1, max_hp, hp)
+
+	# add_player with {x,y} takes effect at the start of the next step.
+	var pid_add: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid_add, {"x": inside_x, "y": inside_y}))
+	_keep_alive(sim, opener)
+	sim.step()
+	_assert_sealed_placement_outside(sim, sim.get_player(pid_add), 1, max_hp, hp)
+
+	# apply_carried_player is a position restore onto an already-present player.
+	var pid_carry: int = sim.alloc_player_id()
+	sim.place_player(pid_carry, 6.0, 6.0)
+	var carry := PlayerCarry.from_sim(sim.get_player(pid_carry), sim.ability_state(pid_carry))
+	sim.apply_carried_player(carry, inside_x, inside_y)
+	_assert_sealed_placement_outside(sim, sim.get_player(pid_carry), 1, max_hp, hp)
+	_keep_alive(sim, opener)
+	sim.step()
+	_assert_sealed_placement_outside(sim, sim.get_player(pid_carry), 1, max_hp, hp)
+
+
+func test_placement_inside_arena_works_before_the_seal() -> void:
+	# Before the first damage, all three entry points still place normally.
+	var inside_x := 40.0
+	var inside_y := 6.0
+	var sim := _vault()
+	assert_false(sim.arena_sealed())
+	assert_eq(sim.boss_n_peak(), 1)
+
+	var pid_place: int = sim.alloc_player_id()
+	sim.place_player(pid_place, inside_x, inside_y)
+	var placed := sim.get_player(pid_place)
+	assert_not_null(placed)
+	assert_almost_eq(placed.x, inside_x, 1e-9)
+	assert_almost_eq(placed.y, inside_y, 1e-9)
+	assert_true(_in_wick_kennels(placed))
+	sim.step()
+	assert_eq(sim.boss_n_peak(), 2)
+	var expect: int = _catalog().scaling.encounter_hp(5500, 1, 2, "boss")
+	assert_eq(_warden(sim).max_hp, expect)
+
+	# Reset a fresh vault so each entry point is measured from n_peak = 1.
+	sim = _vault()
+	var pid_add: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid_add, {"x": inside_x, "y": inside_y}))
+	sim.step()
+	var added := sim.get_player(pid_add)
+	assert_not_null(added)
+	assert_almost_eq(added.x, inside_x, 1e-9)
+	assert_almost_eq(added.y, inside_y, 1e-9)
+	assert_true(_in_wick_kennels(added))
+	assert_eq(sim.boss_n_peak(), 2)
+	assert_eq(_warden(sim).max_hp, expect)
+
+	sim = _vault()
+	var pid_carry: int = sim.alloc_player_id()
+	sim.place_player(pid_carry, 6.0, 6.0)
+	var carry := PlayerCarry.from_sim(sim.get_player(pid_carry), sim.ability_state(pid_carry))
+	sim.apply_carried_player(carry, inside_x, inside_y)
+	var restored := sim.get_player(pid_carry)
+	assert_not_null(restored)
+	assert_almost_eq(restored.x, inside_x, 1e-9)
+	assert_almost_eq(restored.y, inside_y, 1e-9)
+	assert_true(_in_wick_kennels(restored))
+	sim.step()
+	assert_eq(sim.boss_n_peak(), 2)
+	assert_eq(_warden(sim).max_hp, expect)
+
+
+func test_n_peak_does_not_grow_after_the_arena_is_sealed() -> void:
+	# Defense in depth: even if a living player is already inside the sealed
+	# bounds, n_peak and max HP stay at the pre-seal values.
+	var sim := _vault()
+	var opener: int = sim.player_ids()[0]
+	sim.hurt_enemy(_warden(sim).id, 1, opener)
+	_keep_alive(sim, opener)
+	assert_true(sim.arena_sealed())
+	assert_eq(sim.boss_n_peak(), 1)
+	var hp: int = _warden(sim).hp
+	var pid2: int = sim.alloc_player_id()
+	# Place outside first (the placement API would relocate an inside point),
+	# then write the coordinates directly to occupy the sealed room.
+	sim.place_player(pid2, 30.0, 6.0)
+	var late := sim.get_player(pid2)
+	late.x = 40.0
+	late.y = 6.0
+	late.prev_x = late.x
+	late.prev_y = late.y
+	_keep_alive(sim, opener)
+	_keep_alive(sim, pid2)
+	sim.step()
+	assert_true(sim.arena_sealed())
+	assert_eq(sim.boss_n_peak(), 1, "n_peak is locked once the arena is sealed")
+	assert_eq(_warden(sim).max_hp, 5500)
+	assert_eq(_warden(sim).hp, hp)

@@ -193,6 +193,9 @@ func player_count() -> int:
 
 ## Queue a player to join at the start of the next step(). character may be
 ## null, a class-id String, or a Dictionary {class_id, x, y, hp?}.
+## Sealed arena placement invariants: a spawn inside a sealed arena is moved
+## to a deterministic safe spot outside the doorway. A returning player never
+## lands inside a live fight.
 func add_player(id: int, character: Variant = null) -> bool:
 	if not _player_id_allowed(id):
 		return false
@@ -290,6 +293,9 @@ func _make_player(id: int, x: float, y: float, character: Variant) -> SimPlayerS
 	p.last_interact_seq = 0
 	_ability_of(id)
 	_apply_character(p, character)
+	# Covers add_player({x,y}) and a default spawn; a sealed-arena point is
+	# relocated before the player enters the roster.
+	_set_placed_position(p, p.x, p.y)
 	return p
 
 
@@ -313,6 +319,8 @@ func _apply_character(p: SimPlayerState, character: Variant) -> void:
 			p.prev_y = p.y
 		if d.has("hp"):
 			p.hp = int(d["hp"])
+		if d.has("x") or d.has("y"):
+			_set_placed_position(p, p.x, p.y)
 	_set_player_class_on(p, class_id, not (character is Dictionary and (character as Dictionary).has("hp")))
 
 
@@ -634,11 +642,18 @@ func _apply_movement(p: SimPlayerState) -> void:
 		mx = 0.0
 		my = 0.0
 	var step_len: float = _config.move_speed_tiles_per_s * _player_stride_mult(p) * SimConstants.TICK_DT
-	# Walking uses the same wall clip as Slipstep so dungeon walls and the
-	# sealed arena doorway (vision §6.1 rule 6a) actually block movement.
-	var dest: PackedFloat64Array = _blink_destination(p.x, p.y, mx, my, step_len)
-	p.x = dest[0]
-	p.y = dest[1]
+	# Walking uses the same wall clip as Slipstep (_blink_destination) so
+	# dungeon walls and the sealed arena doorway (vision §6.1 rule 6a)
+	# actually block movement. X and Y are resolved separately so a diagonal
+	# into a wall slides along it instead of stopping on both axes. Slipstep
+	# keeps the single-segment clip so a blink cannot slide around a corner
+	# or through a diagonal gap.
+	if abs(mx) > SimConstants.MOVE_EPS:
+		var xdest: PackedFloat64Array = _blink_destination(p.x, p.y, mx, 0.0, step_len)
+		p.x = xdest[0]
+	if abs(my) > SimConstants.MOVE_EPS:
+		var ydest: PackedFloat64Array = _blink_destination(p.x, p.y, 0.0, my, step_len)
+		p.y = ydest[1]
 
 
 func _apply_fire(p: SimPlayerState, sim_tick: int) -> void:
@@ -695,6 +710,9 @@ func _spawn_projectile(p: SimPlayerState, sim_tick: int) -> void:
 
 ## Immediate position / hp write for tests. Creates a player if needed
 ## (does not wait for the next step, unlike add_player).
+## Sealed arena placement invariants: a point inside a sealed arena is moved
+## to a deterministic safe spot outside the doorway. A returning player never
+## lands inside a live fight.
 func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p == null:
@@ -707,8 +725,7 @@ func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
 		_players[id] = p
 		_rebuild_ids()
 		_recompute_player_stats(p, true)
-	p.x = x
-	p.y = y
+	_set_placed_position(p, x, y)
 	if hp >= 0:
 		p.hp = hp
 
@@ -1440,6 +1457,9 @@ func configure_dungeon(
 
 
 ## Copy a character into this instance at (x, y) after a portal transfer.
+## Sealed arena placement invariants: a restore into a sealed arena lands at
+## a deterministic safe spot outside the doorway. A returning player never
+## lands inside a live fight.
 func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
 	if carry == null:
 		return
@@ -1453,10 +1473,7 @@ func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
 	p.pending_glint = carry.pending_glint
 	p.pending_riftstone = carry.pending_riftstone
 	p.aim = carry.aim
-	p.x = x
-	p.y = y
-	p.prev_x = x
-	p.prev_y = y
+	_set_placed_position(p, x, y)
 	p.last_interact_seq = carry.last_interact_seq
 	if carry.inventory != null:
 		p.inventory = carry.inventory
@@ -2095,6 +2112,86 @@ func _set_arena_sealed(sealed: bool) -> void:
 	_arena_sealed = sealed
 
 
+## Write a placement or position restore. If the arena is sealed and (x, y)
+## is inside it, the player is relocated to a deterministic safe spot just
+## outside the doorway. A returning player never lands inside a live fight.
+func _set_placed_position(p: SimPlayerState, x: float, y: float) -> void:
+	if p == null:
+		return
+	var dest: PackedFloat64Array = _placement_xy(x, y)
+	p.x = dest[0]
+	p.y = dest[1]
+	p.prev_x = p.x
+	p.prev_y = p.y
+
+
+func _placement_xy(x: float, y: float) -> PackedFloat64Array:
+	if not _should_relocate_sealed_placement(x, y):
+		return PackedFloat64Array([x, y])
+	return _sealed_arena_outside_door_xy()
+
+
+func _should_relocate_sealed_placement(x: float, y: float) -> bool:
+	if not _arena_sealed or _dungeon == null:
+		return false
+	var room: Dictionary = _arena_room()
+	if room.is_empty():
+		return false
+	return _dungeon.room_contains(room, x, y)
+
+
+## Deterministic safe spot just outside the sealed arena door. Prefers the
+## midpoint of the first doorway segment (sorted), stepped outward from the
+## arena center by at least the player radius. Used by place_player,
+## add_player with {x,y}, and apply_carried_player.
+func _sealed_arena_outside_door_xy() -> PackedFloat64Array:
+	var room: Dictionary = _arena_room()
+	var arena := _dict_rect(room)
+	var standoff: float = 0.5
+	if _config != null:
+		standoff = maxf(_config.player_radius_tiles, 0.5)
+	var acx: float = arena.position.x + arena.size.x * 0.5
+	var acy: float = arena.position.y + arena.size.y * 0.5
+	var sx: float = arena.position.x - standoff
+	var sy: float = acy
+	var seg: Dictionary = _primary_seal_segment()
+	if not seg.is_empty():
+		var mx: float = (float(seg["x0"]) + float(seg["x1"])) * 0.5
+		var my: float = (float(seg["y0"]) + float(seg["y1"])) * 0.5
+		var nx: float = 0.0
+		var ny: float = 0.0
+		if is_equal_approx(float(seg["x0"]), float(seg["x1"])):
+			nx = -1.0 if acx > mx else 1.0
+		else:
+			ny = -1.0 if acy > my else 1.0
+		sx = mx + nx * standoff
+		sy = my + ny * standoff
+	# If the first estimate is still inside, keep pushing away from the center.
+	if _dungeon != null and not room.is_empty():
+		var guard: int = 0
+		while _dungeon.room_contains(room, sx, sy) and guard < 8:
+			sx += -standoff if sx <= acx else standoff
+			sy += -standoff if sy <= acy else standoff
+			guard += 1
+	return PackedFloat64Array([sx, sy])
+
+
+func _primary_seal_segment() -> Dictionary:
+	var segs: Array[Dictionary] = _seal_segments()
+	if segs.is_empty():
+		return {}
+	segs.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if float(a["x0"]) != float(b["x0"]):
+			return float(a["x0"]) < float(b["x0"])
+		if float(a["y0"]) != float(b["y0"]):
+			return float(a["y0"]) < float(b["y0"])
+		if float(a["x1"]) != float(b["x1"]):
+			return float(a["x1"]) < float(b["x1"])
+		return float(a["y1"]) < float(b["y1"])
+	)
+	return segs[0]
+
+
 func _apply_interact(p: SimPlayerState, sim_tick: int) -> void:
 	# InputFrame.interact_target_id: 0 means none. A nonzero value is a
 	# press on this seq, applied at most once per seq via Seq.seq_is_next
@@ -2347,7 +2444,9 @@ func _refresh_boss_n_peak() -> void:
 		if n <= 0:
 			return
 		_boss_n_peak = n
-	elif n > _boss_n_peak:
+	elif n > _boss_n_peak and not _arena_sealed:
+		# Once the arena is sealed, n_peak cannot grow until the seal lifts
+		# (vision §6.1 rule 6a).
 		_boss_n_peak = n
 	for e in _enemies:
 		if not e.alive or e.def == null:
