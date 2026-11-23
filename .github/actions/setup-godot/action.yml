@@ -1,0 +1,87 @@
+name: setup-godot
+description: >-
+  Downloads the official Godot editor (Linux x86_64) from godotengine/godot-builds,
+  verifies it against the release SHA512-SUMS.txt, puts it on PATH as `godot`
+  and exports GODOT=<path>. Optionally installs the matching export templates.
+inputs:
+  version:
+    description: Godot release tag, e.g. 4.7.2-stable.
+    required: true
+  templates:
+    description: "'true' to also install the matching export templates (~1 GB, cached)."
+    default: "false"
+outputs:
+  godot:
+    description: Absolute path to the Godot binary.
+    value: ${{ steps.editor.outputs.godot }}
+runs:
+  using: composite
+  steps:
+    - id: editor
+      shell: bash
+      env:
+        GODOT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}"
+        dir="${RUNNER_TEMP}/godot-${GODOT_VERSION}"
+        mkdir -p "$dir"
+        cd "$dir"
+        curl -fsSL --retry 3 -o SHA512-SUMS.txt "${base}/SHA512-SUMS.txt"
+        zip="Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+        curl -fsSL --retry 3 -o "$zip" "${base}/${zip}"
+        grep " ${zip}\$" SHA512-SUMS.txt | sha512sum -c -
+        unzip -q -o "$zip"
+        bin="${dir}/Godot_v${GODOT_VERSION}_linux.x86_64"
+        chmod +x "$bin"
+        mkdir -p "${dir}/bin"
+        ln -sf "$bin" "${dir}/bin/godot"
+        echo "${dir}/bin" >> "$GITHUB_PATH"
+        echo "GODOT=${bin}" >> "$GITHUB_ENV"
+        echo "godot=${bin}" >> "$GITHUB_OUTPUT"
+        "$bin" --headless --version
+
+    - id: tpl-dir
+      if: inputs.templates == 'true'
+      shell: bash
+      env:
+        GODOT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        # 4.7.2-stable -> 4.7.2.stable (Godot's template folder naming)
+        echo "dir=${HOME}/.local/share/godot/export_templates/${GODOT_VERSION/-/.}" >> "$GITHUB_OUTPUT"
+
+    - id: tpl-cache
+      if: inputs.templates == 'true'
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.tpl-dir.outputs.dir }}
+        key: godot-export-templates-${{ inputs.version }}
+
+    - if: inputs.templates == 'true' && steps.tpl-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GODOT_VERSION: ${{ inputs.version }}
+        TPL_DIR: ${{ steps.tpl-dir.outputs.dir }}
+      run: |
+        set -euo pipefail
+        base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}"
+        work="${RUNNER_TEMP}/godot-${GODOT_VERSION}"
+        tpz="Godot_v${GODOT_VERSION}_export_templates.tpz"
+        cd "$work"
+        curl -fsSL --retry 3 -o "$tpz" "${base}/${tpz}"
+        grep " ${tpz}\$" SHA512-SUMS.txt | sha512sum -c -
+        rm -rf tpl && mkdir tpl && unzip -q "$tpz" -d tpl
+        mkdir -p "$TPL_DIR"
+        cp -a tpl/templates/. "$TPL_DIR/"
+        rm -rf tpl "$tpz"
+
+    - if: inputs.templates == 'true'
+      shell: bash
+      env:
+        TPL_DIR: ${{ steps.tpl-dir.outputs.dir }}
+      run: |
+        set -euo pipefail
+        test -f "$TPL_DIR/version.txt"
+        echo "Export templates: $(cat "$TPL_DIR/version.txt") in $TPL_DIR"
+        ls "$TPL_DIR"
