@@ -92,6 +92,7 @@ func test_headless_process_exits_2_on_max_players_99() -> void:
 
 
 func test_beacon_player_count_never_reports_51_of_50() -> void:
-	assert_eq(LobbyConfig.beacon_player_count(0, 50), 1)
-	assert_eq(LobbyConfig.beacon_player_count(49, 50), 50)
+	# player_count already includes the listen host (add_local_player).
+	assert_eq(LobbyConfig.beacon_player_count(1, 50), 1)
 	assert_eq(LobbyConfig.beacon_player_count(50, 50), 50)
+	assert_eq(LobbyConfig.beacon_player_count(51, 50), 50)

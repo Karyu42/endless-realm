@@ -2,11 +2,9 @@ class_name LobbyConfig
 extends RefCounted
 ## UI and LAN fields for the lobby browser and beacon. Host settings
 ## (max players, M range, import flags, name, join code) live on
-## `host_settings`, a stub of the Server Engineer's LobbySettings until
-## that API lands in net/host/.
+## `host_settings`, a real LobbySettings from net/host/.
 
 const DEFAULT_WS_PORT: int = 8080
-const HostSettings := preload("res://src/lobby/lobby_settings_stub.gd")
 
 var broadcast_join_code: bool = false
 var ws_port: int = DEFAULT_WS_PORT
@@ -15,29 +13,22 @@ var instance_seed: int = 1
 ## Display-only default portal multiplier until real portals exist.
 var display_multiplier: float = 1.0
 var open_portals: Array[float] = []
-var host_settings = HostSettings.new()
+var host_settings: LobbySettings = LobbySettings.new()
 
 
 static func generate_join_code() -> String:
-	var alphabet := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	var rng := RandomNumberGenerator.new()
-	rng.randomize()
-	var code := ""
-	for i in range(6):
-		code += alphabet[rng.randi_range(0, alphabet.length() - 1)]
-	return code
+	return LobbySettings.generate_join_code()
 
 
-## Beacon occupancy until add_local_player lands. The listen host is not in
-## LobbyHost.players, so we count them as one but never report more than
-## max (a full remote list would otherwise show 51/50).
-static func beacon_player_count(remote_count: int, max_players: int) -> int:
+## Occupancy for the beacon. `player_count` already includes the listen host
+## once they have been added with add_local_player. Never report more than max.
+static func beacon_player_count(player_count: int, max_players: int) -> int:
 	var cap: int = maxi(max_players, 0)
-	return mini(remote_count + 1, cap)
+	return clampi(player_count, 0, cap)
 
 
 func to_beacon(player_count: int) -> Dictionary:
-	var hs = host_settings
+	var hs: LobbySettings = host_settings
 	return {
 		"name": hs.lobby_name if hs.lobby_name != "" else "Practice Lobby",
 		"players": player_count,

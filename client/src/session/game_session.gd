@@ -58,34 +58,35 @@ func start_solo() -> void:
 func start_host(cfg: LobbyConfig, bind_host: String = "*") -> Error:
 	_teardown_net()
 	lobby_config = cfg
-	var hs = cfg.host_settings
-	if hs.join_code == "":
-		hs.join_code = LobbyConfig.generate_join_code()
 	var bind := bind_host
 	if bind == "*" or bind == "":
 		bind = "0.0.0.0"
 	lobby_host = LobbyHost.new(config)
 	lobby_host.port = cfg.ws_port
 	lobby_host.bind_address = bind
-	lobby_host.max_players = hs.max_players
 	lobby_host.instance_seed = cfg.instance_seed
 	lobby_host.multiplier_m100 = int(round(cfg.display_multiplier * 100.0))
-	# TODO(host-settings): once LobbyHost.apply_settings / settings() land,
-	# call apply_settings on a real LobbySettings instead of copying fields.
+	var settings_err: Error = lobby_host.apply_settings(cfg.host_settings)
+	if settings_err != OK:
+		lobby_host = null
+		start_solo()
+		return settings_err
+	cfg.host_settings = lobby_host.settings()
 	var err: Error = lobby_host.start()
 	if err != OK:
 		lobby_host = null
 		start_solo()
 		return err
 	cfg.ws_port = lobby_host.port
-	# TODO(host-view): once add_local_player / submit_local_input /
-	# remove_local_player, world_view(player_id) and the ticked signal land,
-	# the host arena should render from lobby_host.world_view(local_player_id)
-	# and this separate LocalSim should be dropped.
-	var sim := _new_sim()
+	var pid: int = lobby_host.add_local_player(null)
+	if pid < 0:
+		lobby_host.stop()
+		lobby_host = null
+		start_solo()
+		return ERR_CANT_CREATE
 	mode = Mode.HOST
-	local_player_id = 1
-	source = HostWorldSource.new(lobby_host, sim)
+	local_player_id = pid
+	source = HostWorldSource.new(lobby_host, pid)
 	beacon = LobbyBeaconBroadcaster.new()
 	if beacon.start(cfg, bind) != OK:
 		# Discovery is optional; the host still listens on WebSocket.
@@ -154,14 +155,13 @@ func _teardown_net() -> void:
 
 
 func _process(delta: float) -> void:
-	if lobby_host != null:
-		lobby_host.service()
-		if beacon != null:
-			beacon.player_count = LobbyConfig.beacon_player_count(
-				lobby_host.players.size(), lobby_host.max_players)
-			beacon.poll(delta)
 	if source == null:
 		return
+	if mode == Mode.HOST and lobby_host != null:
+		_process_host(delta)
+		return
+	if lobby_host != null:
+		lobby_host.service()
 	var dt: float = SimConstants.TICK_DT
 	_accum += delta
 	var steps: int = 0
@@ -185,6 +185,31 @@ func _process(delta: float) -> void:
 	if steps >= MAX_CATCH_UP_TICKS and _accum >= dt:
 		_accum = fmod(_accum, dt)
 	alpha = clampf(_accum / dt, 0.0, 1.0)
+
+
+func _process_host(delta: float) -> void:
+	# Submit before service() so this frame's input is in the due host tick.
+	# uint32 wrap; seq 0 is always rejected by the host, so skip it.
+	_seq = Seq.next(_seq)
+	var intent := InputIntent.from_raw(
+		_seq, move_x, move_y, aim, fire_held, interact_pressed, inventory_slot, interact_target_id
+	)
+	interact_pressed = false
+	inventory_slot = 0
+	interact_target_id = 0
+	source.submit_input(intent)
+	lobby_host.service()
+	if beacon != null:
+		beacon.player_count = LobbyConfig.beacon_player_count(
+			lobby_host.players.size(), lobby_host.max_players)
+		beacon.poll(delta)
+	var view: WorldSnapshot = source.snapshot()
+	if view != null and view.tick != curr_snapshot.tick:
+		prev_snapshot = curr_snapshot
+		curr_snapshot = view
+	var due: int = lobby_host.next_deadline_usec()
+	var now: int = lobby_host.clock.call() if lobby_host.clock.is_valid() else Time.get_ticks_usec()
+	alpha = clampf(1.0 - float(due - now) / float(LobbyHost.PERIOD_USEC), 0.0, 1.0)
 
 
 func render_time_ticks() -> float:

@@ -81,3 +81,93 @@ func test_out_of_range_player_is_not_targeted() -> void:
 	var eid: int = sim.spawn_enemy_from_def(_stationary(), 0.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 0)
+
+
+
+func test_default_deaggro_radius_is_aggro_plus_four() -> void:
+	var d := EnemyDef.from_json({
+		"id": "x", "name": "X", "rank": "normal",
+		"base": {"hp": 10, "ward": 0, "contact": 0, "damage": {}},
+		"move_speed": 0.0, "radius": 0.35, "aggro_radius": 8.0,
+		"ai": {"type": "chase_hover"},
+	})
+	assert_eq(d.deaggro_range(), 12.0)
+	assert_false(d.no_leash)
+	var sim := LocalSim.new(SimConfig.new(), 5.0, 0.0)
+	var def := _stationary(8.0)
+	# Default deaggro is 12. Stay aggroed at 10, drop at 13.
+	var eid: int = sim.spawn_enemy_from_def(def, 0.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 1)
+	sim.place_player(1, 10.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 1, "still inside default deaggro (12)")
+	sim.place_player(1, 13.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 0, "drops when no living player is within deaggro_radius")
+
+
+func test_explicit_deaggro_radius() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 5.0, 0.0)
+	var def := _stationary(8.0)
+	def.deaggro_radius = 20.0
+	var eid: int = sim.spawn_enemy_from_def(def, 0.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 1)
+	sim.place_player(1, 18.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 1, "inside explicit deaggro 20")
+	sim.place_player(1, 21.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 0)
+
+
+func test_leash_triggers_even_if_player_is_inside_deaggro() -> void:
+	# deaggro 30, leash 16: walk past 16 from spawn with the player still in range.
+	var sim := LocalSim.new(SimConfig.new(), 5.0, 0.0)
+	var def := _stationary(8.0)
+	def.deaggro_radius = 30.0
+	def.leash = 16.0
+	def.no_leash = false
+	def.move_speed = 8.0
+	def.hover_radius = 0.5
+	var eid: int = sim.spawn_enemy_from_def(def, 0.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 1)
+	sim.place_player(1, 20.0, 0.0)
+	var dropped := false
+	for i in range(80):
+		sim.step()
+		if sim.enemy_target_id(eid) == 0:
+			dropped = true
+			# The return-to-spawn step runs in the same tick as the drop, so
+			# x may already be one move-step back inside 16.
+			var e_x: float = sim.snapshot().enemies[0].x
+			var step: float = def.move_speed * SimConstants.TICK_DT
+			assert_gt(e_x, 16.0 - step - 1e-3, "leash fires around 16 tiles from spawn (x=%s)" % e_x)
+			break
+	assert_true(dropped, "16-tile leash should drop aggro first")
+
+
+func test_matron_style_no_leash_uses_deaggro_radius_20() -> void:
+	# content-v0.1 §2.3: the Matron doesn't leash while any eligible player is
+	# within 20 tiles, so deaggro_radius is 20 (data, not a hardcoded name).
+	var sim := LocalSim.new(SimConfig.new(), 5.0, 0.0)
+	var def := _stationary(12.0)
+	def.deaggro_radius = 20.0
+	def.no_leash = true
+	def.leash = 16.0
+	def.move_speed = 8.0
+	def.hover_radius = 0.5
+	var eid: int = sim.spawn_enemy_from_def(def, 0.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 1)
+	sim.place_player(1, 18.0, 0.0)
+	for i in range(80):
+		sim.step()
+	assert_eq(sim.enemy_target_id(eid), 1, "still aggroed past the 16-tile leash, player within 20")
+	assert_gt(sim.snapshot().enemies[0].x, 16.0)
+	# 21 tiles from the enemy, not from spawn (the enemy has walked out).
+	sim.place_player(1, sim.snapshot().enemies[0].x + 21.0, 0.0)
+	sim.step()
+	assert_eq(sim.enemy_target_id(eid), 0, "drops when no eligible player is within 20")

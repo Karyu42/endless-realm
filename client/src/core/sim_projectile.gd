@@ -12,6 +12,8 @@ var speed: float = 0.0
 var range_tiles: float = 0.0
 var lifetime_ticks: int = 0
 var radius_tiles: float = 0.15
+## The player who fired this shot. Used so remove_player can drop in-flight shots.
+var owner_id: int = 0
 ## Set when the shot hits a target; it is culled at the end of the tick.
 var consumed: bool = false
 

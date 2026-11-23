@@ -23,6 +23,7 @@ var ground_drops: Array[GroundDrop] = []
 var projectiles: Array[SimProjectile] = []
 var enemies: Array[EnemySnapshot] = []
 var pattern_bullets: Array[PatternBullet] = []
+var players: Array[PlayerSnapshot] = []
 
 
 func player_pixels() -> Vector2:
@@ -56,4 +57,8 @@ func duplicate_snapshot() -> WorldSnapshot:
 	copy.projectiles = projectiles.duplicate()
 	copy.enemies = enemies.duplicate()
 	copy.pattern_bullets = pattern_bullets.duplicate()
+	var player_copies: Array[PlayerSnapshot] = []
+	for ps in players:
+		player_copies.append(ps.duplicate_snapshot())
+	copy.players = player_copies
 	return copy
