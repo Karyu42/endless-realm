@@ -29,3 +29,15 @@ func test_parse_u64_accepts_hex_and_decimal_high_bits() -> void:
 	assert_eq(hex_bits, PCG32.parse_u64("0X8000000000000001"))
 	assert_eq(PCG32.parse_u64("42"), 42)
 	assert_eq(PCG32.parse_u64("0x2a"), 42)
+	# 2^64-1 is valid (signed bit pattern -1).
+	assert_eq(PCG32.parse_u64("18446744073709551615"), -1)
+	assert_eq(PCG32.parse_u64("0xffffffffffffffff"), -1)
+
+
+func test_parse_u64_rejects_values_above_u64_max() -> void:
+	# 2^64 itself must error, not wrap to 0 silently as a "success".
+	# parse_u64 still returns 0 after push_error, which is the failure sentinel.
+	assert_eq(PCG32.parse_u64("18446744073709551616"), 0)
+	assert_eq(PCG32.parse_u64("0x10000000000000000"), 0)
+	assert_push_error("value exceeds 2^64-1")
+	assert_push_error("value exceeds 2^64-1")

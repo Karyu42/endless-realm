@@ -98,6 +98,10 @@ func TestPatternFixtures(t *testing.T) {
 		t.Fatal("no pattern fixtures")
 	}
 	for _, f := range files {
+		if filepath.Base(f) == "defs.json" {
+			// Fixtures-only pattern pack, not a case file.
+			continue
+		}
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

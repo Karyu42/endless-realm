@@ -209,12 +209,16 @@ func _acquire_view(
 ) -> Polygon2D:
 	if pool.has(id):
 		return pool[id]
-	# Reuse a recycled view only when it already has this radius and kind,
-	# so polygon and color stay as they were set at creation.
+	# Reuse a recycled view only when radius, kind and color match, so a
+	# brown bag cannot inherit a gold bag's color. Color is also written
+	# on reuse so a mismatch can never show the previous tint.
 	for i in range(free.size() - 1, -1, -1):
 		var cand: Polygon2D = free[i]
-		if float(cand.get_meta("r", -1.0)) == radius_px and String(cand.get_meta("kind", "")) == kind:
+		if float(cand.get_meta("r", -1.0)) == radius_px \
+				and String(cand.get_meta("kind", "")) == kind \
+				and cand.get_meta("color", Color(0, 0, 0, 0)) == color:
 			free.remove_at(i)
+			cand.color = color
 			cand.visible = true
 			pool[id] = cand
 			return cand
@@ -226,6 +230,7 @@ func _acquire_view(
 		view.polygon = _diamond(radius_px)
 	view.set_meta("r", radius_px)
 	view.set_meta("kind", kind)
+	view.set_meta("color", color)
 	parent.add_child(view)
 	pool[id] = view
 	return view

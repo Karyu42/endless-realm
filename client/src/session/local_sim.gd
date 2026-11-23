@@ -424,7 +424,9 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 	var nearest_id: int = _nearest_player_in_aggro(e)
 	var was_aggro: bool = e.aggro
 	if e.aggro:
-		if home_dist > e.def.leash:
+		if home_dist > e.def.leash or nearest_id == 0:
+			# Leashed, or nobody alive in aggro range: idle. Do not aim
+			# at the authority player when that player is far or dead.
 			e.aggro = false
 			e.target_id = 0
 	elif nearest_id != 0 and home_dist <= e.def.leash:
@@ -439,8 +441,9 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 		if (not _target_is_valid(e)) or sim_tick >= e.target_repick_tick:
 			e.target_id = nearest_id
 			e.target_repick_tick = sim_tick + TARGET_REPICK_TICKS
-	var aim_x: float = _px
-	var aim_y: float = _py
+	# Aim only at the current target. Never fall back to the host player.
+	var aim_x: float = e.x
+	var aim_y: float = e.y
 	if e.target_id != 0:
 		var tpos := _player_pos(e.target_id)
 		aim_x = tpos.x
