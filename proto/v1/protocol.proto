@@ -151,6 +151,8 @@ enum ErrorCode {
   OPEN_PORTAL_LIMIT = 5;
   // The portal's multiplier is outside the lobby's allowed range.
   MULTIPLIER_NOT_ALLOWED = 6;
+  // The player does not meet the requirements to join this instance.
+  JOIN_REFUSED = 7;
 }
 
 message ErrorReply {
