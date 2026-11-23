@@ -271,4 +271,8 @@ func unknown_reference_ids() -> PackedStringArray:
 
 func report_unknown_ids() -> void:
 	for id in unknown_reference_ids():
-		push_error("DataCatalog: unknown id %s" % id)
+		report_unknown_id(id)
+
+
+static func report_unknown_id(id: String) -> void:
+	push_error("DataCatalog: unknown id %s" % id)

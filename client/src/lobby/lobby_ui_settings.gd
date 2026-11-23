@@ -17,6 +17,7 @@ var stack_narrow_px: int = 0
 var assume_dpi: int = 0
 var strings: Dictionary = {}
 var import_messages: Dictionary = {}
+var error_messages: Dictionary = {}
 var _valid: bool = false
 
 
@@ -35,7 +36,8 @@ static func from_json(d: Dictionary, feel_touch: Dictionary = {}) -> LobbyUiSett
 	var touch: Variant = d.get("touch", null)
 	var strs: Variant = d.get("strings", null)
 	var msgs: Variant = d.get("import_messages", null)
-	if not (touch is Dictionary and strs is Dictionary and msgs is Dictionary):
+	var errs: Variant = d.get("error_messages", null)
+	if not (touch is Dictionary and strs is Dictionary and msgs is Dictionary and errs is Dictionary):
 		push_error("LobbyUiSettings: missing required group")
 		return u
 	var td: Dictionary = touch
@@ -70,6 +72,12 @@ static func from_json(d: Dictionary, feel_touch: Dictionary = {}) -> LobbyUiSett
 			push_error("LobbyUiSettings: empty import message %s" % key)
 			return u
 		u.import_messages[String(key)] = String(md[key])
+	var ed: Dictionary = errs
+	for key in ed.keys():
+		if typeof(ed[key]) != TYPE_STRING or String(ed[key]) == "":
+			push_error("LobbyUiSettings: empty error message %s" % key)
+			return u
+		u.error_messages[String(key)] = String(ed[key])
 	if feel_touch.has("stick_thumb_mm"):
 		var thumb: float = float(feel_touch["stick_thumb_mm"])
 		if thumb > 0.0:
@@ -98,6 +106,16 @@ func import_message(code: int) -> String:
 func maps_import(code: int) -> bool:
 	var key := ImportResult.name_of(code)
 	return key != "UNKNOWN" and import_messages.has(key) and String(import_messages[key]) != ""
+
+
+func error_message(code: int) -> String:
+	var key := ErrorCodes.name_of(code)
+	return String(error_messages.get(key, ""))
+
+
+func maps_error(code: int) -> bool:
+	var key := ErrorCodes.name_of(code)
+	return key != "UNKNOWN" and error_messages.has(key) and String(error_messages[key]) != ""
 
 
 func dpi() -> float:

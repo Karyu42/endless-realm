@@ -303,6 +303,7 @@ func _sample_input(delta: float) -> void:
 		if _sticks.consume_ability_pressed():
 			GameSession.ability_pressed = true
 		if _sticks.consume_interact_pressed():
+			GameSession.clear_portal_error()
 			GameSession.interact_pressed = true
 			GameSession.interact_target_id = _nearest_prompt_interactable_id()
 		return
@@ -312,6 +313,7 @@ func _sample_input(delta: float) -> void:
 	if Input.is_action_just_pressed("ability"):
 		GameSession.ability_pressed = true
 	if Input.is_action_just_pressed("interact"):
+		GameSession.clear_portal_error()
 		GameSession.interact_pressed = true
 		GameSession.interact_target_id = _nearest_prompt_interactable_id()
 	for i in range(1, 9):
@@ -544,6 +546,7 @@ func _update_enemy_views() -> void:
 		view.position += _knock_for_target(e.id)
 
 func _on_loot_pressed() -> void:
+	GameSession.clear_portal_error()
 	GameSession.interact_pressed = true
 	GameSession.interact_target_id = _nearest_prompt_interactable_id()
 
@@ -626,6 +629,7 @@ func _update_hud() -> void:
 	else:
 		_ability.text = "%s  Ready  Focus %d / %d" % [ability_name, focus_show, snap.player_focus_max]
 	var portal := _nearest_portal()
+	var err_text: String = GameSession.portal_error_text
 	if portal != null:
 		var m_label: String = "×%.2f" % (float(portal.m100) / 100.0)
 		if portal.kind == PortalSnapshot.KIND_ENTER:
@@ -634,7 +638,13 @@ func _update_hud() -> void:
 		else:
 			_prompt.text = "E to leave %s" % portal.dungeon_name
 			_loot_btn.text = "Leave"
+		if err_text != "":
+			_prompt.text = err_text + "  ·  " + _prompt.text
 		_prompt.visible = true
+	elif err_text != "":
+		_prompt.text = err_text
+		_prompt.visible = true
+		_loot_btn.text = "Loot"
 	else:
 		_prompt.text = ""
 		_prompt.visible = false

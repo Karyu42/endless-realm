@@ -502,3 +502,79 @@ func test_player_ids_never_collide_with_sim_entities() -> void:
 		ids[id] = true
 	assert_gt(b, e, "player id taken from the shared allocator")
 
+
+# --- issued player ids --------------------------------------------------------
+
+func test_rejoin_refuses_an_in_range_id_the_host_never_issued() -> void:
+	_host = _new_host()
+	var a := _host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	var token := _host.remove_local_player(b)
+	_host.run_tick()
+	var key := "local:" + token
+	var never := b + 5
+	assert_null(_host._find_player(never))
+	_host._ability_stash[key]["id"] = never  # same host, same sim, in range, never issued
+	var back := _host.add_local_player(null, token)
+	assert_ne(back, never, "an id the host never issued is not re-added")
+	assert_ne(back, a)
+	assert_eq(_host.ability_stash_size(), 0, "the bad entry is dropped")
+	_host.run_tick()
+	_assert_conservative(back, "refused stash entry")
+	assert_null(_host.sim.get_player(never))
+
+
+func test_real_rejoin_keeps_its_issued_id() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _player_mid_cooldown()
+	var token := _host.remove_local_player(b)
+	_host.run_tick()
+	assert_eq(_host.add_local_player(null, token), b)
+
+
+func test_issued_id_set_stays_bounded() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	_host.run_tick()
+	for i in range(LobbyHost.MAX_ABILITY_STASH + 40):
+		var id := _host.add_local_player()
+		_host.run_tick()
+		_host.remove_local_player(id)
+	assert_lte(_host.issued_player_id_count(), LobbyHost.MAX_ABILITY_STASH + _host.players.size())
+	# Leaving without a snapshot (remote, no identity) keeps nothing.
+	var c := _host._add_player()
+	var n := _host.issued_player_id_count()
+	_host._leave(c)
+	assert_eq(_host.issued_player_id_count(), n - 1)
+	_host.stop()
+	assert_eq(_host.issued_player_id_count(), 0, "cleared on stop")
+
+
+## The listen-host player (built-in id 1) is already in the sim before the
+## first step, so leaving then takes a snapshot of the ready first-join
+## state: the rejoin is ready too. Nothing is gained by it.
+func test_listen_host_leave_before_first_tick_rejoins_ready() -> void:
+	_host = _new_host()
+	var a := _host.add_local_player()
+	assert_eq(a, 1)
+	assert_eq(_host.tick, 0)
+	var token := _host.remove_local_player(a)
+	assert_eq(_host.ability_stash_size(), 1, "snapshot taken before the first step")
+	assert_eq(_host.add_local_player(null, token), a)
+	_host.run_tick()
+	_assert_ready(a, "pre-first-tick rejoin")
+
+
+## Any other local player is not in the sim until the step after their
+## join, so leaving before it leaves no snapshot: the rejoin is conservative.
+func test_other_local_leave_before_entering_sim_rejoins_conservative() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	_host.run_tick()
+	var b := _host.add_local_player()
+	var token := _host.remove_local_player(b)
+	var back := _host.add_local_player(null, token)
+	_host.run_tick()
+	_assert_conservative(back, "pre-sim rejoin")

@@ -68,6 +68,7 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 - **First join this host session:** the player starts **ready**, with 100 Focus and the ability cooldown at 0. That includes the listen-host player's own first join.
 - **Rejoin key without a snapshot:** the player starts conservative, with 0 Focus and the ability on full cooldown. This covers a token that was already used, dropped, or not issued by this host.
   - A local player who leaves before entering the sim (before the host step after their join) leaves no snapshot, so rejoining with that token also starts conservative.
+  - Exception: the listen-host player takes over the sim's built-in player, which is already in the sim before the first step. Leaving before the first tick therefore snapshots the ready first-join state, and the rejoin starts **ready**. This is intended, since nothing is gained by it.
 - **Phase 1 (implemented, #52):** the listen-host player and local players are verified by the host itself. `remove_local_player()` returns a single-use, host-issued token, and passing it to `add_local_player(character, rejoin_token)` restores the snapshot.
   - **Remote joins start conservative** every time: 0 Focus and the ability on full cooldown.
 - **Phase 2 (after the handshake identity PR, #50):** remote joins switch to the same rules, keyed by the character id that the handshake has verified.
