@@ -168,10 +168,8 @@ func _process(delta: float) -> void:
 	while _accum >= dt and steps < MAX_CATCH_UP_TICKS:
 		_accum -= dt
 		steps += 1
-		_seq += 1
-		# Wrap seq as u32 to stay wire-compatible later.
-		if _seq > 0xFFFFFFFF:
-			_seq = 1
+		# uint32 wrap; seq 0 is always rejected by the host, so skip it.
+		_seq = Seq.next(_seq)
 		var intent := InputIntent.from_raw(
 			_seq, move_x, move_y, aim, fire_held, interact_pressed, inventory_slot, interact_target_id
 		)

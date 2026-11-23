@@ -51,7 +51,7 @@ var _granted_drop_ids: Dictionary = {} # drop_id -> true
 var _instance_m100: int = 100
 var _in_portal: bool = false
 var _practice_yard: bool = false
-var _last_interact_seq: int = -1
+var _last_interact_seq: int = 0
 
 
 func _init(config: SimConfig = null, start_x: float = 0.0, start_y: float = 0.0, catalog: DataCatalog = null) -> void:
@@ -753,14 +753,15 @@ func _bag_by_id(id: int) -> GroundDrop:
 
 
 func _apply_interact(_sim_tick: int) -> void:
-	# Mirror upcoming proto InputFrame.interact_target_id: 0 means none. A
-	# nonzero value is a press on this seq, applied at most once per seq.
-	# Unknown ids, bags the player may not use, and targets beyond the accept
-	# range are dropped silently, with no error.
+	# InputFrame.interact_target_id: 0 means none. A nonzero value is a
+	# press on this seq, applied at most once per seq via Seq.seq_is_next
+	# (same rule as HostInteractValidator). Unknown ids, bags the player
+	# may not use, and targets beyond SimScaling.in_accept_range are
+	# dropped silently, with no ErrorReply.
 	var target_id: int = _intent.interact_target_id
 	if target_id == 0:
 		return
-	if _intent.seq == _last_interact_seq:
+	if not Seq.seq_is_next(_intent.seq, _last_interact_seq):
 		return
 	_last_interact_seq = _intent.seq
 	var bag := _bag_by_id(target_id)
