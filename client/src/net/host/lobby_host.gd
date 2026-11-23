@@ -19,6 +19,8 @@ const MAX_CATCH_UP: int = 5
 const PERIOD_USEC: int = 50000  # 1e6 / SimConstants.TICK_HZ
 const START_HP: int = 100
 const EMITTER_RADIUS: float = 0.6
+## Matches the Go server's instance.DefaultInstanceID (the smoke instance).
+const DEFAULT_INSTANCE_ID: int = 1
 
 
 class HostConn:
@@ -234,6 +236,8 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 		w.set_tick_hz(SimConstants.TICK_HZ)
 		w.set_instance_seed(instance_seed)
 		w.set_multiplier(float(multiplier_m100) / 100.0)
+		w.set_instance_id(DEFAULT_INSTANCE_ID)
+		w.set_m100(multiplier_m100)
 		c.ws.put_packet(out.to_bytes())
 	elif msg.has_input():
 		if c.player == null:
@@ -249,6 +253,14 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 		p.aim = _finite_or_zero(f.get_aim())
 		p.fire_held = f.get_fire_held()
 		_inputs_this_tick += 1
+	elif c.player != null and (msg.has_open_portal() or msg.has_join_instance() \
+			or msg.has_list_instances() or msg.has_leave_instance()):
+		# Portals are not part of this load-test host yet.
+		var out = PB.ServerMessage.new()
+		var e = out.new_error()
+		e.set_code(PB.ErrorCode.ERROR_CODE_UNSPECIFIED)
+		e.set_reason("portals are not supported by the Godot host yet")
+		c.ws.put_packet(out.to_bytes())
 
 
 static func _finite_or_zero(v: float) -> float:

@@ -63,6 +63,8 @@ func test_hello_gets_welcome_then_snapshot_with_applied_seq() -> void:
 	assert_eq(w.get_tick_hz(), SimConstants.TICK_HZ)
 	assert_eq(w.get_instance_seed(), 7)
 	assert_almost_eq(w.get_multiplier(), 1.0, 1e-6)
+	assert_eq(w.get_m100(), 100)
+	assert_eq(w.get_instance_id_value(), LobbyHost.DEFAULT_INSTANCE_ID)
 	assert_true(got[1].has_snapshot(), "then a Snapshot")
 	var me: int = w.get_player_id()
 
@@ -120,3 +122,23 @@ func test_standin_bullets_are_seeded_and_hit_a_player_in_their_path() -> void:
 		a.step(t, on_x, on_y, 0.35, hp)
 	assert_gt(a.hits_total, 0, "swept hit registers")
 	assert_lt(hp[0], 100)
+
+
+func test_portal_messages_get_an_error_not_a_disconnect() -> void:
+	_host = _start_host()
+	var ws := WebSocketPeer.new()
+	assert_eq(ws.connect_to_url("ws://127.0.0.1:%d/ws" % _host.port), OK)
+	assert_true(_pump(_host, ws, func() -> bool: return ws.get_ready_state() == WebSocketPeer.STATE_OPEN))
+	ws.put_packet(_hello(SimConstants.PROTOCOL_VERSION))
+	var open = PB.ClientMessage.new()
+	open.new_open_portal().set_m100(100)
+	ws.put_packet(open.to_bytes())
+	var got: Array = []
+	assert_true(_pump(_host, ws, func() -> bool:
+		_read_all(ws, got)
+		for m in got:
+			if m.has_error():
+				return true
+		return false), "OpenPortal is answered with Error")
+	assert_eq(ws.get_ready_state(), WebSocketPeer.STATE_OPEN, "connection stays open")
+	assert_eq(_host.players.size(), 1)

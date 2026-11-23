@@ -756,6 +756,16 @@ class Welcome:
 		service.field = __multiplier
 		data[__multiplier.tag] = service
 		
+		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __instance_id
+		data[__instance_id.tag] = service
+		
+		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 7, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __m100
+		data[__m100.tag] = service
+		
 	var data = {}
 	
 	var __protocol_version: PBField
@@ -822,6 +832,32 @@ class Welcome:
 		__multiplier.value = DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT]
 	func set_multiplier(value : float) -> void:
 		__multiplier.value = value
+	
+	var __instance_id: PBField
+	func has_instance_id() -> bool:
+		if __instance_id.value != null:
+			return true
+		return false
+	func get_instance_id_value() -> int:
+		return __instance_id.value
+	func clear_instance_id() -> void:
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance_id(value : int) -> void:
+		__instance_id.value = value
+	
+	var __m100: PBField
+	func has_m100() -> bool:
+		if __m100.value != null:
+			return true
+		return false
+	func get_m100() -> int:
+		return __m100.value
+	func clear_m100() -> void:
+		data[7].state = PB_SERVICE_STATE.UNFILLED
+		__m100.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_m100(value : int) -> void:
+		__m100.value = value
 	
 	func _to_string() -> String:
 		return PBPacker.message_to_string(data)
@@ -1168,6 +1204,546 @@ class PlayerStub:
 			return PB_ERR.PARSE_INCOMPLETE
 		return result
 	
+class OpenPortal:
+	func _init():
+		var service
+		
+		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __m100
+		data[__m100.tag] = service
+		
+	var data = {}
+	
+	var __m100: PBField
+	func has_m100() -> bool:
+		if __m100.value != null:
+			return true
+		return false
+	func get_m100() -> int:
+		return __m100.value
+	func clear_m100() -> void:
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__m100.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_m100(value : int) -> void:
+		__m100.value = value
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+class JoinInstance:
+	func _init():
+		var service
+		
+		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __instance_id
+		data[__instance_id.tag] = service
+		
+	var data = {}
+	
+	var __instance_id: PBField
+	func has_instance_id() -> bool:
+		if __instance_id.value != null:
+			return true
+		return false
+	func get_instance_id_value() -> int:
+		return __instance_id.value
+	func clear_instance_id() -> void:
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance_id(value : int) -> void:
+		__instance_id.value = value
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+class LeaveInstance:
+	func _init():
+		var service
+		
+	var data = {}
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+class ListInstances:
+	func _init():
+		var service
+		
+	var data = {}
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+class InstanceInfo:
+	func _init():
+		var service
+		
+		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __instance_id
+		data[__instance_id.tag] = service
+		
+		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __m100
+		data[__m100.tag] = service
+		
+		__seed = PBField.new("seed", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 3, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __seed
+		data[__seed.tag] = service
+		
+		__player_count = PBField.new("player_count", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 4, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __player_count
+		data[__player_count.tag] = service
+		
+		__is_default = PBField.new("is_default", PB_DATA_TYPE.BOOL, PB_RULE.OPTIONAL, 5, true, DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL])
+		service = PBServiceField.new()
+		service.field = __is_default
+		data[__is_default.tag] = service
+		
+	var data = {}
+	
+	var __instance_id: PBField
+	func has_instance_id() -> bool:
+		if __instance_id.value != null:
+			return true
+		return false
+	func get_instance_id_value() -> int:
+		return __instance_id.value
+	func clear_instance_id() -> void:
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance_id(value : int) -> void:
+		__instance_id.value = value
+	
+	var __m100: PBField
+	func has_m100() -> bool:
+		if __m100.value != null:
+			return true
+		return false
+	func get_m100() -> int:
+		return __m100.value
+	func clear_m100() -> void:
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__m100.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_m100(value : int) -> void:
+		__m100.value = value
+	
+	var __seed: PBField
+	func has_seed() -> bool:
+		if __seed.value != null:
+			return true
+		return false
+	func get_seed() -> int:
+		return __seed.value
+	func clear_seed() -> void:
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__seed.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_seed(value : int) -> void:
+		__seed.value = value
+	
+	var __player_count: PBField
+	func has_player_count() -> bool:
+		if __player_count.value != null:
+			return true
+		return false
+	func get_player_count() -> int:
+		return __player_count.value
+	func clear_player_count() -> void:
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__player_count.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_player_count(value : int) -> void:
+		__player_count.value = value
+	
+	var __is_default: PBField
+	func has_is_default() -> bool:
+		if __is_default.value != null:
+			return true
+		return false
+	func get_is_default() -> bool:
+		return __is_default.value
+	func clear_is_default() -> void:
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__is_default.value = DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL]
+	func set_is_default(value : bool) -> void:
+		__is_default.value = value
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+class OpenPortalOk:
+	func _init():
+		var service
+		
+		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __instance_id
+		data[__instance_id.tag] = service
+		
+		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __m100
+		data[__m100.tag] = service
+		
+		__seed = PBField.new("seed", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 3, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __seed
+		data[__seed.tag] = service
+		
+	var data = {}
+	
+	var __instance_id: PBField
+	func has_instance_id() -> bool:
+		if __instance_id.value != null:
+			return true
+		return false
+	func get_instance_id_value() -> int:
+		return __instance_id.value
+	func clear_instance_id() -> void:
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance_id(value : int) -> void:
+		__instance_id.value = value
+	
+	var __m100: PBField
+	func has_m100() -> bool:
+		if __m100.value != null:
+			return true
+		return false
+	func get_m100() -> int:
+		return __m100.value
+	func clear_m100() -> void:
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__m100.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_m100(value : int) -> void:
+		__m100.value = value
+	
+	var __seed: PBField
+	func has_seed() -> bool:
+		if __seed.value != null:
+			return true
+		return false
+	func get_seed() -> int:
+		return __seed.value
+	func clear_seed() -> void:
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__seed.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_seed(value : int) -> void:
+		__seed.value = value
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+class JoinInstanceOk:
+	func _init():
+		var service
+		
+		__instance_id = PBField.new("instance_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __instance_id
+		data[__instance_id.tag] = service
+		
+		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __m100
+		data[__m100.tag] = service
+		
+		__seed = PBField.new("seed", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 3, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __seed
+		data[__seed.tag] = service
+		
+	var data = {}
+	
+	var __instance_id: PBField
+	func has_instance_id() -> bool:
+		if __instance_id.value != null:
+			return true
+		return false
+	func get_instance_id_value() -> int:
+		return __instance_id.value
+	func clear_instance_id() -> void:
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__instance_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_instance_id(value : int) -> void:
+		__instance_id.value = value
+	
+	var __m100: PBField
+	func has_m100() -> bool:
+		if __m100.value != null:
+			return true
+		return false
+	func get_m100() -> int:
+		return __m100.value
+	func clear_m100() -> void:
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__m100.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_m100(value : int) -> void:
+		__m100.value = value
+	
+	var __seed: PBField
+	func has_seed() -> bool:
+		if __seed.value != null:
+			return true
+		return false
+	func get_seed() -> int:
+		return __seed.value
+	func clear_seed() -> void:
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__seed.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_seed(value : int) -> void:
+		__seed.value = value
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+class InstanceList:
+	func _init():
+		var service
+		
+		var __instances_default: Array[InstanceInfo] = []
+		__instances = PBField.new("instances", PB_DATA_TYPE.MESSAGE, PB_RULE.REPEATED, 1, true, __instances_default)
+		service = PBServiceField.new()
+		service.field = __instances
+		service.func_ref = Callable(self, "add_instances")
+		data[__instances.tag] = service
+		
+	var data = {}
+	
+	var __instances: PBField
+	func get_instances() -> Array[InstanceInfo]:
+		return __instances.value
+	func clear_instances() -> void:
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__instances.value.clear()
+	func add_instances() -> InstanceInfo:
+		var element = InstanceInfo.new()
+		__instances.value.append(element)
+		return element
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+enum ErrorCode {
+	ERROR_CODE_UNSPECIFIED = 0,
+	INVALID_MULTIPLIER = 1,
+	INSTANCE_NOT_FOUND = 2,
+	ALREADY_IN_INSTANCE = 3,
+	INSTANCE_FULL = 4,
+	OPEN_PORTAL_LIMIT = 5
+}
+
+class ErrorMsg:
+	func _init():
+		var service
+		
+		__code = PBField.new("code", PB_DATA_TYPE.ENUM, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.ENUM])
+		service = PBServiceField.new()
+		service.field = __code
+		data[__code.tag] = service
+		
+		__reason = PBField.new("reason", PB_DATA_TYPE.STRING, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.STRING])
+		service = PBServiceField.new()
+		service.field = __reason
+		data[__reason.tag] = service
+		
+	var data = {}
+	
+	var __code: PBField
+	func has_code() -> bool:
+		if __code.value != null:
+			return true
+		return false
+	func get_code():
+		return __code.value
+	func clear_code() -> void:
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__code.value = DEFAULT_VALUES_3[PB_DATA_TYPE.ENUM]
+	func set_code(value) -> void:
+		__code.value = value
+	
+	var __reason: PBField
+	func has_reason() -> bool:
+		if __reason.value != null:
+			return true
+		return false
+	func get_reason() -> String:
+		return __reason.value
+	func clear_reason() -> void:
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__reason.value = DEFAULT_VALUES_3[PB_DATA_TYPE.STRING]
+	func set_reason(value : String) -> void:
+		__reason.value = value
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
 class ClientMessage:
 	func _init():
 		var service
@@ -1184,12 +1760,40 @@ class ClientMessage:
 		service.func_ref = Callable(self, "new_input")
 		data[__input.tag] = service
 		
+		__open_portal = PBField.new("open_portal", PB_DATA_TYPE.MESSAGE, PB_RULE.OPTIONAL, 3, true, DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE])
+		service = PBServiceField.new()
+		service.field = __open_portal
+		service.func_ref = Callable(self, "new_open_portal")
+		data[__open_portal.tag] = service
+		
+		__join_instance = PBField.new("join_instance", PB_DATA_TYPE.MESSAGE, PB_RULE.OPTIONAL, 4, true, DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE])
+		service = PBServiceField.new()
+		service.field = __join_instance
+		service.func_ref = Callable(self, "new_join_instance")
+		data[__join_instance.tag] = service
+		
+		__list_instances = PBField.new("list_instances", PB_DATA_TYPE.MESSAGE, PB_RULE.OPTIONAL, 5, true, DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE])
+		service = PBServiceField.new()
+		service.field = __list_instances
+		service.func_ref = Callable(self, "new_list_instances")
+		data[__list_instances.tag] = service
+		
+		__leave_instance = PBField.new("leave_instance", PB_DATA_TYPE.MESSAGE, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE])
+		service = PBServiceField.new()
+		service.field = __leave_instance
+		service.func_ref = Callable(self, "new_leave_instance")
+		data[__leave_instance.tag] = service
+		
 	var data = {}
 	
 	enum PayloadCase {
 		PAYLOAD_NOT_SET = 0,
 		HELLO = 1,
 		INPUT = 2,
+		OPEN_PORTAL = 3,
+		JOIN_INSTANCE = 4,
+		LIST_INSTANCES = 5,
+		LEAVE_INSTANCE = 6,
 	}
 	var _payload_case: int = 0
 
@@ -1206,6 +1810,14 @@ class ClientMessage:
 		_payload_case = 1
 		__input.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
 		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__list_instances.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__leave_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
 		__hello.value = Hello.new()
 		return __hello.value
 	
@@ -1222,8 +1834,112 @@ class ClientMessage:
 		data[1].state = PB_SERVICE_STATE.UNFILLED
 		data[2].state = PB_SERVICE_STATE.FILLED
 		_payload_case = 2
+		__open_portal.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__list_instances.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__leave_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
 		__input.value = InputFrame.new()
 		return __input.value
+	
+	var __open_portal: PBField
+	func has_open_portal() -> bool:
+		return data[3].state == PB_SERVICE_STATE.FILLED
+	func get_open_portal() -> OpenPortal:
+		return __open_portal.value
+	func clear_open_portal() -> void:
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+	func new_open_portal() -> OpenPortal:
+		__hello.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__input.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		data[3].state = PB_SERVICE_STATE.FILLED
+		_payload_case = 3
+		__join_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__list_instances.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__leave_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal.value = OpenPortal.new()
+		return __open_portal.value
+	
+	var __join_instance: PBField
+	func has_join_instance() -> bool:
+		return data[4].state == PB_SERVICE_STATE.FILLED
+	func get_join_instance() -> JoinInstance:
+		return __join_instance.value
+	func clear_join_instance() -> void:
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+	func new_join_instance() -> JoinInstance:
+		__hello.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__input.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		data[4].state = PB_SERVICE_STATE.FILLED
+		_payload_case = 4
+		__list_instances.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__leave_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance.value = JoinInstance.new()
+		return __join_instance.value
+	
+	var __list_instances: PBField
+	func has_list_instances() -> bool:
+		return data[5].state == PB_SERVICE_STATE.FILLED
+	func get_list_instances() -> ListInstances:
+		return __list_instances.value
+	func clear_list_instances() -> void:
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__list_instances.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+	func new_list_instances() -> ListInstances:
+		__hello.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__input.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		data[5].state = PB_SERVICE_STATE.FILLED
+		_payload_case = 5
+		__leave_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__list_instances.value = ListInstances.new()
+		return __list_instances.value
+	
+	var __leave_instance: PBField
+	func has_leave_instance() -> bool:
+		return data[6].state == PB_SERVICE_STATE.FILLED
+	func get_leave_instance() -> LeaveInstance:
+		return __leave_instance.value
+	func clear_leave_instance() -> void:
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__leave_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+	func new_leave_instance() -> LeaveInstance:
+		__hello.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__input.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__list_instances.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		data[6].state = PB_SERVICE_STATE.FILLED
+		_payload_case = 6
+		__leave_instance.value = LeaveInstance.new()
+		return __leave_instance.value
 	
 	func get_payload_case() -> int:
 		return _payload_case
@@ -1270,6 +1986,30 @@ class ServerMessage:
 		service.func_ref = Callable(self, "new_snapshot")
 		data[__snapshot.tag] = service
 		
+		__open_portal_ok = PBField.new("open_portal_ok", PB_DATA_TYPE.MESSAGE, PB_RULE.OPTIONAL, 4, true, DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE])
+		service = PBServiceField.new()
+		service.field = __open_portal_ok
+		service.func_ref = Callable(self, "new_open_portal_ok")
+		data[__open_portal_ok.tag] = service
+		
+		__join_instance_ok = PBField.new("join_instance_ok", PB_DATA_TYPE.MESSAGE, PB_RULE.OPTIONAL, 5, true, DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE])
+		service = PBServiceField.new()
+		service.field = __join_instance_ok
+		service.func_ref = Callable(self, "new_join_instance_ok")
+		data[__join_instance_ok.tag] = service
+		
+		__instance_list = PBField.new("instance_list", PB_DATA_TYPE.MESSAGE, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE])
+		service = PBServiceField.new()
+		service.field = __instance_list
+		service.func_ref = Callable(self, "new_instance_list")
+		data[__instance_list.tag] = service
+		
+		__error = PBField.new("error", PB_DATA_TYPE.MESSAGE, PB_RULE.OPTIONAL, 7, true, DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE])
+		service = PBServiceField.new()
+		service.field = __error
+		service.func_ref = Callable(self, "new_error")
+		data[__error.tag] = service
+		
 	var data = {}
 	
 	enum PayloadCase {
@@ -1277,6 +2017,10 @@ class ServerMessage:
 		WELCOME = 1,
 		REJECT = 2,
 		SNAPSHOT = 3,
+		OPEN_PORTAL_OK = 4,
+		JOIN_INSTANCE_OK = 5,
+		INSTANCE_LIST = 6,
+		ERROR = 7,
 	}
 	var _payload_case: int = 0
 
@@ -1295,6 +2039,14 @@ class ServerMessage:
 		data[2].state = PB_SERVICE_STATE.UNFILLED
 		__snapshot.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
 		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__instance_list.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__error.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[7].state = PB_SERVICE_STATE.UNFILLED
 		__welcome.value = Welcome.new()
 		return __welcome.value
 	
@@ -1313,6 +2065,14 @@ class ServerMessage:
 		_payload_case = 2
 		__snapshot.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
 		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__instance_list.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__error.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[7].state = PB_SERVICE_STATE.UNFILLED
 		__reject.value = Reject.new()
 		return __reject.value
 	
@@ -1331,8 +2091,120 @@ class ServerMessage:
 		data[2].state = PB_SERVICE_STATE.UNFILLED
 		data[3].state = PB_SERVICE_STATE.FILLED
 		_payload_case = 3
+		__open_portal_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__instance_list.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__error.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[7].state = PB_SERVICE_STATE.UNFILLED
 		__snapshot.value = Snapshot.new()
 		return __snapshot.value
+	
+	var __open_portal_ok: PBField
+	func has_open_portal_ok() -> bool:
+		return data[4].state == PB_SERVICE_STATE.FILLED
+	func get_open_portal_ok() -> OpenPortalOk:
+		return __open_portal_ok.value
+	func clear_open_portal_ok() -> void:
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+	func new_open_portal_ok() -> OpenPortalOk:
+		__welcome.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__reject.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__snapshot.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		data[4].state = PB_SERVICE_STATE.FILLED
+		_payload_case = 4
+		__join_instance_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__instance_list.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__error.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[7].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal_ok.value = OpenPortalOk.new()
+		return __open_portal_ok.value
+	
+	var __join_instance_ok: PBField
+	func has_join_instance_ok() -> bool:
+		return data[5].state == PB_SERVICE_STATE.FILLED
+	func get_join_instance_ok() -> JoinInstanceOk:
+		return __join_instance_ok.value
+	func clear_join_instance_ok() -> void:
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+	func new_join_instance_ok() -> JoinInstanceOk:
+		__welcome.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__reject.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__snapshot.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		data[5].state = PB_SERVICE_STATE.FILLED
+		_payload_case = 5
+		__instance_list.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__error.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[7].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance_ok.value = JoinInstanceOk.new()
+		return __join_instance_ok.value
+	
+	var __instance_list: PBField
+	func has_instance_list() -> bool:
+		return data[6].state == PB_SERVICE_STATE.FILLED
+	func get_instance_list() -> InstanceList:
+		return __instance_list.value
+	func clear_instance_list() -> void:
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__instance_list.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+	func new_instance_list() -> InstanceList:
+		__welcome.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__reject.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__snapshot.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		data[6].state = PB_SERVICE_STATE.FILLED
+		_payload_case = 6
+		__error.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[7].state = PB_SERVICE_STATE.UNFILLED
+		__instance_list.value = InstanceList.new()
+		return __instance_list.value
+	
+	var __error: PBField
+	func has_error() -> bool:
+		return data[7].state == PB_SERVICE_STATE.FILLED
+	func get_error() -> ErrorMsg:
+		return __error.value
+	func clear_error() -> void:
+		data[7].state = PB_SERVICE_STATE.UNFILLED
+		__error.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+	func new_error() -> ErrorMsg:
+		__welcome.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__reject.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__snapshot.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__open_portal_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__join_instance_ok.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__instance_list.value = DEFAULT_VALUES_3[PB_DATA_TYPE.MESSAGE]
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		data[7].state = PB_SERVICE_STATE.FILLED
+		_payload_case = 7
+		__error.value = ErrorMsg.new()
+		return __error.value
 	
 	func get_payload_case() -> int:
 		return _payload_case
