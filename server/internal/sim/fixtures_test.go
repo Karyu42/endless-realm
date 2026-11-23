@@ -41,11 +41,11 @@ func TestPCG32KnownVectors(t *testing.T) {
 		t.Fatal("no PCG32 cases")
 	}
 	for _, c := range doc.Cases {
-		state, err := strconv.ParseUint(c.InitState, 10, 64)
+		state, err := ParseU64(c.InitState)
 		if err != nil {
 			t.Fatal(err)
 		}
-		seq, err := strconv.ParseUint(c.InitSeq, 10, 64)
+		seq, err := ParseU64(c.InitSeq)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -60,15 +60,15 @@ func TestPCG32KnownVectors(t *testing.T) {
 }
 
 type patternCase struct {
-	Name         string                     `json:"name"`
-	PatternID    string                     `json:"pattern_id"`
-	Seed         string                     `json:"seed"`
-	SpawnTick    int                        `json:"spawn_tick"`
-	Origin       []float64                  `json:"origin"`
-	AimRad       float64                    `json:"aim_rad"`
-	VolleyIndex  int                        `json:"volley_index"`
-	Ticks        []int                      `json:"ticks"`
-	Expected     map[string][]expectedPoint `json:"expected"`
+	Name        string                     `json:"name"`
+	PatternID   string                     `json:"pattern_id"`
+	Seed        string                     `json:"seed"`
+	SpawnTick   int                        `json:"spawn_tick"`
+	Origin      []float64                  `json:"origin"`
+	AimRad      float64                    `json:"aim_rad"`
+	VolleyIndex int                        `json:"volley_index"`
+	Ticks       []int                      `json:"ticks"`
+	Expected    map[string][]expectedPoint `json:"expected"`
 }
 
 type expectedPoint struct {
@@ -82,6 +82,13 @@ func TestPatternFixtures(t *testing.T) {
 	patterns, err := LoadPatterns(root)
 	if err != nil {
 		t.Fatal(err)
+	}
+	extra, err := LoadPatternFile(filepath.Join(root, "fixtures", "patterns", "defs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, def := range extra {
+		patterns[id] = def
 	}
 	files, err := filepath.Glob(filepath.Join(root, "fixtures", "patterns", "*.json"))
 	if err != nil {
@@ -108,7 +115,7 @@ func TestPatternFixtures(t *testing.T) {
 				if !ok {
 					t.Fatalf("unknown pattern %s", c.PatternID)
 				}
-				seed, err := strconv.ParseUint(c.Seed, 10, 64)
+				seed, err := ParseU64(c.Seed)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -156,5 +163,23 @@ func TestLifetimeTicks(t *testing.T) {
 	}
 	if n := LifetimeTicks(7, 14); n != 10 {
 		t.Fatalf("gleamwright-like lifetime %d, want 10", n)
+	}
+}
+
+func TestParseU64(t *testing.T) {
+	hexV, err := ParseU64("0x8000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decV, err := ParseU64("9223372036854775809")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hexV != decV || hexV != 0x8000000000000001 {
+		t.Fatalf("got hex=%d dec=%d", hexV, decV)
+	}
+	fortyTwo, err := ParseU64("0x2a")
+	if err != nil || fortyTwo != 42 {
+		t.Fatalf("0x2a -> %d, %v", fortyTwo, err)
 	}
 }

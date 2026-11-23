@@ -1,0 +1,20 @@
+{
+  "patterns": [
+    {
+      "id": "fixture_gap_ring",
+      "type": "ring",
+      "count": 8,
+      "aim": "fixed",
+      "start_angle_deg": 0,
+      "skip": {
+        "consecutive": 2,
+        "start": "rng"
+      },
+      "speed": 4.0,
+      "range": 5.0,
+      "size": "M",
+      "damage_key": "ring",
+      "trigger": "timer"
+    }
+  ]
+}

@@ -3,6 +3,11 @@
 // in fixtures/ must match on both sides.
 package sim
 
+import (
+	"strconv"
+	"strings"
+)
+
 // PCG-XSH-RR 64/32 (Melissa O'Neill). State is uint64, output is uint32.
 // Do not replace this with math/rand.
 
@@ -31,4 +36,14 @@ func (r *PCG32) Uint32() uint32 {
 	xorshifted := uint32(((old >> 18) ^ old) >> 27)
 	rot := uint32(old >> 59)
 	return (xorshifted >> rot) | (xorshifted << ((-rot) & 31))
+}
+
+// ParseU64 reads a fixture u64 written as a decimal string or as 0x hex.
+// Both Go and GDScript use this format so values >= 2^63 stay bit-exact.
+func ParseU64(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		return strconv.ParseUint(s[2:], 16, 64)
+	}
+	return strconv.ParseUint(s, 10, 64)
 }

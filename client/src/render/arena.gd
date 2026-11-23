@@ -207,25 +207,27 @@ func _acquire_view(
 	radius_px: float,
 	kind: String
 ) -> Polygon2D:
-	var view: Polygon2D
 	if pool.has(id):
-		view = pool[id]
-	elif not free.is_empty():
-		view = free.pop_back()
-		view.visible = true
-		pool[id] = view
+		return pool[id]
+	# Reuse a recycled view only when it already has this radius and kind,
+	# so polygon and color stay as they were set at creation.
+	for i in range(free.size() - 1, -1, -1):
+		var cand: Polygon2D = free[i]
+		if float(cand.get_meta("r", -1.0)) == radius_px and String(cand.get_meta("kind", "")) == kind:
+			free.remove_at(i)
+			cand.visible = true
+			pool[id] = cand
+			return cand
+	var view := Polygon2D.new()
+	view.color = color
+	if kind == "enemy":
+		view.polygon = _enemy_shape(radius_px)
 	else:
-		view = Polygon2D.new()
-		view.color = color
-		parent.add_child(view)
-		pool[id] = view
-	if not view.has_meta("r") or float(view.get_meta("r")) != radius_px:
-		if kind == "enemy":
-			view.polygon = _enemy_shape(radius_px)
-		else:
-			view.polygon = _diamond(radius_px)
-		view.color = color
-		view.set_meta("r", radius_px)
+		view.polygon = _diamond(radius_px)
+	view.set_meta("r", radius_px)
+	view.set_meta("kind", kind)
+	parent.add_child(view)
+	pool[id] = view
 	return view
 
 

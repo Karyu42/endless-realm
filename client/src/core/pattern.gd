@@ -22,7 +22,6 @@ var range_tiles: float = 1.0
 var size: String = "S"
 var damage_key: String = ""
 var trigger: String = "timer"
-var interval_ticks: int = 30
 
 
 static func lifetime_ticks(range_tiles: float, speed: float) -> int:
@@ -55,7 +54,6 @@ static func from_json(d: Dictionary) -> PatternDef:
 	p.size = String(d.get("size", "S"))
 	p.damage_key = String(d.get("damage_key", ""))
 	p.trigger = String(d.get("trigger", "timer"))
-	p.interval_ticks = int(d.get("interval_ticks", 30))
 	var cycle: Variant = d.get("angle_offset_cycle_deg", [])
 	if cycle is Array:
 		for v in cycle:
