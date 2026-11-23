@@ -6,7 +6,7 @@ Endless Realm is a co-op, top-down bullet-hell MMO. It has no level cap and gear
 
 All formulas are the source of truth. Tables only illustrate them. All numbers are starting values for tuning. Put them in config, not in code.
 
-Companion docs: base stats for v0.1 enemies, the Tallow Warden, the Wilds ring layout and projectile speeds live in [`docs/design/content-v0.1.md`](content-v0.1.md) (separate PR, branch `design/content-v0.1`). The engine, netcode and persistence choices are in [`docs/tech/stack.md`](../tech/stack.md). Detailed anti-cheat and anomaly-detection thresholds live in a **private ops doc** (owned by Economy Ops) and are deliberately not in this public repo.
+Companion docs: base stats for v0.1 enemies, the Tallow Warden, the Wilds ring layout and projectile speeds will live in [`docs/design/content-v0.1.md`](content-v0.1.md) (PR #4, branch `design/content-v0.1`, being aligned to this doc and landing with or before it). **This doc is the source of truth.** Where the two disagree, vision.md wins. The engine, netcode and persistence choices are in [`docs/tech/stack.md`](../tech/stack.md). Detailed anti-cheat and anomaly-detection thresholds live in a **private ops doc** (owned by Economy Ops) and are deliberately not in this public repo.
 
 Legend: **[v0.1]** is in the first playable slice. **[Later]** is a later-phase idea, written down so v0.1 doesn't block it.
 
@@ -17,7 +17,7 @@ Legend: **[v0.1]** is in the first playable slice. **[Later]** is a later-phase 
 1. **[v0.1]** Spawn in **the Hearth**, a safe hub with a vendor, a stash and a portal board.
 2. Step into **the Wilds**, a shared open zone in rings. Enemy level rises from the edge (level 1) toward the center (top ring = base level 20 in v0.1; ring count, widths and levels are in `content-v0.1.md`).
 3. Dodge bullet patterns, kill enemies, and earn XP, Glint and gear drops.
-4. Find or open a **portal** to a dungeon instance (v0.1 has one dungeon, **the Hollowmere Vault**, with one boss, **the Tallow Warden**). The opener sets the level multiplier (§6).
+4. Find a **portal**, or open one with a **Vault Sigil**, to a dungeon instance (v0.1 has one dungeon, **the Hollowmere Vault**, with one boss, **the Tallow Warden**). The opener sets the level multiplier (§6).
 5. Clear the dungeon for boss loot and Riftstone, then go back to the Hearth.
 6. Salvage, tier up and buy gear. Push to a higher level, ring or multiplier and repeat.
 
@@ -156,19 +156,25 @@ The minimum tier is 0. Item drop chance per kill is 4% for normal enemies and 10
 
 | Currency (placeholder) | Sources | Sinks |
 |---|---|---|
-| **Glint** (common) | Every kill: `ceil(m(E))` per eligible player, boss ×30; selling gear: `10 × g(T)` | Vendor gear (`40 × g(T)` for tiers up to `T*(Lp) − 2`); tier-up fee; stash pages (500 × 2ⁿ); respawn fee (§7) |
+| **Glint** (common) | Every kill: `ceil(m(E))` per eligible player, boss ×30; selling gear: `10 × g(T)` | Vendor gear (`40 × g(T)` for tiers up to `T*(Lp) − 2`); tier-up fee; **Vault Sigil** (`150 × m(Lp)`, §6); stash pages (pages 1–2 free; the k-th page bought costs `500 × 2^(k−1)`: 500, 1,000, 2,000 …); respawn fee (§7) |
 | **Echo Dust** (crafting) | Salvaging gear: `5 × g(T)` | Tier-up T→T+1: `20 × g(T+1)` Dust + `100 × g(T+1)` Glint (about 4 salvages per step) |
-| **Riftstone** (portal) | Dungeon boss: `round(4 × M²)` per eligible player (§6) | Portal deposit forfeited on a failed run (§6); stash pages 3+ (10 each); charm re-roll (2); **[Later]** character slots, extra multiplier unlocks |
+| **Riftstone** (portal) | Dungeon boss: `round(4 × M²)` per eligible player (§6) | Portal deposit forfeited on a failed run (§6); charm re-roll (2); **[Later]** character slots, extra multiplier unlocks |
 
-**Ledger rule:** every currency movement goes through the double-entry ledger (§8.2). That includes kill grants, banking, the vendor, tier-ups, salvage, the respawn fee, portal deposits and trade fees, not just trades.
+**Ledger rule:** every currency movement goes through the double-entry ledger (§8.2). That includes kill grants, banking, the vendor, Sigil purchases, tier-ups, salvage, the respawn fee, portal deposits and refunds, and trade fees, not just trades.
 
-All sinks scale with `g` or `m` at the same slope as the sources, so inflation stays flat at any level. Vendor gear is always 2 tiers behind on-level, so drops and tier-ups stay the main way to progress.
+**Vault Sigil [v0.1]:** a consumable item (with its own `item_uid`) bought from the Hearth vendor.
+- **Price:** `150 × m(Lp)` Glint, computed as `(150 × (100 + 5 × (Lp − 1)) + 50) div 100`, at the buyer's real level (L1 → 150, L20 → 293, L100 → 893).
+- **Rules:** it is not tradeable in v0.1 and has no level binding, so it can be used at any later level. It is consumed at the Hearth portal board to open a Hollowmere Vault portal (§6).
+
+Level-dependent sources and sinks (kill Glint, selling, the vendor, tier-ups, the Sigil, the respawn fee) all scale with `g` or `m` at the same slope, so inflation stays flat at any level. Stash pages and the Riftstone sinks are deliberately flat one-off or utility costs. Vendor gear is always 2 tiers behind on-level, so drops and tier-ups stay the main way to progress.
 
 Glint, Echo Dust and Riftstone can be traded between players (§8). Hardcore characters have separate wallets (§7). The cosmetic-only currency **Prism** is **[Later]**: it ships with the cosmetic store, and the first playable has no paid cosmetics (`stack.md` decision 6). It is never tradeable (D8).
 
 ## 6. Portal level multiplier
 
 Whoever opens a portal (a dungeon instance; a whole server instance or shard is **[Later]**, D5) sets **M**.
+
+**Opening a portal:** at the Hearth portal board, the opener consumes one **Vault Sigil** (§5), picks M and, if M > 1, pays the Riftstone deposit (below). The Sigil and deposit are taken in one transaction with the instance's creation. If anything fails, nothing is taken.
 
 - **Wire format and validation:** M is sent as an integer number of hundredths, `M100`. The server accepts only `50 ≤ M100 ≤ 150` with `M100 % 5 == 0` and rejects anything else with `INVALID_MULTIPLIER` (acceptance tests: 0.45, 1.55 and 1.07 are rejected; 0.50, 1.05 and 1.50 are accepted). Values above 1.5 are **[Later]**: +0.25 per clear at your current max, up to a **hard cap of 3.0** (D2).
 - **Base level B:** the higher of the dungeon's base level (Hollowmere Vault: 10) and the opener's **real** level `Lp` at the moment the portal is created. B is fixed for the instance. The vault stays relevant forever.
@@ -178,7 +184,11 @@ Whoever opens a portal (a dungeon instance; a whole server instance or shard is 
 - **Rewards:**
   - Each eligible player gets `floor((M100 − 100) / 25)` extra boss item rolls when M > 1 (M 1.20 → 0, 1.25 → 1, 1.50 → 2).
   - Riftstone per eligible player is `(4 × M100² + 5000) div 10000`, which is `round(4 × M²)` half-up: M 0.50 → 1, 1.00 → 4, 1.25 → 6, 1.50 → 9.
-- **Deposit, not a fee:** opening with M > 1 takes a Riftstone deposit of `ceil(5 × M²)` (6 at M 1.05, 8 at 1.25, 12 at 1.50). The opener gets it back in full when the boss dies, and loses it to the sink if the instance closes without a boss kill. A solo clear therefore always pays, and higher M pays more: net +4 at M 1.00, +6 at 1.25 and +9 at 1.50. Low-M runs (net 1–3) are for helping friends, not farming.
+- **Deposit, not a fee:** opening with M > 1 takes a Riftstone deposit of `(5 × M100² + 9999) div 10000`, which is `ceil(5 × M²)` (6 at M 1.05, 8 at 1.25, 12 at 1.50).
+  - **Refund:** when the boss dies, the deposit goes back in full to the opener's banked wallet as one ledger transaction, idempotent per instance id. This happens even if the opener is dead, disconnected or outside the instance at that moment.
+  - **Server fault:** the deposit and the Sigil are refunded if the instance is lost to a fault (§7.3).
+  - **Forfeit:** otherwise the deposit goes to the sink if the instance closes without a boss kill.
+- **Net Riftstone per solo clear:** +4 at M 1.00, +6 at 1.25 and +9 at 1.50, so a clear always pays and higher M pays more. Below 1.00 it pays 1 (M 0.50) to 4 (M 0.95), never more than at M 1.00, so low-M runs are for helping friends, not farming.
 
 ### 6.1 Instance rules and abuse limits
 1. **Lock on creation:** M and B are fixed when the portal is created, and the portal label shows `E` and `M` before anyone joins.
@@ -186,19 +196,23 @@ Whoever opens a portal (a dungeon instance; a whole server instance or shard is 
 3. **Level sync down:** inside the portal, players use `Le = min(Lp, E + 5)` (§3.2a), with the tier clamp from §4.1. High-level carries can't faceroll, and low-M runs can't be farmed by high levels.
 4. **Anti power-leveling:** under-level XP is credited at no more than `Le + 10` (§3.4). There is no per-kill cap.
 5. **Party cap:** 8 players per instance. The portal entrance closes once 8 players have entered.
-6. **Per-player scaling:** enemy HP is multiplied by `1 + 0.6 × (n − 1)` for normal enemies and `1 + 0.75 × (n − 1)` for the boss. Damage is not scaled. For a normal enemy, n is the number of players in the instance when it spawns. For the boss, n is the number in the boss room when the fight starts. If someone joins mid-fight, the boss's HP is scaled up and keeps its current percentage.
+6. **Per-player scaling:** enemy HP is multiplied by `1 + 0.6 × (n − 1)` for normal enemies and `1 + 0.75 × (n − 1)` for the boss. Damage is not scaled. For a normal enemy, n is the number of players in the instance when it spawns. For the boss, n is snapshotted when the arena seals (rule 6a). The boss's HP never rescales during a fight, including when players leave, die or disconnect.
+6a. **Boss-arena seal:**
+   - **Start:** the arena seals on the tick the boss first takes damage, and that tick is also the fight start.
+   - **While sealed:** nobody can enter the arena. That includes new joiners and Standard players rejoining, who can enter the instance but wait outside the arena door. Nobody inside can leave except by dying or disconnecting (§7.3 linger).
+   - **Lifting:** the seal lifts when the boss dies, when no living player is left in the arena (the boss then resets to full HP and is untouched for 5 s before a new fight can start), or when the instance collapses.
 7. **Boss eligibility (contribution check):** a player is eligible for the boss rewards if any one of these is true during the fight (which starts when the boss first takes damage):
    - (a) they dealt ≥ 2% of the boss's max HP;
    - (b) they used an ability that affected an ally at least 2 times;
    - (c) they were within 12 tiles of the boss for ≥ 50% of the fight's ticks.
 
-   In every case they must also have sent non-idle input in the 30 s before the kill.
+   In every case they must also have sent non-idle input in the 30 s before the kill. **Non-idle input** means at least one input frame (`move, aim, fire_held, seq`, per `stack.md`) in which the move vector differs from the previous frame, the aim angle changed by ≥ 1°, `fire_held` is true, or an ability was used.
 8. **Lifetimes:**
    - The entrance stays open 120 s after creation, or until 8 players have entered.
    - An instance lasts at most 30 min. At that point it collapses and players are moved to the Hearth, which banks their loot (§7).
    - An instance closes 60 s after it empties.
-   - A deposit (above) is forfeited if the instance closes without a boss kill.
-9. **Re-entry after death (Standard):** a Standard player who died keeps their party slot and can rejoin the same live instance from the Hearth portal board, up to 2 times per instance. The 120 s entrance limit doesn't apply to rejoining. They can't enter while the boss room is sealed during a fight. Hardcore deaths are final.
+   - A deposit (above) is forfeited if the instance closes without a boss kill, except when it is lost to a server fault (§7.3).
+9. **Re-entry after death (Standard):** a Standard player who died keeps their party slot and can rejoin the same live instance from the Hearth portal board, up to 2 times per instance. The 120 s entrance limit doesn't apply to rejoining. They can enter the instance during a fight but not the sealed arena (rule 6a). Hardcore deaths are final.
 10. **Rate limits:** one open portal per player, with a 60 s cooldown that starts when the portal is opened.
 
 ## 7. Death modes [v0.1]
@@ -217,7 +231,6 @@ The server applies these steps in order, in one transaction:
 3. A respawn fee of `20 × m(Lp)` Glint (real level, not synced) is taken from the banked wallet. If the balance is lower, the fee is the balance, so it never goes below 0.
 4. The character respawns in the Hearth with full HP. Level and XP are kept.
 
-**Hardcore (permadeath):**
 ### 7.3 Hardcore (permadeath)
 - **Separate realm:** hardcore characters have their own Glint, Echo Dust and Riftstone wallets, their own stash, their own ledger accounts (§8.2) and their own trading pool.
   - **Instances:** hardcore uses its own Hearth and its own Wilds and portal instances. Hardcore players never see, heal or fight beside Standard players.
@@ -231,6 +244,14 @@ The server applies these steps in order, in one transaction:
   - **Incident windows:** these protect players from server faults.
     - **Opening:** the server opens one automatically when an instance worker crashes or restarts, or its tick stalls for more than 2 s. On-call ops can also open one manually for an outage, with a required reason.
     - **Scope:** a window covers the instance, or the whole server for a manual one, from 30 s before the fault until it ends.
+    - **End:**
+      - An automatic window ends when the instance is declared lost (a worker crash, or a tick stall over 10 s ends the instance), or once its tick has been healthy for 30 s in a row (no tick more than 100 ms late).
+      - Automatic windows last at most 15 min unless on-call extends them.
+      - A manual window ends when on-call closes it, with a required reason.
+    - **Instance lost to a fault:**
+      - Players are placed in the Hearth on reconnect, and their pending loot **banks normally**, so it is not forfeited.
+      - The opener gets back the Riftstone deposit and a freshly minted Vault Sigil (new `item_uid`, reason `INCIDENT_REFUND`).
+      - Ground drops nobody picked up are tombstoned `EXPIRED`, with no further compensation in v0.1.
     - **Reverts:** deaths inside a window are reverted. The character is restored, tombstoned items are un-tombstoned, and the fee and pending loss are refunded. One audit row is written per revert, with the incident id, actor, character and items. Manual reverts are allowed up to 72 h after the death.
 - **Leaderboard:** there are boards for all time and for each season. Ranking is by level, then total XP, then the earliest time the level was reached, with filters per class. Alive and Fallen characters are both listed, with a status badge.
 - **Reward:** hardcore earns no power bonus. Leaderboard ranks and milestones (level 20/50/100 reached in hardcore) give cosmetic titles and portal trails only.
@@ -253,7 +274,7 @@ Full trading is allowed: items **and** currencies (Glint, Echo Dust, Riftstone) 
 - **One item table:** every item, gear or cosmetic token, is exactly one row in `items`, keyed by a server-minted UUIDv7 `item_uid` (the primary key).
   - **Fields:** each row has `mode`, `owner_account`, `owner_character`, `location`, `slot`, `pending`, `trade_lock` and `state`.
   - **Locations:** `location` is one of `EQUIPPED`, `INVENTORY`, `STASH`, `GROUND` (owned by an instance, for a personal drop not yet picked up) or **[Later]** `MAIL`. Offered items stay where they are, with `trade_lock = trade_id`, so there is no escrow copy.
-  - **Tombstones:** destroyed, salvaged and vendor-sold items are **tombstoned**, never deleted. Their `state` is `TOMBSTONED`, with a reason (`SALVAGED`, `SOLD`, `DEATH_PENDING`, `DEATH_FALLEN` or `ADMIN`) and a timestamp. A tombstoned `item_uid` can come back only through an audited incident revert (§7.3).
+  - **Tombstones:** destroyed, salvaged and vendor-sold items are **tombstoned**, never deleted. Their `state` is `TOMBSTONED`, with a reason (`SALVAGED`, `SOLD`, `CONSUMED` (a used Sigil), `EXPIRED`, `DEATH_PENDING`, `DEATH_FALLEN` or `ADMIN`) and a timestamp. **Ground expiry:** a personal drop left on `GROUND` is tombstoned `EXPIRED` 60 s after it drops, or when its instance closes, whichever comes first. The same applies in the Wilds. A tombstoned `item_uid` can come back only through an audited incident revert (§7.3).
   - **Acceptance test:** at any time, every `item_uid` resolves to exactly one row and one location, checked by the primary key plus an automated invariant test.
 - **Ledger:** a double-entry `ledger_entries` table. Every currency movement (§5) is a transaction whose entries sum to zero per currency.
   - **Mint and sink:** grants come from a `FAUCET` system account and spending goes to a `SINK` account. Each mode has its own pair per currency, so hardcore and Standard are separate ledgers, and a transaction may not mix modes.
