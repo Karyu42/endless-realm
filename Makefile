@@ -111,3 +111,12 @@ $(PROTOC):
 $(TOOLS)/bin/protoc-gen-go:
 	@mkdir -p $(TOOLS)/bin
 	GOBIN=$(TOOLS)/bin $(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+
+# Load test of the headless Godot lobby host (docs/tech/loadtest.md): 8, 25
+# and 50 Go bot clients, 60 s each. Override with LOADTEST_CLIENTS=8,50 and
+# LOADTEST_DURATION=30. Writes loadtest-results/results.{json,md}. Linux only.
+LOADTEST_CLIENTS  ?= 8,25,50
+LOADTEST_DURATION ?= 60
+loadtest-godot:
+	python3 tools/loadtest/godot_host_loadtest.py --godot "$(GODOT)" \
+		--clients $(LOADTEST_CLIENTS) --duration $(LOADTEST_DURATION)
