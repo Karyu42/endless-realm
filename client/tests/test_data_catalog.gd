@@ -18,6 +18,15 @@ func test_packed_data_loads_burrmite() -> void:
 	assert_eq(spit.damage_key, "spit")
 	assert_eq(spit.size, "S")
 	assert_almost_eq(PatternDef.size_radius(spit.size), 0.15, 0.0)
+	var cap := catalog.enemy("driftcap_spore")
+	assert_not_null(cap, "driftcap_spore must load from res://data")
+	assert_eq(cap.pattern_id, "spore_ring")
+	assert_true(cap.is_rooted())
+	var ring := catalog.pattern("spore_ring")
+	assert_not_null(ring)
+	assert_eq(ring.damage_key, "ring")
+	assert_eq(ring.size, "M")
+	assert_eq(ring.count, 8)
 
 
 func test_packed_data_loads_loot_and_scaling() -> void:
