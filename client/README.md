@@ -33,17 +33,24 @@ The WebSocket listen port defaults to **8080**, path `/ws`. The join code is
 only included in the beacon when the host opts in.
 
 The lobby UI uses the host API in `src/net/host/`: `LobbySettings` with
-`apply_settings()` / `settings()`, `add_local_player` /
-`submit_local_input`, and the host arena renders from `world_view()` once
-the first tick has a snapshot. Import refusals use `ImportResult`
-constants and `name_of()`. The host runs every player in one shared
+`apply_settings()` / `settings()` / `settings_changed`, `validate()`
+reasons shown inline, `add_local_player` / `remove_local_player` (with the
+host-issued rejoin token), and `submit_local_input`. The host arena
+renders from `world_view()` once the first tick has a snapshot, and shows
+a copyable join code plus live settings. Import refusals use every
+`ImportResult` code (`all()` / `name_of()`) mapped to a player-facing
+string in `data/lobby_ui.json`. The host runs every player in one shared
 multi-player `LocalSim` (see below). The beacon player count is `players.size()`
-after the listen host is added, capped at max.
+after the listen host is added, capped at max. Invite-only lobbies are
+not broadcast on LAN; `--invite-only` is accepted. Join by code still
+resolves listed beacons that include their code.
 
 ## Host or join a lobby
 
 From the boot screen: **Play solo**, **Host**, join a listed LAN lobby, join by
-code, or join by `IP:port`. The host sets max players (1–50, default 50;
+code, or join by `IP:port`. Browser rows show the lobby name, players/max,
+M range, import and offline flags, an invite-only marker and ping when
+those fields are present. The host sets max players (1–50, default 50;
 values outside that range are rejected, not clamped). `--max-players` and
 `ER_MAX_PLAYERS` are accepted; the flag wins. An invalid cap exits with
 code 2 when headless (same as `host_main`) and, with a display, shows the
@@ -63,6 +70,8 @@ The same export can host headless:
 godot --path client --headless -- --host --name="Yard" --port=8080 --max-players=50
 # or pin a join code and refuse offline imports:
 godot --path client --headless -- --host --join-code=AB12CD --refuse-imports
+# invite-only (not listed on LAN):
+godot --path client --headless -- --host --invite-only --join-code=AB12CD
 # join a host:
 godot --path client -- --join-url=ws://127.0.0.1:8080/ws --played-offline
 ```
