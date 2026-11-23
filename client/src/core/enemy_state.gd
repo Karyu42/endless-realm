@@ -26,6 +26,7 @@ var contact_cooldown: int = 0
 var content_level: int = 1
 var damaged_by: Dictionary = {} # player_id -> true
 var rewards_granted: bool = false
+var flash_ticks: int = 0
 
 
 func radius() -> float:

@@ -334,3 +334,32 @@ func TestValidateM100U32Sentinel(t *testing.T) {
 		}
 	}
 }
+
+func TestAbilityPressIsOneShotPerTick(t *testing.T) {
+	inst, err := New(1, 100, clock.NewFake(time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst.SubmitInput(Input{PlayerID: 5, Seq: 1, AbilityPressed: true})
+	inst.SubmitInput(Input{PlayerID: 5, Seq: 2}) // not resent on the next frame
+	inst.mu.Lock()
+	kept := inst.inputs[5].AbilityPressed
+	inst.mu.Unlock()
+	if !kept {
+		t.Fatal("press dropped by a later frame in the same tick")
+	}
+	inst.Step()
+	inst.mu.Lock()
+	_, pending := inst.inputs[5]
+	inst.mu.Unlock()
+	if pending {
+		t.Fatal("press still pending after the tick")
+	}
+	inst.SubmitInput(Input{PlayerID: 5, Seq: 3})
+	inst.mu.Lock()
+	again := inst.inputs[5].AbilityPressed
+	inst.mu.Unlock()
+	if again {
+		t.Fatal("press carried into the next tick")
+	}
+}

@@ -275,13 +275,16 @@ func TestBotClientHandshakeInputSnapshot(t *testing.T) {
 
 	writeClient(t, ctx, conn, &protocolv1.ClientMessage{
 		Payload: &protocolv1.ClientMessage_Input{Input: &protocolv1.InputFrame{
-			Seq: 7, MoveX: 1, MoveY: 0, Aim: 0, FireHeld: true,
+			Seq: 7, MoveX: 1, MoveY: 0, Aim: 0, FireHeld: true, AbilityPressed: true,
 		}},
 	})
 	select {
 	case in := <-submitted:
 		if in.Seq != 7 {
 			t.Fatalf("submitted seq = %d, want 7", in.Seq)
+		}
+		if !in.AbilityPressed {
+			t.Fatal("ability_pressed not passed through")
 		}
 	case <-ctx.Done():
 		t.Fatal("input was not submitted")

@@ -9,10 +9,12 @@ var move_y: float = 0.0
 var aim: float = 0.0
 var fire_held: bool = false
 var using_touch: bool = false
+var _ability_pressed: bool = false
 
 const STICK_RADIUS_PX: float = 72.0
 const KNOB_RADIUS_PX: float = 28.0
 const DEADZONE: float = 0.15
+const ABILITY_RADIUS_PX: float = 28.0
 
 var _left_center: Vector2 = Vector2.ZERO
 var _right_center: Vector2 = Vector2.ZERO
@@ -20,6 +22,8 @@ var _left_knob: Vector2 = Vector2.ZERO
 var _right_knob: Vector2 = Vector2.ZERO
 var _left_index: int = -1
 var _right_index: int = -1
+var _ability_index: int = -1
+var _ability_center: Vector2 = Vector2.ZERO
 var _pad: Control
 
 
@@ -42,12 +46,15 @@ func _process(_delta: float) -> void:
 	var size := get_viewport().get_visible_rect().size
 	_left_center = Vector2(STICK_RADIUS_PX + 48.0, size.y - STICK_RADIUS_PX - 48.0)
 	_right_center = Vector2(size.x - STICK_RADIUS_PX - 48.0, size.y - STICK_RADIUS_PX - 48.0)
+	# Ability button sits above the right stick (content-v0.1 §1.5).
+	_ability_center = Vector2(_right_center.x, _right_center.y - STICK_RADIUS_PX - ABILITY_RADIUS_PX - 16.0)
 	_pad.queue_redraw()
 
 
 func _on_pad_draw() -> void:
 	_draw_stick(_left_center, _left_knob)
 	_draw_stick(_right_center, _right_knob)
+	_draw_ability_button()
 
 
 func _draw_stick(center: Vector2, knob_offset: Vector2) -> void:
@@ -66,9 +73,11 @@ func _set_using_touch(touch: bool) -> void:
 		_right_index = -1
 		_left_knob = Vector2.ZERO
 		_right_knob = Vector2.ZERO
+		_ability_index = -1
 		move_x = 0.0
 		move_y = 0.0
 		fire_held = false
+		_ability_pressed = false
 		if _pad:
 			_pad.queue_redraw()
 
@@ -102,7 +111,25 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+func consume_ability_pressed() -> bool:
+	var pressed: bool = _ability_pressed
+	_ability_pressed = false
+	return pressed
+
+
+func _draw_ability_button() -> void:
+	var fill := Color(0.91, 0.76, 0.48, 0.85 if _ability_index >= 0 else 0.65)
+	_pad.draw_circle(_ability_center, ABILITY_RADIUS_PX, Color(0.15, 0.2, 0.24, 0.55))
+	_pad.draw_arc(_ability_center, ABILITY_RADIUS_PX, 0.0, TAU, 32, Color(0.91, 0.76, 0.48, 0.8), 2.5, true)
+	_pad.draw_circle(_ability_center, ABILITY_RADIUS_PX * 0.45, fill)
+
+
 func _press(index: int, pos: Vector2) -> void:
+	if pos.distance_to(_ability_center) <= ABILITY_RADIUS_PX + 8.0:
+		if _ability_index < 0:
+			_ability_index = index
+			_ability_pressed = true
+		return
 	if pos.x < get_viewport().get_visible_rect().size.x * 0.5:
 		if _left_index < 0:
 			_left_index = index
@@ -130,6 +157,8 @@ func _release(index: int) -> void:
 		_right_index = -1
 		_right_knob = Vector2.ZERO
 		fire_held = false
+	elif index == _ability_index:
+		_ability_index = -1
 
 
 func _apply_left(pos: Vector2) -> void:
