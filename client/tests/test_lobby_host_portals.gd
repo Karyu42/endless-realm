@@ -31,9 +31,11 @@ func _new_host(max_players: int = 4) -> LobbyHost:
 func _open_portal(persistent: bool = false) -> PortalSnapshot:
 	var id := _host.sim.spawn_practice_portal("hollowmere_vault")
 	var portal := _host.sim.portal_by_id(id)
-	# Most lifetime tests use a normal opened entrance; persistent-door
-	# tests opt into the packed practice entrance policy explicitly.
-	portal.persistent = persistent
+	# Most lifetime tests use a normal opened entrance: moved off the packed
+	# practice position, so the host's data no longer marks it persistent.
+	if not persistent:
+		portal.x += 1.0
+		portal.persistent = false
 	return portal
 
 
@@ -691,3 +693,191 @@ func test_persistent_capacity_counts_occupants_and_keeps_reentry_ids() -> void:
 	assert_eq(_host._find_player(a).sim_id, aid, "re-entry id kept")
 	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
 	assert_eq(rec.admitted.size(), 3, "history kept beyond occupant capacity")
+
+
+# --- persistent entrance: state, lifetime, data source ----------------------
+
+## Walks `id` through every vault room (activating their spawns), then
+## defeats everything and lets the sim cull it.
+func _clear_vault(id: int) -> int:
+	var p := _host._find_player(id)
+	var dsim: LocalSim = p.instance.sim
+	for at in [Vector2(23.0, 6.0), Vector2(40.0, 6.0)]:
+		dsim.place_player(p.sim_id, at.x, at.y)
+		_host.run_tick()
+	var spawned := dsim.enemy_count()
+	dsim.defeat_all_enemies()
+	_ticks(3)
+	return spawned
+
+
+func _enter_persistent(id: int, portal: PortalSnapshot, seq: int) -> void:
+	_host.sim.place_player(id, portal.x + 0.5, portal.y)
+	_enter(id, portal, seq)
+
+
+func test_persistent_never_respawns_after_clear_exit_and_long_empty() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	assert_gt(_clear_vault(a), 0, "rooms spawned their enemies once")
+	assert_eq(inst.sim.enemy_count(), 0)
+	var drops := inst.sim.ground_drops().size()
+	var seq := 10
+	for cycle in range(3):
+		_exit_here(a, seq)
+		seq += 1
+		_ticks(LobbyHost.EMPTY_INSTANCE_CLOSE_TICKS * 2)
+		_enter_persistent(a, portal, seq)
+		seq += 1
+		assert_eq(_instance_of(a), inst, "same instance after a long empty spell")
+		assert_eq(_clear_vault(a), 0, "walking the rooms again spawns nothing")
+		assert_eq(inst.sim.enemy_count(), 0, "no enemies respawn")
+		assert_eq(inst.sim.ground_drops().size(), drops, "no new drops")
+
+
+func test_persistent_late_arrivals_get_nothing_after_clear() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	_clear_vault(a)
+	var drops := inst.sim.ground_drops().size()
+	# A fresh local player and a remote-style join (new id each time).
+	var b := _join_near_portal(portal)
+	var r := _host._add_player()
+	_host.run_tick()
+	_host.sim.place_player(r.id, portal.x + 0.5, portal.y)
+	for id in [b, r.id]:
+		var xp_before: int = _host.sim.get_player(id).xp_tenths
+		if id == r.id:
+			_host._queue_input(r, 3, 0.0, 0.0, 0.0, false, portal.id)  # as a remote frame
+			_host.run_tick()
+		else:
+			_enter(id, portal, 3)
+		assert_eq(_instance_of(id), inst)
+		_clear_vault(id)
+		var pp := _host._find_player(id)
+		assert_eq(inst.sim.get_player(pp.sim_id).xp_tenths, xp_before, "no XP from a cleared instance")
+		for bag in inst.sim.ground_drops():
+			assert_ne(bag.item.owner_player_id, pp.sim_id, "no rewards for a late arrival")
+	assert_eq(inst.sim.ground_drops().size(), drops)
+	assert_eq(inst.sim.enemy_count(), 0)
+
+
+func test_persistent_is_not_rebuilt_by_settings_and_freed_on_stop() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	_exit_here(a, 5)
+	for mp in [3, 7, 2]:
+		var s := _host.settings()
+		s.max_players = mp
+		s.m100_min = 90
+		s.m100_max = 110
+		assert_eq(_host.apply_settings(s), OK)
+		_ticks(5)
+	assert_same(_host._portal_records.values()[0], rec)
+	assert_same(rec.instance, inst)
+	assert_eq(_host.instances.size(), 2)
+	_enter_persistent(a, portal, 6)
+	assert_same(_instance_of(a), inst)
+	_host.stop()
+	assert_eq(_host._portal_records.size(), 0, "record freed on stop")
+	assert_eq(_host.instances.size(), 1, "instance freed on stop")
+	# The same host object never rebuilds that entrance afterwards.
+	var b := _join_near_portal(portal)
+	_rejections = []
+	_enter(b, portal)
+	_host.run_tick()
+	assert_true(_instance_of(b).is_overworld())
+	assert_eq(_host.instances.size(), 1)
+	assert_eq(_rejections[0][1], PB.ErrorCode.INSTANCE_NOT_FOUND)
+
+
+func test_persistent_flag_comes_only_from_host_data() -> void:
+	_host = _new_host()
+	var practice := _open_portal(true)
+	practice.persistent = false  # display copy; the host ignores it
+	var fake := PortalSnapshot.new()
+	fake.id = _host.sim._alloc_id()
+	fake.x = 30.0
+	fake.y = 30.0
+	fake.kind = PortalSnapshot.KIND_ENTER
+	fake.dungeon_id = "hollowmere_vault"
+	fake.m100 = 100
+	fake.base_level = 1
+	fake.content_level = 1
+	fake.persistent = true  # not the packed practice entrance
+	_host.sim.add_portal(fake)
+	_host.run_tick()
+	var by_portal := {}
+	for rec: LobbyHost.PortalRecord in _host._portal_records.values():
+		by_portal[rec.portal_id] = rec.persistent
+	assert_true(by_portal[practice.id], "packed practice entrance is persistent")
+	assert_false(by_portal[fake.id], "a flag on any other portal is ignored")
+	assert_false("persistent" in PortalTransfer.new(), "transfers cannot carry it")
+	# The fake one keeps normal lifetimes: it expires for new players.
+	_ticks(LobbyHost.ENTRANCE_LIFETIME_TICKS)
+	var c := _host.add_local_player()
+	_host.run_tick()
+	_host.sim.place_player(c, fake.x + 0.5, fake.y)
+	_rejections = []
+	_enter(c, fake)
+	_host.run_tick()
+	assert_true(_instance_of(c).is_overworld())
+	assert_eq(_rejections[0][1], PB.ErrorCode.INSTANCE_NOT_FOUND)
+
+
+func test_nonpersistent_portal_still_expires() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_ticks(LobbyHost.ENTRANCE_LIFETIME_TICKS)
+	_enter(a, portal)
+	_host.run_tick()
+	assert_true(_instance_of(a).is_overworld())
+	assert_eq(_rejections[0][1], PB.ErrorCode.INSTANCE_NOT_FOUND)
+
+
+func test_persistent_long_session_stays_bounded() -> void:
+	_host = _new_host(8)
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	_clear_vault(a)
+	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	var drops := inst.sim.ground_drops().size()
+	var seq := 20
+	for cycle in range(150):
+		# The regular rotates out and back in; a newcomer joins, enters,
+		# fires a bit and leaves the lobby.
+		_exit_here(a, seq)
+		seq += 1
+		var n := _join_near_portal(portal)
+		_enter(n, portal, 1)
+		for k in range(4):
+			_host.submit_local_input(n, InputIntent.from_raw(2 + k, 1.0, 0.0, 0.0, true))
+			_host.run_tick()
+		_host.remove_local_player(n)
+		_ticks(10)
+		_enter_persistent(a, portal, seq)
+		seq += 1
+	_ticks(100)
+	assert_same(_instance_of(a), inst)
+	assert_eq(_host.instances.size(), 2)
+	assert_eq(_host._portal_records.size(), 1)
+	assert_eq(inst.sim.enemy_count(), 0)
+	assert_eq(inst.sim.ground_drops().size(), drops)
+	assert_lt(inst.sim.projectiles().size(), 50, "projectiles expire")
+	assert_lte(rec.admitted.size(), _host.players.size(), "admitted only holds lobby players")
+	assert_lte(rec.sim_ids.size(), _host.players.size())
+	assert_eq(inst.sim._skipped_ids.size(), 0, "no skipped id ranges in the instance")
+	assert_lte(inst.sim.player_ids().size(), 1)

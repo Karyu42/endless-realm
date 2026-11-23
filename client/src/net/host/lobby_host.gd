@@ -227,6 +227,7 @@ var instances: Array[HostInstance] = []
 var loadtest_instances: int = 0
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
+var _retired_entrances: Dictionary = {}  # entrance key -> true (persistent, after stop)
 var _portal_records: Dictionary = {}  # source instance / entrance -> PortalRecord
 var _next_instance_index: int = 1
 var _instance_by_portal: Dictionary = {}  # portal_key -> HostInstance
@@ -335,6 +336,11 @@ func stop() -> void:
 	players.clear()
 	instances.resize(1)
 	_instance_by_portal.clear()
+	# A persistent entrance's instance ends with the lobby: free it, and
+	# retire the entrance id so this host object never rebuilds it.
+	for key in _portal_records:
+		if (_portal_records[key] as PortalRecord).persistent:
+			_retired_entrances[key] = true
 	_portal_records.clear()
 	# The lobby is closing: saved ability states do not outlive it.
 	_ability_stash.clear()
@@ -840,6 +846,12 @@ func _sim_has_builtin_player() -> bool:
 ## identity, saves their ability state under it for a later rejoin.
 func _leave(p: HostPlayer, identity: String = "") -> void:
 	interact_validator.forget_player(p.id)
+	# Persistent entrances admit by occupancy, so per-player entries of
+	# players who left the lobby are dropped to keep them bounded.
+	for record: PortalRecord in _portal_records.values():
+		if record.persistent:
+			record.admitted.erase(p.id)
+			record.sim_ids.erase(p.id)
 	if identity != "":
 		var isim: LocalSim = p.instance.sim
 		var sid: int = p.sim_id
@@ -1055,6 +1067,24 @@ func _enter_refusal(p: HostPlayer, portal: PortalSnapshot) -> Array:
 	return _record_refusal(_record_for(p.instance, portal.id), p.id)
 
 
+## True only for an entrance the host's own data marks persistent: the
+## packed practice entrance of a dungeon whose definition sets
+## `persistent: true`, at its packed position, M and base level. The flag on
+## a PortalSnapshot is display-only and never trusted here.
+func _is_data_persistent(portal: PortalSnapshot) -> bool:
+	if portal == null or portal.kind != PortalSnapshot.KIND_ENTER or catalog == null:
+		return false
+	var def: DungeonDef = catalog.dungeon(portal.dungeon_id)
+	if def == null or def.practice_yard_portal.is_empty():
+		return false
+	var src: Dictionary = def.practice_yard_portal
+	return bool(src.get("persistent", false)) \
+			and is_equal_approx(portal.x, float(src["x"])) \
+			and is_equal_approx(portal.y, float(src["y"])) \
+			and portal.m100 == int(src["m100"]) \
+			and portal.base_level == int(src["practice_base_level"])
+
+
 ## Players in `inst` other than `except_id` (lobby id).
 func _occupants(inst: HostInstance, except_id: int) -> int:
 	var n := 0
@@ -1080,8 +1110,8 @@ func _record_for(source: HostInstance, portal_id: int) -> PortalRecord:
 		record.portal_id = portal_id
 		record.capacity = _settings.max_players
 		record.created_tick = tick
-		var portal: PortalSnapshot = source.sim.portal_by_id(portal_id)
-		record.persistent = portal != null and portal.persistent
+		record.persistent = _is_data_persistent(source.sim.portal_by_id(portal_id))
+		record.closed = _retired_entrances.has(key)
 		_portal_records[key] = record
 	return _portal_records[key]
 
