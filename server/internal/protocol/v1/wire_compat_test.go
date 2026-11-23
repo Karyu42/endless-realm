@@ -21,6 +21,7 @@ const (
 	goldenErrorHex   = "3a0a0804120666756c6c2121"           // ServerMessage{error: ErrorReply{INSTANCE_FULL, "full!!"}}
 	goldenSnapHex    = "1a0c080512080887808080101004"       // ServerMessage{snapshot: {tick 5, players [{bigID, 4}]}}
 	goldenInputHex   = "120f080915000080bf2801308780808010" // ClientMessage{input: {seq 9, move_x -1, fire, target bigID}}
+	goldenAbilityHex = "120408033801"                       // ClientMessage{input: {seq 3, ability_pressed}}
 )
 
 func roundTrip[T proto.Message](t *testing.T, in T, out T) []byte {
@@ -106,5 +107,24 @@ func TestUint32EncodedIDsDecodeUnchanged(t *testing.T) {
 	b, _ := proto.Marshal(&protocolv1.PlayerStub{Id: 0xFFFFFFFF, AppliedSeq: 3})
 	if hex.EncodeToString(b) != hex.EncodeToString(old) {
 		t.Fatalf("uint64 encoding %x differs from uint32 encoding %x", b, old)
+	}
+}
+
+func TestInputFrameAbilityPressedGolden(t *testing.T) {
+	in := &protocolv1.ClientMessage{Payload: &protocolv1.ClientMessage_Input{Input: &protocolv1.InputFrame{
+		Seq: 3, AbilityPressed: true,
+	}}}
+	out := &protocolv1.ClientMessage{}
+	b := roundTrip(t, in, out)
+	if got := hex.EncodeToString(b); got != goldenAbilityHex {
+		t.Fatalf("input bytes %s, want %s", got, goldenAbilityHex)
+	}
+	if !out.GetInput().GetAbilityPressed() || out.GetInput().GetSeq() != 3 {
+		t.Fatalf("ability_pressed not round-tripped: %v", out.GetInput())
+	}
+	// Unset decodes as false (older clients).
+	var old protocolv1.InputFrame
+	if err := proto.Unmarshal([]byte{0x08, 0x03}, &old); err != nil || old.GetAbilityPressed() {
+		t.Fatalf("unset ability_pressed should decode false (err %v)", err)
 	}
 }

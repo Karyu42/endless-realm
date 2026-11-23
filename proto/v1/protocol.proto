@@ -61,6 +61,12 @@ message InputFrame {
   // allowed for this player, or it is more than 2.0 tiles away, center to
   // center, as measured by the host.
   uint64 interact_target_id = 6;
+  // Class ability press. false or unset means no ability. true is a press on
+  // this frame's seq; clients do not resend it on later frames. The host
+  // applies it at most once per seq and rejects seq 0. It is a silent no-op
+  // (no ErrorReply) when Focus or the cooldown does not allow the ability.
+  // One-shot: cleared after the tick it is applied in.
+  bool ability_pressed = 7;
 }
 
 // Snapshot is a stub: tick plus the last applied input seq per connected player.

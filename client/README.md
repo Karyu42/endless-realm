@@ -246,7 +246,9 @@ lobby UI drives it through these calls.
   afterwards (`host.is_m100_allowed(m100)`; the Godot host does not handle
   OpenPortal yet, and the protocol PR adds the check there). Import flags
   apply to future imports.
-- `--max-players` / `ER_MAX_PLAYERS` go through `apply_settings()`.
+- `--max-players` / `ER_MAX_PLAYERS` go through `apply_settings()`. Setting
+  `host.max_players` does too: an invalid value is refused with a warning and
+  the cap is unchanged.
 
 **Local player** (listen host): `add_local_player(character = null) -> int`
 returns the id, or -1 when full; it counts toward `max_players`.
@@ -272,13 +274,21 @@ Hello, so a lobby with imports off can still be joined.
 | `REJECTED_OFFLINE_OFF` (2) | character was played offline, lobby has `offline_allowed = false` |
 | `REJECTED_BAD_FORMAT` (3) | not a character file |
 | `REJECTED_UNSUPPORTED_VERSION` (4) | character file version this host can't read |
-| `REJECTED_BAD_SIGNATURE` (5) | signature doesn't verify (not checked yet) |
+| `REJECTED_BAD_SIGNATURE` (5) | signature not verified (every blob for now) |
 | `REJECTED_ALREADY_EXISTS` (6) | this player already imported a character here |
 | `REJECTED_UNKNOWN_PLAYER` (7) | no such player |
 
 `ImportResult.name_of(code)` and `ImportResult.all()` help map them. The blob
-format is a stub for now (`LobbyHost.make_stub_import_blob()`); the real format
-and signature check come with the identity work.
+format is a stub for now (`LobbyHost.make_stub_import_blob()`). Import fails
+closed: after the flag and format checks, any blob whose signature has not been
+verified returns `REJECTED_BAD_SIGNATURE`. Verification is not implemented yet,
+so nothing imports until the host-lobby protocol PR adds it.
+
+**Ability press**: `InputFrame.ability_pressed` (and `InputIntent.ability_pressed`
+for the local player) is a one-shot press on that frame's seq. The host applies
+it at most once per seq (seq 0 is rejected), hands it to the player's sim intent
+on the next tick, and clears it after that tick. A later frame in the same tick
+that doesn't repeat it keeps the press. Focus and cooldown checks are the sim's.
 
 **Sim**: each player is simulated by the shared `LocalSim` rules (movement,
 shots). The world is not one shared multi-player `LocalSim` yet, so players
