@@ -369,3 +369,19 @@ func _pump(pred: Callable, max_iters: int = 500) -> bool:
 			return true
 		OS.delay_msec(10)
 	return false
+
+
+func test_local_input_seq_survives_uint32_wrap() -> void:
+	_host = _new_host()
+	var id := _host.add_local_player()
+	_host.submit_local_input(id, _intent(0xFFFFFFFF, 1.0, 0.0))
+	_host.run_tick()
+	assert_eq(_host.world_view(id).applied_seq, 0xFFFFFFFF)
+	# game_session wraps 0xFFFFFFFF -> 1; that frame is newer, not stale.
+	_host.submit_local_input(id, _intent(1, 0.0, 1.0))
+	_host.run_tick()
+	assert_eq(_host.world_view(id).applied_seq, 1)
+	# And 0xFFFFFFFF is now stale.
+	_host.submit_local_input(id, _intent(0xFFFFFFFF, -1.0, 0.0))
+	_host.run_tick()
+	assert_eq(_host.world_view(id).applied_seq, 1)
