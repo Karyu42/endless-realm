@@ -820,12 +820,12 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# collides with an enemy, projectile or bag (or a sim-only player such
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
-	if not saved.is_empty() and not _stash_id_issued_here(saved):
+	if not saved.is_empty() and (not _stash_id_issued_here(saved) or _find_player(int(saved["id"])) != null):
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
 		for id in _issued_player_ids.keys():
 			_prune_issued_id(int(id))
-		saved = {}  # not an id this host issued: a fresh id, conservative
+		saved = {}  # no usable saved id: a fresh id, conservative
 	if not saved.is_empty() and _find_player(int(saved["id"])) == null:
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
