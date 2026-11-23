@@ -74,7 +74,8 @@ func test_pickup_moves_bag_into_inventory() -> void:
 	var id := sim.spawn_enemy_from_def(def, 0.5, 0.0, 10)
 	assert_not_null(sim.try_grant_roll_for(id, 0))
 	assert_eq(sim.ground_drop_count(), 1)
-	var intent := InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0)
+	var bag_id: int = sim.snapshot().ground_drops[0].id
+	var intent := InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, bag_id)
 	sim.submit_input(intent)
 	sim.step()
 	assert_eq(sim.ground_drop_count(), 0)
@@ -105,9 +106,13 @@ func test_hotkey_equips_armor_and_raises_max_hp() -> void:
 	var armor: ItemState = sim.try_grant_roll_for(id, armor_index)
 	assert_not_null(armor)
 	assert_eq(armor.slot, ItemState.SLOT_ARMOR)
-	# Pick all bags up (they stack at the same tile).
-	for n in range(8):
-		sim.submit_input(InputIntent.from_raw(n + 1, 0.0, 0.0, 0.0, false, true, 0))
+	# Pick all bags up (they stack at the same tile). The client sends the
+	# auto-selected bag id; the sim does not pick the nearest bag itself.
+	var bag_ids: Array[int] = []
+	for bag in sim.snapshot().ground_drops:
+		bag_ids.append(bag.id)
+	for n in range(bag_ids.size()):
+		sim.submit_input(InputIntent.from_raw(n + 1, 0.0, 0.0, 0.0, false, true, 0, bag_ids[n]))
 		sim.step()
 	var inv := sim.inventory()
 	var slot_i: int = -1
@@ -136,3 +141,203 @@ func test_ground_bags_expire_after_sixty_seconds() -> void:
 		sim.submit_input(InputIntent.from_raw(i + 1, 0.0, 0.0, 0.0, false))
 		sim.step()
 	assert_eq(sim.ground_drop_count(), 0)
+
+func _grant_bag_at(sim: LocalSim, x: float, y: float = 0.0) -> GroundDrop:
+	var def := _catalog().enemy("burrmite")
+	def.rank = "boss"
+	def.pattern_id = ""
+	def.move_speed = 0.0
+	var id := sim.spawn_enemy_from_def(def, x, y, 10)
+	assert_not_null(sim.try_grant_roll_for(id, 0))
+	assert_eq(sim.ground_drop_count(), 1)
+	return sim.snapshot().ground_drops[0]
+
+
+func test_prompt_and_accept_ranges_come_from_data() -> void:
+	var s := _catalog().scaling
+	assert_eq(s.interact_prompt_range_tiles, 1.5)
+	assert_eq(s.interact_accept_range_tiles, 2.0)
+	assert_eq(s.practice_yard_content_level, 1)
+	assert_true(s.in_prompt_range(1.5))
+	assert_false(s.in_prompt_range(1.51))
+	assert_true(s.in_accept_range(1.51))
+	assert_true(s.in_accept_range(2.0))
+	assert_false(s.in_accept_range(2.01))
+
+
+func test_zero_target_id_does_not_auto_select() -> void:
+	var sim := _sim()
+	_grant_bag_at(sim, 0.5)
+	# 0 means no interact. The sim must not pick the nearest bag.
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, 0))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	assert_null(sim.inventory().slots[0])
+
+
+func test_targeted_pickup_at_prompt_range() -> void:
+	var sim := _sim()
+	var bag := _grant_bag_at(sim, 1.5)
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 0)
+	assert_not_null(sim.inventory().slots[0])
+
+
+func test_accept_range_allows_a_targeted_pickup() -> void:
+	var sim := _sim()
+	var bag := _grant_bag_at(sim, 2.0)
+	# A bag at 1.5–2.0 is never prompted, so a bare press must not pick it up.
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, 0))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	# A targeted request (latency tolerance) is accepted up to 2.0 tiles.
+	sim.submit_input(InputIntent.from_raw(2, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 0)
+	assert_not_null(sim.inventory().slots[0])
+
+
+func test_targeted_interact_beyond_tolerance_is_dropped_silently() -> void:
+	var sim := _sim()
+	var bag := _grant_bag_at(sim, 2.25)
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1, "out-of-range target must be ignored, with no error")
+	assert_null(sim.inventory().slots[0])
+
+
+func test_unknown_or_foreign_interact_target_is_dropped_silently() -> void:
+	var sim := _sim()
+	var bag := _grant_bag_at(sim, 0.5)
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, 999999))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	assert_null(sim.inventory().slots[0])
+	bag.item.owner_player_id = 2
+	assert_eq(sim.snapshot().ground_drops.size(), 0)
+	sim.submit_input(InputIntent.from_raw(2, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	assert_null(sim.inventory().slots[0])
+
+
+func test_interact_press_applies_at_most_once_per_seq() -> void:
+	var sim := _sim()
+	var bag := _grant_bag_at(sim, 0.5)
+	# Fill the inventory so the first press is consumed but does not pick up.
+	for i in range(sim.inventory().slot_count):
+		assert_true(sim.inventory().add(ItemState.new()))
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	assert_true(sim.inventory().take_slot(0) != null)
+	# Same seq again must not apply, even though a slot is now free.
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	# A new seq applies once.
+	sim.submit_input(InputIntent.from_raw(2, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 0)
+
+
+func test_practice_yard_forces_level_one_rewards() -> void:
+	# A high content_level and a boss rank must not change yard rewards:
+	# killXP(1) = 10.0 (100 tenths), Glint ceil(m(1)) = 1, loot at T* = 0.
+	var cfg := SimConfig.new()
+	cfg.move_speed_tiles_per_s = 0.0
+	cfg.fire_rate_shots_per_s = 20.0
+	cfg.projectile_speed_tiles_per_s = 14.0
+	cfg.projectile_range_tiles = 20.0
+	cfg.projectile_lifetime_ticks_override = 40
+	cfg.player_projectile_damage = 10
+	var sim := LocalSim.new(cfg, 0.0, 0.0, _catalog())
+	sim.set_world_seed(42)
+	sim.set_player_class("thornguard")
+	sim.set_practice_yard(true)
+	var def := _catalog().enemy("burrmite")
+	def.rank = "boss"
+	def.pattern_id = ""
+	def.move_speed = 0.0
+	def.wander_speed = 0.0
+	def.contact_damage = 0
+	var yard_e: int = _catalog().scaling.practice_yard_content_level
+	assert_eq(yard_e, 1)
+	sim.spawn_enemy_from_def(def, 2.0, 0.0, 20)
+	var snap := sim.snapshot()
+	assert_eq(snap.enemies[0].content_level, yard_e)
+	assert_eq(_catalog().scaling.t_star(snap.enemies[0].content_level), 0)
+	var death_tick: int = -1
+	for i in range(20):
+		sim.submit_input(InputIntent.from_raw(i + 1, 0.0, 0.0, 0.0, true))
+		sim.step()
+		if sim.enemy_count() == 0:
+			death_tick = i
+			break
+	assert_gt(death_tick, -1, "yard Burrmite at E=1 should die like a level-1 enemy")
+	assert_eq(sim.xp_tenths(), 100)
+	assert_eq(sim.pending_glint(), 1)
+	assert_eq(sim.player_level(), 1)
+	for bag in sim.snapshot().ground_drops:
+		assert_eq(bag.t_star, 0)
+		assert_eq(bag.item.content_level, 1)
+
+
+func test_golden_boss_rolls_are_stable() -> void:
+	# Fixed seed/enemy/looter/index → slot/base/tier/line. Captured from
+	# data/loot.json so a draw-order change or a host reimplementation fails.
+	var loot := _catalog().loot
+	var scaling := _catalog().scaling
+	var expected: Array = [
+		["charm", "ember_charm", 4, "ward", 0],
+		["charm", "ember_charm", 4, "hp", 0],
+		["armor", "wardweave", 4, "", 0],
+		["armor", "wardweave", 5, "", 0],
+		["armor", "wardweave", 5, "", 0],
+	]
+	for i in range(expected.size()):
+		var item: ItemState = loot.roll_item(7, 3, 1, i, 20, "boss", "thornguard", scaling)
+		assert_not_null(item, "golden roll %d should drop" % i)
+		assert_eq(item.slot, expected[i][0], "roll %d slot" % i)
+		assert_eq(item.base_id, expected[i][1], "roll %d base" % i)
+		assert_eq(item.tier, expected[i][2], "roll %d tier" % i)
+		assert_eq(item.charm_line, expected[i][3], "roll %d line" % i)
+		assert_eq(item.charm_pct, expected[i][4], "roll %d pct" % i)
+
+
+func test_bags_are_owner_only() -> void:
+	var sim := _sim()
+	var bag := _grant_bag_at(sim, 0.5)
+	assert_eq(sim.snapshot().ground_drops.size(), 1)
+	bag.item.owner_player_id = 2
+	assert_eq(sim.snapshot().ground_drops.size(), 0)
+	assert_eq(sim.ground_drop_count(), 1)
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	assert_null(sim.inventory().slots[0])
+
+
+func test_full_inventory_leaves_the_bag_on_the_ground() -> void:
+	var sim := _sim()
+	var bag := _grant_bag_at(sim, 0.5)
+	for i in range(sim.inventory().slot_count):
+		assert_true(sim.inventory().add(ItemState.new()))
+	assert_true(sim.inventory().is_full())
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	assert_eq(bag.item.location, ItemState.LOC_GROUND)
+
+
+func test_inventory_slot_bounds() -> void:
+	var inv := PlayerInventory.new(8)
+	assert_false(inv.add(null))
+	assert_null(inv.take_slot(-1))
+	assert_null(inv.take_slot(8))
+	assert_false(inv.equip_from_slot(99))
+	for i in range(8):
+		assert_true(inv.add(ItemState.new()))
+	assert_true(inv.is_full())
+	assert_false(inv.add(ItemState.new()))

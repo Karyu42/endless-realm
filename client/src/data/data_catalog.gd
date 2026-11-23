@@ -29,6 +29,7 @@ static func load_from(data_dir: String) -> DataCatalog:
 	cat._load_classes(data_dir.path_join("classes.json"))
 	cat.scaling = SimScaling.from_json(DataCatalog._read_json(data_dir.path_join("scaling.json")))
 	cat.loot = LootTables.from_json(DataCatalog._read_json(data_dir.path_join("loot.json")))
+	cat.report_unknown_ids()
 	return cat
 
 
@@ -100,3 +101,58 @@ static func _read_json(path: String) -> Dictionary:
 		return parsed
 	push_warning("DataCatalog: invalid JSON at %s" % path)
 	return {}
+
+
+func unknown_reference_ids() -> PackedStringArray:
+	var ids: PackedStringArray = PackedStringArray()
+	var seen: Dictionary = {}
+	var tables: Dictionary = loot.tables if loot != null else {}
+	var rows: Dictionary = loot.tier_rows if loot != null else {}
+	var ranks: Dictionary = loot.rank_tables if loot != null else {}
+	for rank in ranks.keys():
+		var tid: String = String(ranks[rank])
+		if not tables.has(tid):
+			if not seen.has(tid):
+				ids.append(tid)
+				seen[tid] = true
+	for tid in tables.keys():
+		var tab: Variant = tables[tid]
+		if tab is Dictionary:
+			var row: String = String(tab.get("row", ""))
+			if row != "" and not rows.has(row):
+				if not seen.has(row):
+					ids.append(row)
+					seen[row] = true
+	var weapons: Dictionary = loot.weapons if loot != null else {}
+	var weapon_ids: Dictionary = {}
+	for cid in weapons.keys():
+		var class_key: String = String(cid)
+		if not classes.has(class_key):
+			if not seen.has(class_key):
+				ids.append(class_key)
+				seen[class_key] = true
+		var w: Variant = weapons[cid]
+		if w is Dictionary:
+			var wid: String = String(w.get("id", ""))
+			if wid != "":
+				weapon_ids[wid] = true
+	if loot != null:
+		for cid in loot.class_order:
+			var class_key: String = String(cid)
+			if class_key != "" and not classes.has(class_key) and not seen.has(class_key):
+				ids.append(class_key)
+				seen[class_key] = true
+	for cid in classes.keys():
+		var def: ClassDef = classes[cid] as ClassDef
+		if def == null:
+			continue
+		if def.weapon_id != "" and not weapon_ids.has(def.weapon_id):
+			if not seen.has(def.weapon_id):
+				ids.append(def.weapon_id)
+				seen[def.weapon_id] = true
+	return ids
+
+
+func report_unknown_ids() -> void:
+	for id in unknown_reference_ids():
+		push_error("DataCatalog: unknown id %s" % id)

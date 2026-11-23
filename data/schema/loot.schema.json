@@ -58,6 +58,15 @@
       }
     },
     "armor": { "type": "object" },
+    "charm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      }
+    },
     "weapons": { "type": "object" },
     "class_order": { "type": "array", "items": { "type": "string" } },
     "tables": {

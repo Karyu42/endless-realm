@@ -18,6 +18,12 @@ var under_level_cap: int = 10
 var over_level_penalty_per_level: float = 0.05
 var over_level_penalty_min: float = 0.1
 var sync_plus: int = 5
+## Client prompt / auto-select range, center to center, in tiles (content-v0.1 §1.5).
+var interact_prompt_range_tiles: float = 0.0
+## Host accept tolerance for interact_target_id, center to center (content-v0.1 §1.5).
+var interact_accept_range_tiles: float = 0.0
+## Fixed E for every practice-yard enemy (content-v0.1 §2.4).
+var practice_yard_content_level: int = 0
 
 
 static func from_json(d: Dictionary) -> SimScaling:
@@ -42,6 +48,9 @@ static func from_json(d: Dictionary) -> SimScaling:
 			s.type_mult_boss = int(tm.get("boss", 50))
 	var sync: Variant = d.get("sync_plus", 5)
 	s.sync_plus = int(sync)
+	s.interact_prompt_range_tiles = float(d.get("interact_prompt_range_tiles", 0.0))
+	s.interact_accept_range_tiles = float(d.get("interact_accept_range_tiles", 0.0))
+	s.practice_yard_content_level = int(d.get("practice_yard_content_level", 0))
 	return s
 
 
@@ -132,3 +141,11 @@ func effective_level(lp: int, content_level: int, in_portal: bool) -> int:
 func scaled_hp(base_hp: int, level: int, gear_hp: int = 0) -> int:
 	var m100: int = round_half_up(m(level) * 100.0)
 	return (base_hp * m100 + 50) / 100 + gear_hp
+
+
+func in_prompt_range(distance: float) -> bool:
+	return distance <= interact_prompt_range_tiles
+
+
+func in_accept_range(distance: float) -> bool:
+	return distance <= interact_accept_range_tiles

@@ -32,5 +32,8 @@
   "riftstone": {
     "yield_coef": 4,
     "deposit_coef": 5
-  }
+  },
+  "interact_prompt_range_tiles": 1.5,
+  "interact_accept_range_tiles": 2.0,
+  "practice_yard_content_level": 1
 }

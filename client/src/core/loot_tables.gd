@@ -22,6 +22,8 @@ var armor_id: String = "wardweave"
 var armor_name: String = "Wardweave"
 var armor_hp_coef: float = 30.0
 var armor_ward_coef: float = 4.0
+var charm_id: String = ""
+var charm_name: String = ""
 var weapons: Dictionary = {} # class_id -> {id, name, base_damage}
 var class_order: PackedStringArray = PackedStringArray(["thornguard", "gleamwright", "driftrunner"])
 var tables: Dictionary = {}
@@ -55,6 +57,10 @@ static func from_json(d: Dictionary) -> LootTables:
 		t.armor_name = String(armor.get("name", "Wardweave"))
 		t.armor_hp_coef = float(armor.get("hp_coef", 30.0))
 		t.armor_ward_coef = float(armor.get("ward_coef", 4.0))
+	var charm: Variant = d.get("charm", {})
+	if charm is Dictionary:
+		t.charm_id = String(charm.get("id", ""))
+		t.charm_name = String(charm.get("name", ""))
 	var wpn: Variant = d.get("weapons", {})
 	if wpn is Dictionary:
 		t.weapons = wpn
@@ -86,8 +92,10 @@ static func mix_seed(a: int, b: int, c: int) -> int:
 
 
 func table_for_rank(rank: String) -> Dictionary:
-	var tid: String = String(rank_tables.get(rank, "wilds_normal"))
-	var tab: Variant = tables.get(tid, {})
+	if not rank_tables.has(rank):
+		return {}
+	var tid: String = String(rank_tables[rank])
+	var tab: Variant = tables.get(tid)
 	if tab is Dictionary:
 		return tab
 	return {}
@@ -96,10 +104,10 @@ func table_for_rank(rank: String) -> Dictionary:
 func extra_boss_rolls(m100: int) -> int:
 	if m100 <= 100:
 		return 0
-	var step: int = 25
 	var tab: Dictionary = table_for_rank("boss")
-	if tab.has("m_extra_step"):
-		step = int(tab.get("m_extra_step", 25))
+	if not tab.has("m_extra_step"):
+		return 0
+	var step: int = int(tab["m_extra_step"])
 	if step <= 0:
 		return 0
 	return int((m100 - 100) / step)
@@ -107,7 +115,9 @@ func extra_boss_rolls(m100: int) -> int:
 
 func roll_count(rank: String, m100: int) -> int:
 	var tab := table_for_rank(rank)
-	var n: int = int(tab.get("rolls", 1))
+	if not tab.has("rolls"):
+		return 0
+	var n: int = int(tab["rolls"])
 	if rank == "boss":
 		n += extra_boss_rolls(m100)
 	return n
@@ -115,7 +125,16 @@ func roll_count(rank: String, m100: int) -> int:
 
 func item_chance_pct(rank: String) -> int:
 	var tab := table_for_rank(rank)
-	return SimScaling.round_half_up(float(tab.get("item_chance", 0.04)) * 100.0)
+	if not tab.has("item_chance"):
+		return 0
+	return SimScaling.round_half_up(float(tab["item_chance"]) * 100.0)
+
+
+func charm_hp_coef() -> float:
+	for line in charm_lines:
+		if line is Dictionary and String(line.get("id", "")) == "hp":
+			return float(line.get("coef", 0.0))
+	return 0.0
 
 
 ## One personal item roll, or null on a miss. Always consumes the chance draw.
@@ -185,8 +204,8 @@ func _fill_weapon(item: ItemState, rng: PCG32, looter_class: String) -> void:
 
 
 func _fill_charm(item: ItemState, rng: PCG32) -> void:
-	item.base_id = "ember_charm"
-	item.display_base = "Ember Charm"
+	item.base_id = charm_id
+	item.display_base = charm_name
 	if charm_lines.is_empty():
 		return
 	var weights: Array[int] = []
@@ -209,7 +228,7 @@ func _fill_charm(item: ItemState, rng: PCG32) -> void:
 
 func _roll_tier(rng: PCG32, content_level: int, rank: String) -> int:
 	var tab := table_for_rank(rank)
-	var row_name: String = String(tab.get("row", "normal"))
+	var row_name: String = String(tab.get("row", ""))
 	var row: Variant = tier_rows.get(row_name, [])
 	var weights: Array[int] = []
 	var offsets: Array[int] = []

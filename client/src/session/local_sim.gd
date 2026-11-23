@@ -6,9 +6,6 @@ extends WorldSource
 ## (tick-based, PCG32 only).
 
 const READY_EPS: float = 1e-9
-## PLACEHOLDER: content-v0.1 and vision.md do not specify pickup / interact range.
-## 2.0 tiles until Design sets it.
-const PLACEHOLDER_LOOT_RANGE_TILES: float = 2.0
 
 var _config: SimConfig
 var _catalog: DataCatalog
@@ -50,6 +47,8 @@ var _ground_drops: Array[GroundDrop] = []
 var _granted_drop_ids: Dictionary = {} # drop_id -> true
 var _instance_m100: int = 100
 var _in_portal: bool = false
+var _practice_yard: bool = false
+var _last_interact_seq: int = -1
 
 
 func _init(config: SimConfig = null, start_x: float = 0.0, start_y: float = 0.0, catalog: DataCatalog = null) -> void:
@@ -126,7 +125,7 @@ func spawn_enemy_from_def(def: EnemyDef, x: float, y: float, content_level: int 
 	e.prev_y = y
 	e.home_x = x
 	e.home_y = y
-	e.content_level = maxi(1, content_level)
+	e.content_level = _scaling.practice_yard_content_level if _practice_yard else maxi(1, content_level)
 	e.hp = def.base_hp
 	e.strafe_ticks = def.strafe_switch_ticks
 	e.fire_cooldown = 0
@@ -203,6 +202,7 @@ func snapshot() -> WorldSnapshot:
 		es.hp = e.hp
 		es.max_hp = e.max_hp()
 		es.radius = e.radius()
+		es.content_level = e.content_level
 		enemy_snaps.append(es)
 	snap.enemies = enemy_snaps
 	return snap
@@ -560,6 +560,14 @@ func set_in_portal(in_portal: bool) -> void:
 	_in_portal = in_portal
 
 
+func set_practice_yard(enabled: bool) -> void:
+	_practice_yard = enabled
+
+
+func is_practice_yard() -> bool:
+	return _practice_yard
+
+
 func player_max_hp() -> int:
 	return _current_max_hp()
 
@@ -620,7 +628,7 @@ func _gear_hp() -> int:
 		hp += SimScaling.round_half_up(_loot.armor_hp_coef * _scaling.g(armor.tier))
 	var charm: ItemState = _inventory.equipped_charm
 	if charm != null and charm.charm_line == "hp":
-		hp += SimScaling.round_half_up(20.0 * _scaling.g(charm.tier))
+		hp += SimScaling.round_half_up(_loot.charm_hp_coef() * _scaling.g(charm.tier))
 	return hp
 
 
@@ -665,7 +673,7 @@ func _grant_kill_rewards(e: EnemyState, sim_tick: int) -> void:
 	if e.rewards_granted:
 		return
 	e.rewards_granted = true
-	var rank: String = e.def.rank if e.def != null else "normal"
+	var rank: String = _reward_rank(e)
 	var elig: bool = _is_eligible(e, _player_id, _px, _py)
 	if not elig:
 		return
@@ -683,7 +691,7 @@ func _try_grant_roll(e: EnemyState, looter_id: int, drop_index: int, looter_clas
 	var did: String = LootTables.drop_id(_world_seed, e.id, looter_id, drop_index)
 	if _granted_drop_ids.has(did):
 		return null
-	var rank: String = e.def.rank if e.def != null else "normal"
+	var rank: String = _reward_rank(e)
 	var item: ItemState = _loot.roll_item(
 		_world_seed, e.id, looter_id, drop_index, e.content_level, rank, looter_class, _scaling
 	)
@@ -716,28 +724,48 @@ func _expire_ground_drops(sim_tick: int) -> void:
 	_ground_drops.resize(write)
 
 
-func _apply_interact(_sim_tick: int) -> void:
-	if not _intent.interact_pressed:
-		return
-	var best: GroundDrop = null
-	var best_d2: float = PLACEHOLDER_LOOT_RANGE_TILES * PLACEHOLDER_LOOT_RANGE_TILES
+func _reward_rank(e: EnemyState) -> String:
+	# The practice yard is a tutorial space: every kill is a normal E=1 reward.
+	if _practice_yard:
+		return "normal"
+	return e.def.rank if e.def != null else "normal"
+
+
+func _bag_distance(bag: GroundDrop) -> float:
+	return SimConstants.interact_distance(_px, _py, bag.x, bag.y)
+
+
+func _live_own_bag(bag: GroundDrop) -> bool:
+	return bag != null and bag.item != null and bag.item.state == ItemState.STATE_LIVE and bag.item.owner_player_id == _player_id
+
+
+func _bag_by_id(id: int) -> GroundDrop:
 	for bag in _ground_drops:
-		if bag.item == null or bag.item.state != ItemState.STATE_LIVE:
-			continue
-		if bag.item.owner_player_id != _player_id:
-			continue
-		var dx: float = _px - bag.x
-		var dy: float = _py - bag.y
-		var d2: float = dx * dx + dy * dy
-		if d2 <= best_d2:
-			best_d2 = d2
-			best = bag
-	if best == null:
+		if bag.id == id:
+			return bag
+	return null
+
+
+func _apply_interact(_sim_tick: int) -> void:
+	# Mirror upcoming proto InputFrame.interact_target_id: 0 means none. A
+	# nonzero value is a press on this seq, applied at most once per seq.
+	# Unknown ids, bags the player may not use, and targets beyond the accept
+	# range are dropped silently, with no error.
+	var target_id: int = _intent.interact_target_id
+	if target_id == 0:
+		return
+	if _intent.seq == _last_interact_seq:
+		return
+	_last_interact_seq = _intent.seq
+	var bag := _bag_by_id(target_id)
+	if not _live_own_bag(bag):
+		return
+	if not _scaling.in_accept_range(_bag_distance(bag)):
 		return
 	if _inventory.is_full():
 		return
-	if _inventory.add(best.item):
-		_ground_drops.erase(best)
+	if _inventory.add(bag.item):
+		_ground_drops.erase(bag)
 
 
 func _apply_inventory_hotkey() -> void:

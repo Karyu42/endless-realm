@@ -150,5 +150,47 @@ if loot_path.exists():
     if lines:
         sum_ok("loot.json charm_lines", [e.get("w", 0) for e in lines if isinstance(e, dict)])
 
+# --- loot / class id cross-references ---
+classes_path = root / "classes.json"
+loot_path = root / "loot.json"
+if loot_path.exists():
+    loot = json.loads(loot_path.read_text(encoding="utf-8"))
+    tables = loot.get("tables") or {}
+    tier_rows = loot.get("tier_rows") or {}
+    for rank, tid in (loot.get("rank_tables") or {}).items():
+        if tid not in tables:
+            err(f"loot.json rank_tables.{rank}: unknown id {tid!r} (not in tables)")
+    for tid, tab in tables.items():
+        if isinstance(tab, dict):
+            row = tab.get("row")
+            if row not in tier_rows:
+                err(f"loot.json tables.{tid}.row: unknown id {row!r} (not in tier_rows)")
+    class_ids = set()
+    if classes_path.exists():
+        classes_doc = json.loads(classes_path.read_text(encoding="utf-8"))
+        for c in classes_doc.get("classes") or []:
+            if isinstance(c, dict) and c.get("id"):
+                class_ids.add(str(c["id"]))
+    weapons = loot.get("weapons") or {}
+    weapon_ids = set()
+    for cid, w in weapons.items():
+        if class_ids and cid not in class_ids:
+            err(f"loot.json weapons.{cid}: unknown id {cid!r} (not in classes.json)")
+        if isinstance(w, dict) and w.get("id"):
+            weapon_ids.add(str(w["id"]))
+    for cid in loot.get("class_order") or []:
+        if class_ids and cid not in class_ids:
+            err(f"loot.json class_order: unknown id {cid!r} (not in classes.json)")
+    if classes_path.exists():
+        for c in classes_doc.get("classes") or []:
+            if not isinstance(c, dict):
+                continue
+            wid = c.get("weapon_id")
+            if wid and wid not in weapon_ids:
+                err(
+                    f"classes.json {c.get('id')}.weapon_id: unknown id {wid!r} "
+                    f"(not in loot.json weapons.*.id)"
+                )
+
 print(f"data-validate: {len(data_files)} data files, {len(schemas)} schemas, {errors} errors")
 sys.exit(1 if errors else 0)

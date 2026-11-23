@@ -27,6 +27,10 @@
     "hp_coef": 30,
     "ward_coef": 4
   },
+  "charm": {
+    "id": "ember_charm",
+    "name": "Ember Charm"
+  },
   "weapons": {
     "thornguard": { "id": "bramble_scattergun", "name": "Bramble Scattergun", "base_damage": 12 },
     "gleamwright": { "id": "lumen_rod", "name": "Lumen Rod", "base_damage": 30 },

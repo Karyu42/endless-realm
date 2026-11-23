@@ -4,7 +4,7 @@
   "title": "Endless Realm scaling coefficients (vision formulas)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["m_intercept", "m_per_level", "g_intercept", "g_per_tier", "xp", "d", "sync_plus", "group_hp", "riftstone"],
+  "required": ["m_intercept", "m_per_level", "g_intercept", "g_per_tier", "xp", "d", "sync_plus", "group_hp", "riftstone", "interact_prompt_range_tiles", "interact_accept_range_tiles", "practice_yard_content_level"],
   "properties": {
     "m_intercept": { "type": "number" },
     "m_per_level": { "type": "number" },
@@ -74,6 +74,9 @@
         "yield_coef": { "type": "number" },
         "deposit_coef": { "type": "number" }
       }
-    }
+    },
+    "interact_prompt_range_tiles": { "type": "number", "minimum": 0 },
+    "interact_accept_range_tiles": { "type": "number", "minimum": 0 },
+    "practice_yard_content_level": { "type": "integer", "minimum": 1 }
   }
 }

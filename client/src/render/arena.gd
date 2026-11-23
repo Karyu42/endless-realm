@@ -162,6 +162,7 @@ func _sample_input() -> void:
 	GameSession.fire_held = Input.is_action_pressed("fire")
 	if Input.is_action_just_pressed("interact"):
 		GameSession.interact_pressed = true
+		GameSession.interact_target_id = _nearest_prompt_interactable_id()
 	for i in range(1, 9):
 		if Input.is_action_just_pressed("inventory_%d" % i):
 			GameSession.inventory_slot = i
@@ -299,18 +300,29 @@ func _update_enemy_views() -> void:
 
 func _on_loot_pressed() -> void:
 	GameSession.interact_pressed = true
+	GameSession.interact_target_id = _nearest_prompt_interactable_id()
+
+
+func _prompt_range() -> float:
+	if GameSession.catalog != null and GameSession.catalog.scaling != null:
+		return GameSession.catalog.scaling.interact_prompt_range_tiles
+	return 0.0
+
+
+func _nearest_prompt_interactable_id() -> int:
+	var snap := GameSession.curr_snapshot
+	var best_id: int = 0
+	var best_d: float = _prompt_range()
+	for bag in snap.ground_drops:
+		var d: float = SimConstants.interact_distance(snap.player_x, snap.player_y, bag.x, bag.y)
+		if GameSession.catalog.scaling.in_prompt_range(d) and d <= best_d:
+			best_d = d
+			best_id = bag.id
+	return best_id
 
 
 func _bag_in_range() -> bool:
-	var snap := GameSession.curr_snapshot
-	var r: float = LocalSim.PLACEHOLDER_LOOT_RANGE_TILES
-	var r2: float = r * r
-	for bag in snap.ground_drops:
-		var dx: float = snap.player_x - bag.x
-		var dy: float = snap.player_y - bag.y
-		if dx * dx + dy * dy <= r2:
-			return true
-	return false
+	return _nearest_prompt_interactable_id() != 0
 
 
 func _update_hud() -> void:
