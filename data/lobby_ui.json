@@ -55,6 +55,7 @@
   "error_messages": {
     "MULTIPLIER_NOT_ALLOWED": "This lobby doesn't allow that level multiplier.",
     "INSTANCE_FULL": "That area is full right now. You can try again when someone leaves.",
-    "INSTANCE_NOT_FOUND": "That portal is no longer open."
+    "INSTANCE_NOT_FOUND": "That portal is no longer open.",
+    "JOIN_REFUSED": "You don't meet the requirements to join this area."
   }
 }

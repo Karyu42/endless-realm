@@ -130,12 +130,14 @@
       "required": [
         "MULTIPLIER_NOT_ALLOWED",
         "INSTANCE_FULL",
-        "INSTANCE_NOT_FOUND"
+        "INSTANCE_NOT_FOUND",
+        "JOIN_REFUSED"
       ],
       "properties": {
         "MULTIPLIER_NOT_ALLOWED": { "type": "string", "minLength": 1 },
         "INSTANCE_FULL": { "type": "string", "minLength": 1 },
-        "INSTANCE_NOT_FOUND": { "type": "string", "minLength": 1 }
+        "INSTANCE_NOT_FOUND": { "type": "string", "minLength": 1 },
+        "JOIN_REFUSED": { "type": "string", "minLength": 1 }
       }
     }
   }

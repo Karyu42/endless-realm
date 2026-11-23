@@ -233,12 +233,16 @@ func _on_client_portal_error(code: int, _reason: String) -> void:
 
 func _on_client_join_error(code: int, _reason: String) -> void:
 	apply_join_error(code)
-	if mode == Mode.CLIENT and (lobby_client == null or lobby_client.player_id == 0):
-		call_deferred("_abandon_failed_join")
+	var failed: LobbyClient = lobby_client
+	if mode == Mode.CLIENT and (failed == null or failed.player_id == 0):
+		call_deferred("_abandon_failed_join", failed)
 
 
-func _abandon_failed_join() -> void:
+func _abandon_failed_join(failed: LobbyClient = null) -> void:
 	if mode != Mode.CLIENT:
+		return
+	# A later start_client may already have replaced this client.
+	if lobby_client != failed:
 		return
 	if lobby_client != null and lobby_client.player_id != 0:
 		return
@@ -246,7 +250,8 @@ func _abandon_failed_join() -> void:
 
 
 ## Hello-time join refusal. INSTANCE_FULL uses packed lobby_full copy, not the
-## portal "area is full" sentence. Join-floor UNSPECIFIED is left alone.
+## portal "area is full" sentence. JOIN_REFUSED uses its own packed message.
+## Join-floor UNSPECIFIED is left alone.
 func apply_join_error(code: int) -> String:
 	var ui := LobbyUiSettings.load_default()
 	var text := ""
@@ -254,6 +259,11 @@ func apply_join_error(code: int) -> String:
 		text = ui.text("lobby_full")
 		if text == "":
 			DataCatalog.report_unknown_id("lobby_ui.strings.lobby_full")
+	elif code == ErrorCodes.JOIN_REFUSED:
+		if ui.maps_error(code):
+			text = ui.error_message(code)
+		else:
+			DataCatalog.report_unknown_id(ErrorCodes.catalog_id(code))
 	elif code != PB.ErrorCode.ERROR_CODE_UNSPECIFIED:
 		DataCatalog.report_unknown_id(ErrorCodes.catalog_id(code))
 	join_error_text = text
