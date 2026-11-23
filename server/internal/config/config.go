@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/Karyu42/endless-realm/server/internal/instance"
 )
 
 const (
-	DefaultListenAddr = ":8080"
-	DefaultSeed       = uint64(1)
-	DefaultMultiplier = 1.0
+	DefaultListenAddr           = ":8080"
+	DefaultSeed                 = uint64(1)
+	DefaultMultiplierHundredths = 100
 
 	EnvListenAddr = "ER_LISTEN_ADDR"
 	EnvSeed       = "ER_SEED"
@@ -20,20 +22,22 @@ const (
 )
 
 type Config struct {
-	ListenAddr string
-	Seed       uint64
-	Multiplier float64
+	ListenAddr           string
+	Seed                 uint64
+	MultiplierHundredths int
+	Healthcheck          bool
 }
 
 func Default() Config {
 	return Config{
-		ListenAddr: DefaultListenAddr,
-		Seed:       DefaultSeed,
-		Multiplier: DefaultMultiplier,
+		ListenAddr:           DefaultListenAddr,
+		Seed:                 DefaultSeed,
+		MultiplierHundredths: DefaultMultiplierHundredths,
 	}
 }
 
 // FromEnv returns defaults overlaid with ER_* environment variables.
+// ER_MULTIPLIER accepts either a decimal ("1.05") or integer hundredths ("105").
 func FromEnv() (Config, error) {
 	cfg := Default()
 	if v := os.Getenv(EnvListenAddr); v != "" {
@@ -47,11 +51,11 @@ func FromEnv() (Config, error) {
 		cfg.Seed = n
 	}
 	if v := os.Getenv(EnvMultiplier); v != "" {
-		n, err := strconv.ParseFloat(v, 64)
+		m100, err := instance.ParseMultiplier(v)
 		if err != nil {
 			return Config{}, fmt.Errorf("%s: %w", EnvMultiplier, err)
 		}
-		cfg.Multiplier = n
+		cfg.MultiplierHundredths = m100
 	}
 	return cfg, nil
 }
@@ -65,12 +69,19 @@ func Parse(args []string) (Config, error) {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	listen := fs.String("listen", cfg.ListenAddr, "listen address (env "+EnvListenAddr+")")
 	seed := fs.Uint64("seed", cfg.Seed, "instance seed (env "+EnvSeed+")")
-	mult := fs.Float64("multiplier", cfg.Multiplier, "instance level multiplier in [0.5, 1.5] (env "+EnvMultiplier+")")
+	mult := fs.String("multiplier", instance.FormatMultiplier(cfg.MultiplierHundredths),
+		"instance level multiplier as a decimal (1.05) or hundredths (105); v0.1 is [0.5, 1.5] on 0.05 steps (env "+EnvMultiplier+")")
+	healthcheck := fs.Bool("healthcheck", false, "probe /healthz on the listen address and exit (for compose/distroless HEALTHCHECK)")
 	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	m100, err := instance.ParseMultiplier(*mult)
+	if err != nil {
 		return Config{}, err
 	}
 	cfg.ListenAddr = *listen
 	cfg.Seed = *seed
-	cfg.Multiplier = *mult
+	cfg.MultiplierHundredths = m100
+	cfg.Healthcheck = *healthcheck
 	return cfg, nil
 }
