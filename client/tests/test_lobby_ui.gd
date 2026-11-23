@@ -15,6 +15,9 @@ func after_each() -> void:
 	if _host != null:
 		_host.stop()
 		_host = null
+	GameSession.clear_portal_error()
+	GameSession.interact_pressed = false
+	GameSession.interact_target_id = 0
 
 
 func test_pack_loads_without_fallbacks() -> void:
@@ -309,3 +312,104 @@ func test_drop_restore_drop_drop_restore_keeps_ability_state() -> void:
 	assert_eq(join.restore(_host, null), id)
 	assert_eq(_host.sim.ability_cooldown_ticks(id), cd)
 	assert_almost_eq(_host.sim.focus(id), focus, 1e-6)
+
+
+const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
+
+
+func test_error_messages_cover_each_portal_code() -> void:
+	var codes: PackedInt32Array = ErrorCodes.packed()
+	assert_eq(codes.size(), 3)
+	assert_true(codes.has(PB.ErrorCode.MULTIPLIER_NOT_ALLOWED))
+	assert_true(codes.has(PB.ErrorCode.INSTANCE_FULL))
+	assert_true(codes.has(PB.ErrorCode.INSTANCE_NOT_FOUND))
+	for code in codes:
+		var name: String = ErrorCodes.name_of(code)
+		assert_ne(name, "UNKNOWN", "unnamed ErrorCode %d" % code)
+		assert_true(
+			_ui.maps_error(code),
+			"data/lobby_ui.json error_messages is missing %s" % name
+		)
+		var msg: String = _ui.error_message(code)
+		assert_false(msg.is_empty(), "empty player-facing message for %s" % name)
+		assert_ne(msg, name, "message for %s should be player-facing" % name)
+		assert_false(msg.contains(name), "message for %s should be original copy" % name)
+
+
+func test_unknown_error_code_is_logged_and_unmapped() -> void:
+	assert_eq(ErrorCodes.name_of(9999), "UNKNOWN")
+	assert_false(_ui.maps_error(9999))
+	assert_eq(_ui.error_message(9999), "")
+	assert_eq(ErrorCodes.catalog_id(9999), "ErrorCode.9999")
+	var text: String = GameSession.apply_portal_error(9999)
+	assert_push_error("DataCatalog: unknown id ErrorCode.9999")
+	assert_eq(text, "")
+	assert_eq(GameSession.portal_error_text, "")
+
+
+func test_apply_portal_error_shows_packed_copy_not_the_host_reason() -> void:
+	for code in ErrorCodes.packed():
+		GameSession.interact_pressed = true
+		GameSession.interact_target_id = 77
+		var text: String = GameSession.apply_portal_error(code)
+		assert_eq(text, _ui.error_message(code))
+		assert_eq(GameSession.portal_error_text, _ui.error_message(code))
+		assert_eq(GameSession.portal_error_code, code)
+		assert_false(GameSession.interact_pressed, "interact is cleared so the player can retry")
+		assert_eq(GameSession.interact_target_id, 0)
+		GameSession.clear_portal_error()
+
+
+func test_portal_rejected_for_the_local_player_applies_the_message() -> void:
+	var pid: int = GameSession.local_player_id
+	GameSession.interact_pressed = true
+	GameSession.interact_target_id = 12
+	GameSession._on_host_portal_rejected(pid, PB.ErrorCode.INSTANCE_NOT_FOUND, "portal entrance is closed")
+	assert_eq(GameSession.portal_error_text, _ui.error_message(PB.ErrorCode.INSTANCE_NOT_FOUND))
+	assert_false(GameSession.portal_error_text.contains("portal entrance is closed"))
+	assert_false(GameSession.interact_pressed)
+	assert_eq(GameSession.interact_target_id, 0)
+	# A rejection for someone else does not overwrite the local player's message.
+	GameSession._on_host_portal_rejected(pid + 99, PB.ErrorCode.INSTANCE_FULL, "ignored")
+	assert_eq(GameSession.portal_error_text, _ui.error_message(PB.ErrorCode.INSTANCE_NOT_FOUND))
+
+
+func test_lobby_client_error_reply_emits_each_code_and_is_not_a_join_reject() -> void:
+	for code in ErrorCodes.packed():
+		var client := LobbyClient.new()
+		var got_code: Array = [-1]
+		var rejected: Array = [false]
+		client.error_received.connect(func(c: int, _reason: String) -> void:
+			got_code[0] = c
+		)
+		client.rejected.connect(func(_reason: String) -> void:
+			rejected[0] = true
+		)
+		var msg = PB.ServerMessage.new()
+		var err = msg.new_error()
+		err.set_code(code)
+		err.set_reason("host reason must not become a join reject")
+		client._on_packet(msg.to_bytes())
+		assert_eq(got_code[0], code)
+		assert_eq(client.last_error_code, code)
+		assert_false(rejected[0], "ErrorReply must not emit rejected")
+		client.free()
+
+
+func test_lobby_client_join_reject_still_emits_rejected() -> void:
+	var client := LobbyClient.new()
+	var rejected: Array = [false]
+	var errors: Array = [0]
+	client.rejected.connect(func(reason: String) -> void:
+		rejected[0] = true
+		assert_eq(reason, "full lobby")
+	)
+	client.error_received.connect(func(_c: int, _r: String) -> void:
+		errors[0] += 1
+	)
+	var msg = PB.ServerMessage.new()
+	msg.new_reject().set_reason("full lobby")
+	client._on_packet(msg.to_bytes())
+	assert_true(rejected[0])
+	assert_eq(errors[0], 0)
+	client.free()

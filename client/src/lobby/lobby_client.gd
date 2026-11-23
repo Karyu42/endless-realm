@@ -7,11 +7,14 @@ const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
 
 signal welcomed(player_id: int)
 signal rejected(reason: String)
+## Mid-session ErrorReply (portal refusals). Not a join Reject.
+signal error_received(code: int, reason: String)
 signal snapshot_received(tick: int)
 signal lobbies_changed
 
 var player_id: int = 0
 var last_reason: String = ""
+var last_error_code: int = 0
 var last_tick: int = 0
 var connected: bool = false
 var hello_sent: bool = false
@@ -111,8 +114,11 @@ func _on_packet(buf: PackedByteArray) -> void:
 		last_tick = msg.get_snapshot().get_tick()
 		snapshot_received.emit(last_tick)
 	elif msg.has_error():
+		last_error_code = msg.get_error().get_code()
 		last_reason = msg.get_error().get_reason()
-		rejected.emit(last_reason)
+		# Keep Reject (join) and ErrorReply (portal / mid-session) separate so
+		# a refused portal does not look like a kicked join.
+		error_received.emit(last_error_code, last_reason)
 
 
 func _poll_udp() -> void:
