@@ -816,6 +816,7 @@ static func _finite_or_zero(v: float) -> float:
 func _add_player(character: Variant = null, identity: String = "", ready_if_new: bool = false) -> HostPlayer:
 	var p := HostPlayer.new()
 	p.restore_ability = {} if ready_if_new else CONSERVATIVE
+	var takes_builtin := false
 	# Ids come from the sim's one entity allocator, so a player id never
 	# collides with an enemy, projectile or bag (or a sim-only player such
 	# as LocalSim.place_ally, which never counts toward max_players).
@@ -836,6 +837,7 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	elif _sim_has_builtin_player():
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
+		takes_builtin = true
 	else:
 		p.id = sim.alloc_player_id()
 	_issued_player_ids[p.id] = true
@@ -849,11 +851,22 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	p.class_id = String(rec["class_id"])
 	p.x = float(rec["x"])
 	p.y = float(rec["y"])
-	if sim.get_player(p.id) != null:
+	var existing := sim.get_player(p.id)
+	if existing != null:
 		# Still in the sim (built-in player 1, or a leave not yet stepped):
-		# place_player keeps them and cancels the pending removal.
-		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if rec.has("hp") else -1)
-		sim.set_player_class_for(p.id, p.class_id)
+		# place_player keeps them and cancels the pending removal. HP is set
+		# only for a new spawn (the built-in player taken over at first
+		# join); a player who never left the sim keeps the sim's HP.
+		var new_spawn := takes_builtin
+		var kept_hp := existing.hp
+		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if new_spawn and rec.has("hp") else -1)
+		if new_spawn:
+			sim.set_player_class_for(p.id, p.class_id)
+		elif existing.class_id != p.class_id:
+			# A class change refills to the new max; keep the HP they had
+			# (capped at that max) so it never revives or tops up.
+			sim.set_player_class_for(p.id, p.class_id)
+			existing.hp = mini(kept_hp, existing.hp)
 		_restore_ability(p)
 	else:
 		sim.add_player(p.id, rec)

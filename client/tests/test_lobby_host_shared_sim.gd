@@ -597,3 +597,56 @@ func test_rejoin_drops_an_unavailable_saved_id() -> void:
 	var retry := _host.add_local_player(null, token)
 	assert_ne(retry, live, "old token cannot take the id after it becomes available")
 	assert_eq(_host.add_local_player(null, live_token), live, "the owner's own token still works")
+
+
+
+# --- HP on re-add -------------------------------------------------------------
+
+func test_dead_local_player_readded_same_tick_stays_dead() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	_host.sim.get_player(b).hp = 0
+	var token := _host.remove_local_player(b)
+	assert_eq(_host.add_local_player(null, token), b, "same id, still in the sim")
+	assert_eq(_host.sim.get_player(b).hp, 0, "no refill on re-add")
+	_host.run_tick()
+	assert_eq(_host.sim.get_player(b).hp, 0)
+
+
+func test_dead_local_player_readded_with_other_class_stays_dead() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _host.add_local_player("thornguard")
+	_host.run_tick()
+	_host.sim.get_player(b).hp = 0
+	var token := _host.remove_local_player(b)
+	assert_eq(_host.add_local_player("gleamwright", token), b)
+	assert_eq(_host.sim.get_player(b).hp, 0)
+
+
+func test_damaged_local_player_readded_same_tick_keeps_hp() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	var sp := _host.sim.get_player(b)
+	sp.hp = maxi(1, sp.hp / 3)
+	var hp := sp.hp
+	var token := _host.remove_local_player(b)
+	assert_eq(_host.add_local_player({"hp": 99999}, token), b)
+	assert_eq(_host.sim.get_player(b).hp, hp, "re-add keeps the sim's HP")
+	_host.run_tick()
+	assert_eq(_host.sim.get_player(b).hp, hp)
+
+
+func test_fresh_join_spawns_with_full_hp() -> void:
+	_host = _new_host()
+	var a := _host.add_local_player()  # takes over the built-in player 1
+	var b := _host.add_local_player()  # a new sim player
+	_host.run_tick()
+	for id in [a, b]:
+		var sp := _host.sim.get_player(id)
+		assert_gt(sp.hp, 0)
+		assert_eq(sp.hp, _host.sim._current_max_hp(sp), "full HP on a new spawn")
