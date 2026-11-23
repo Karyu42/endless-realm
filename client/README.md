@@ -90,15 +90,22 @@ godot --path client
 
 Controls:
 
-- **Desktop:** WASD or arrows to move (diagonals are normalized), mouse to aim,
-  hold the left button to fire, Space or the right button for the ability.
+- **Desktop / gamepad:** WASD or the left stick to move, mouse or the right
+  stick to aim (gamepad aim is smoothed), hold left click or RT to fire,
+  Space, right-click or LB for the ability, E or Y to loot or enter.
 - **Android / touch:** left virtual stick moves, right stick aims and fires,
-  an ability button sits above the right stick,
-  while held.
+  an ability button sits above the right stick, and an interact button
+  appears beside it when a bag or portal is in prompt range. Stick size is
+  packed in `data/feel.json` as physical millimeters at the screen DPI.
+  **Needs a real-device check on Karyu's Android phone:** thumb reach and
+  DPI sizing, deadzone, the interact button appearing in range, and that
+  fire/ability feel immediate (no extra frame of lag).
 
-Placeholder art is primitive shapes only. Tunables (stride, fire rate, shot
+Placeholder art is primitive shapes only. Sim tunables (stride, fire rate, shot
 speed / range / lifetime) are on the `SimConfig` resource at
-`resources/sim_config.tres`.
+`resources/sim_config.tres`. Hit flash colors, damage-number feel, bullet
+outlines, gamepad aim smoothing, and touch-stick sizes live in
+[`data/feel.json`](../data/feel.json) (schema in `data/schema/feel.schema.json`).
 
 ## Tests
 
