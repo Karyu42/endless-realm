@@ -1178,6 +1178,7 @@ func spawn_practice_portal(dungeon_id: String) -> int:
 	var practice_base: int = int(src["practice_base_level"])
 	portal.base_level = practice_base
 	portal.content_level = _scaling.portal_content_level(practice_base, portal.m100)
+	portal.persistent = bool(src.get("persistent", false))
 	_portals.append(portal)
 	return portal.id
 

@@ -87,6 +87,7 @@
         "x": { "type": "number" },
         "y": { "type": "number" },
         "radius": { "type": "number", "exclusiveMinimum": 0 },
+        "persistent": { "type": "boolean" },
         "m100": { "type": "integer" },
         "practice_base_level": { "type": "integer", "minimum": 1 },
         "placeholder": { "type": "string", "minLength": 1 }

@@ -140,6 +140,9 @@ class PortalRecord:
 	var empty_since_tick: int = -1
 	var cleared: bool = false
 	var closed: bool = false
+	## Persistent entrance: no admission expiry, one instance for the life
+	## of the host (never closed or replaced), capacity counts occupants.
+	var persistent: bool = false
 
 
 class HostPlayer:
@@ -1052,6 +1055,15 @@ func _enter_refusal(p: HostPlayer, portal: PortalSnapshot) -> Array:
 	return _record_refusal(_record_for(p.instance, portal.id), p.id)
 
 
+## Players in `inst` other than `except_id` (lobby id).
+func _occupants(inst: HostInstance, except_id: int) -> int:
+	var n := 0
+	for p in players:
+		if p.instance == inst and p.id != except_id:
+			n += 1
+	return n
+
+
 ## Packed scaling.json lifetime when present; otherwise vision §6.1's 120 s.
 func _entrance_lifetime_ticks(record: PortalRecord) -> int:
 	var sc := record.source.sim.scaling()
@@ -1068,6 +1080,8 @@ func _record_for(source: HostInstance, portal_id: int) -> PortalRecord:
 		record.portal_id = portal_id
 		record.capacity = _settings.max_players
 		record.created_tick = tick
+		var portal: PortalSnapshot = source.sim.portal_by_id(portal_id)
+		record.persistent = portal != null and portal.persistent
 		_portal_records[key] = record
 	return _portal_records[key]
 
@@ -1082,6 +1096,10 @@ func _sync_portal_records() -> void:
 func _record_refusal(record: PortalRecord, player_id: int) -> Array:
 	if record.closed:
 		return [PB.ErrorCode.INSTANCE_NOT_FOUND, "portal entrance is closed"]
+	if record.persistent:
+		if record.instance != null and _occupants(record.instance, player_id) >= record.capacity:
+			return [PB.ErrorCode.INSTANCE_FULL, "portal instance is full"]
+		return [0, ""]
 	if not record.admitted.has(player_id):
 		if record.admitted.size() >= record.capacity:
 			return [PB.ErrorCode.INSTANCE_FULL, "portal instance is full"]
@@ -1227,6 +1245,8 @@ func _teardown_empty_instances() -> void:
 		# cleared is recorded for deposits and later lifetime rules.
 		if inst.sim.has_method("boss_defeated"):
 			record.cleared = record.cleared or bool(inst.sim.call("boss_defeated"))
+		if record.persistent:
+			continue  # a persistent entrance keeps its one instance
 		var used := false
 		for p in players:
 			if p.instance == inst:

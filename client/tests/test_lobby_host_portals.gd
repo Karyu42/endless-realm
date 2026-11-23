@@ -28,9 +28,13 @@ func _new_host(max_players: int = 4) -> LobbyHost:
 
 
 ## Practice portal in the overworld at its data position (8, 16).
-func _open_portal() -> PortalSnapshot:
+func _open_portal(persistent: bool = false) -> PortalSnapshot:
 	var id := _host.sim.spawn_practice_portal("hollowmere_vault")
-	return _host.sim.portal_by_id(id)
+	var portal := _host.sim.portal_by_id(id)
+	# Most lifetime tests use a normal opened entrance; persistent-door
+	# tests opt into the packed practice entrance policy explicitly.
+	portal.persistent = persistent
+	return portal
 
 
 func _join_near_portal(portal: PortalSnapshot) -> int:
@@ -418,7 +422,7 @@ func test_closed_entrance_rejects_entry() -> void:
 	assert_true(_host._resolve_bag(portal.id, a).is_empty(), "resolver refuses a closed entrance")
 
 
-func test_practice_entrance_never_yields_fresh_instance() -> void:
+func test_nonpersistent_entrance_never_yields_fresh_instance() -> void:
 	_host = _new_host()
 	var portal := _open_portal()
 	var a := _join_near_portal(portal)
@@ -605,3 +609,85 @@ func test_loadtest_spread_over_instances() -> void:
 	assert_eq(per.size(), 3)
 	for k in per:
 		assert_eq(per[k], 2)
+
+
+# --- persistent practice entrance -------------------------------------------
+
+func test_practice_portal_has_persistent_data_flag() -> void:
+	_host = _new_host()
+	var id := _host.sim.spawn_practice_portal("hollowmere_vault")
+	assert_true(_host.sim.portal_by_id(id).persistent)
+	assert_false(PortalSnapshot.new().persistent, "ordinary entrances default to non-persistent")
+
+
+func test_persistent_door_admits_new_player_after_lifetime() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	_ticks(LobbyHost.ENTRANCE_LIFETIME_TICKS + 1)
+	var b := _join_near_portal(portal)
+	_enter(b, portal)
+	assert_eq(_instance_of(b), inst, "new admission after normal expiry")
+	assert_eq(_rejections.size(), 0)
+
+
+func test_persistent_instance_survives_empty_and_keeps_state_on_reentry() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	_host.run_tick()
+	inst.sim.defeat_all_enemies()
+	var sid := _host._find_player(a).sim_id
+	var enemies_before := inst.sim.world_view(sid).enemies.size()
+	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	rec.cleared = true
+	_exit_here(a, 5)
+	_ticks(LobbyHost.EMPTY_INSTANCE_CLOSE_TICKS + 10)
+	assert_eq(_host.instances.size(), 2, "persistent instance kept while empty")
+	assert_false(rec.closed)
+	assert_true(rec.cleared)
+	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_enter(a, portal, 6)
+	assert_eq(_instance_of(a), inst)
+	assert_eq(_host._find_player(a).sim_id, sid)
+	assert_true(rec.cleared, "record and live sim progress retained")
+	assert_eq(inst.sim.world_view(sid).enemies.size(), enemies_before)
+	for e in inst.sim.world_view(sid).enemies:
+		assert_false(e.alive, "defeated enemy is not recreated")
+	assert_eq(_host._next_instance_index, inst.index + 1)
+
+
+func test_persistent_capacity_counts_occupants_and_keeps_reentry_ids() -> void:
+	_host = _new_host(2)
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	var b := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var aid := _host._find_player(a).sim_id
+	_enter(b, portal)
+	var s := _host.settings()
+	s.max_players = 4
+	assert_eq(_host.apply_settings(s), OK)
+	var c := _join_near_portal(portal)
+	_enter(c, portal)
+	assert_true(_instance_of(c).is_overworld())
+	assert_eq(_rejections.back()[1], PB.ErrorCode.INSTANCE_FULL)
+	_exit_here(a, 5)
+	_enter(c, portal, 2)
+	assert_eq(_instance_of(c), inst, "leaving frees a persistent-door slot")
+	# Previously admitted players also need an occupant slot.
+	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_enter(a, portal, 6)
+	assert_true(_instance_of(a).is_overworld())
+	assert_eq(_rejections.back()[1], PB.ErrorCode.INSTANCE_FULL)
+	_exit_here(b, 5)
+	_enter(a, portal, 7)
+	assert_eq(_instance_of(a), inst)
+	assert_eq(_host._find_player(a).sim_id, aid, "re-entry id kept")
+	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	assert_eq(rec.admitted.size(), 3, "history kept beyond occupant capacity")
