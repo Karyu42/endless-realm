@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://endless-realm.local/schema/feel.schema.json",
+  "title": "Endless Realm client feel (render, UI, and input tuning)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hit_flash", "hit_stop", "damage_numbers", "bullets", "aim", "touch"],
+  "properties": {
+    "hit_flash": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["player_color", "enemy_color"],
+      "properties": {
+        "player_color": { "$ref": "#/$defs/color" },
+        "enemy_color": { "$ref": "#/$defs/color" }
+      }
+    },
+    "hit_stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seconds", "knockback_px", "recover_seconds"],
+      "properties": {
+        "seconds": { "type": "number", "minimum": 0 },
+        "knockback_px": { "type": "number", "minimum": 0 },
+        "recover_seconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "damage_numbers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pool_size", "lifetime_seconds", "rise_px", "font_size", "outline_size",
+        "player_taken_color", "dealt_color", "heal_color", "stack_offset_px"
+      ],
+      "properties": {
+        "pool_size": { "type": "integer", "minimum": 1 },
+        "lifetime_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "rise_px": { "type": "number", "minimum": 0 },
+        "font_size": { "type": "integer", "minimum": 8 },
+        "outline_size": { "type": "integer", "minimum": 0 },
+        "player_taken_color": { "$ref": "#/$defs/color" },
+        "dealt_color": { "$ref": "#/$defs/color" },
+        "heal_color": { "$ref": "#/$defs/color" },
+        "stack_offset_px": { "type": "number", "minimum": 0 }
+      }
+    },
+    "bullets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "player_outline_px", "player_outline_color",
+        "enemy_outline_px", "enemy_outline_color",
+        "enemy_rim_px", "enemy_rim_color"
+      ],
+      "properties": {
+        "player_outline_px": { "type": "number", "minimum": 0 },
+        "player_outline_color": { "$ref": "#/$defs/color" },
+        "enemy_outline_px": { "type": "number", "minimum": 0 },
+        "enemy_outline_color": { "$ref": "#/$defs/color" },
+        "enemy_rim_px": { "type": "number", "minimum": 0 },
+        "enemy_rim_color": { "$ref": "#/$defs/color" }
+      }
+    },
+    "aim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gamepad_deadzone", "gamepad_smooth_halflife_seconds"],
+      "properties": {
+        "gamepad_deadzone": { "type": "number", "minimum": 0, "maximum": 1 },
+        "gamepad_smooth_halflife_seconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "touch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deadzone", "stick_thumb_mm", "knob_ratio", "margin_mm",
+        "ability_button_mm", "interact_button_mm", "button_gap_mm"
+      ],
+      "properties": {
+        "deadzone": { "type": "number", "minimum": 0, "maximum": 1 },
+        "stick_thumb_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "knob_ratio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "margin_mm": { "type": "number", "minimum": 0 },
+        "ability_button_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "interact_button_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "button_gap_mm": { "type": "number", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": { "type": "number", "minimum": 0, "maximum": 1 }
+    }
+  }
+}

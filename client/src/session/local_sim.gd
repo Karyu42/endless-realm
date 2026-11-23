@@ -50,6 +50,8 @@ var _sorted_ids: Array[int] = []
 var _pending_adds: Dictionary = {} # id -> {character: Variant, x: float, y: float, ...}
 var _pending_removes: Dictionary = {} # id -> true
 var _projectiles: Array[SimProjectile] = []
+## Hits resolved during the tick that just completed. Cleared at the start of step().
+var _hits: Array[HitEvent] = []
 var _enemies: Array[EnemyState] = []
 var _pattern_bullets: Array[PatternBullet] = []
 var _hit_p0: SimVec2 = SimVec2.new()
@@ -378,6 +380,7 @@ func spawn_enemy_from_def(def: EnemyDef, x: float, y: float, content_level: int 
 
 
 func step() -> void:
+	_hits.clear()
 	_apply_pending_roster()
 	for id in _sorted_ids:
 		var p: SimPlayerState = _players[id]
@@ -522,6 +525,22 @@ func world_view(player_id: int) -> WorldSnapshot:
 		snap.ward_ticks = ast.ward_ticks
 		snap.invuln_ticks = ast.invuln_ticks
 	return snap
+
+
+## Read-only hits from the tick that just completed. Do not mutate or keep past the next step().
+func hits() -> Array[HitEvent]:
+	return _hits
+
+
+func _record_hit(kind: int, target_id: int, x: float, y: float, amount: int) -> void:
+	var ev := HitEvent.new()
+	ev.tick = _tick + 1
+	ev.kind = kind
+	ev.target_id = target_id
+	ev.x = x
+	ev.y = y
+	ev.amount = amount
+	_hits.append(ev)
 
 
 ## Read-only view of in-flight player shots. Do not mutate or keep past a step().
@@ -952,6 +971,7 @@ func _hurt_player(p: SimPlayerState, amount: int, attacker_level: int = 1) -> bo
 	if p.hp < 0:
 		p.hp = 0
 	p.flash_ticks = _config.player_flash_ticks
+	_record_hit(HitEvent.KIND_PLAYER_TAKEN, p.id, p.x, p.y, amount)
 	return true
 
 
@@ -2399,6 +2419,8 @@ func _hurt_enemy(e: EnemyState, amount: int, attacker_id: int, sim_tick: int) ->
 			var acc: int = int(_boss_damage_by.get(attacker_id, 0))
 			_boss_damage_by[attacker_id] = acc + dealt
 	e.flash_ticks = _config.player_flash_ticks
+	if dealt > 0:
+		_record_hit(HitEvent.KIND_DEALT, e.id, e.x, e.y, dealt)
 	if e.hp <= 0:
 		_kill_enemy(e, sim_tick)
 		return

@@ -60,6 +60,18 @@ var _shot_free: Array[Polygon2D] = []
 var _pattern_free: Array[Polygon2D] = []
 var _enemy_free: Array[Polygon2D] = []
 var _hint_touch: bool = false
+var _float_pool: DamageNumberPool = DamageNumberPool.new()
+var _float_labels: Array[Label] = []
+var _float_tick: int = -1
+var _hitstop_left: float = 0.0
+var _freeze_player: Vector2 = Vector2.ZERO
+var _freeze_on: bool = false
+var _knock_age: float = 0.0
+var _knock_dir: Vector2 = Vector2.ZERO
+var _knock_active: bool = false
+var _aim_smoothed: float = 0.0
+var _aim_ready: bool = false
+var _last_player_hp_for_heal: int = -1
 
 
 func _ready() -> void:
@@ -93,6 +105,13 @@ func _ready() -> void:
 	_sticks = VirtualSticks.new()
 	_sticks.name = "VirtualSticks"
 	add_child(_sticks)
+	process_physics_priority = -20
+	set_physics_process(true)
+	var feel: FeelSettings = GameSession.feel()
+	if feel != null:
+		_sticks.set_feel(feel)
+		_float_pool.configure(feel.floater_pool_size)
+		_ensure_float_labels(feel)
 	_hint = Label.new()
 	_hint.name = "Hint"
 	_hint.add_theme_font_size_override("font_size", 16)
@@ -203,8 +222,15 @@ func _draw() -> void:
 	_draw_hazards()
 
 
-func _process(_delta: float) -> void:
-	_sample_input()
+func _physics_process(delta: float) -> void:
+	var feel: FeelSettings = GameSession.feel()
+	if feel != null:
+		_sticks.set_feel(feel)
+	_sample_input(delta)
+
+
+func _process(delta: float) -> void:
+	_tick_hit_feel(delta)
 	_update_player_view()
 	_update_enemy_views()
 	_update_shot_views()
@@ -214,7 +240,7 @@ func _process(_delta: float) -> void:
 	_update_hud()
 	queue_redraw()
 	_update_combat_floaters()
-	_update_floaters()
+	_sync_float_labels(delta)
 	if _hint_touch != _sticks.using_touch:
 		_refresh_hint()
 
@@ -222,12 +248,12 @@ func _process(_delta: float) -> void:
 func _refresh_hint() -> void:
 	_hint_touch = _sticks.using_touch
 	if _hint_touch:
-		_hint.text = "Left stick moves · right stick aims and fires · ability button above the right stick · Loot or Enter when something is in range · a Burrmite, a Driftcap Spore, and a Hollowmere portal share the yard · beat the Tallow Warden to open the vault exit"
+		_hint.text = "Left stick moves · right stick aims and fires · ability above the right stick · interact appears beside it when something is in range · a Burrmite, a Driftcap Spore, and a Hollowmere portal share the yard · beat the Tallow Warden to open the vault exit"
 	else:
-		_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · Space or right-click for ability · E to loot or enter · 1–8 equip · a Burrmite, a Driftcap Spore, and a Hollowmere portal share the yard · beat the Tallow Warden to open the vault exit"
+		_hint.text = "WASD or left stick to move · mouse or right stick to aim · hold left click or RT to fire · Space, right-click or LB for ability · E or Y to loot or enter · 1–8 equip · a Burrmite, a Driftcap Spore, and a Hollowmere portal share the yard · beat the Tallow Warden to open the vault exit"
 
 
-func _sample_input() -> void:
+func _sample_input(delta: float) -> void:
 	if _sticks.using_touch:
 		GameSession.move_x = _sticks.move_x
 		GameSession.move_y = _sticks.move_y
@@ -235,6 +261,9 @@ func _sample_input() -> void:
 		GameSession.fire_held = _sticks.fire_held
 		if _sticks.consume_ability_pressed():
 			GameSession.ability_pressed = true
+		if _sticks.consume_interact_pressed():
+			GameSession.interact_pressed = true
+			GameSession.interact_target_id = _nearest_prompt_interactable_id()
 		return
 	GameSession.move_x = Input.get_axis("move_left", "move_right")
 	GameSession.move_y = Input.get_axis("move_up", "move_down")
@@ -247,17 +276,36 @@ func _sample_input() -> void:
 	for i in range(1, 9):
 		if Input.is_action_just_pressed("inventory_%d" % i):
 			GameSession.inventory_slot = i
-	var player_px := GameSession.interpolated_player_pixels()
-	var mouse := get_global_mouse_position()
-	GameSession.aim = atan2(mouse.y - player_px.y, mouse.x - player_px.x)
+	var feel: FeelSettings = GameSession.feel()
+	var dead: float = feel.gamepad_aim_deadzone if feel != null else 0.0
+	var look := Input.get_vector("aim_left", "aim_right", "aim_up", "aim_down", dead)
+	if look.length() > 0.0:
+		var target: float = atan2(look.y, look.x)
+		if not _aim_ready:
+			_aim_smoothed = target
+			_aim_ready = true
+		var half: float = feel.gamepad_aim_halflife_seconds if feel != null else 0.0
+		_aim_smoothed = StickMath.smooth_angle(_aim_smoothed, target, delta, half)
+		GameSession.aim = _aim_smoothed
+	else:
+		var player_px := GameSession.interpolated_player_pixels()
+		var mouse := get_global_mouse_position()
+		GameSession.aim = atan2(mouse.y - player_px.y, mouse.x - player_px.x)
+		_aim_smoothed = GameSession.aim
+		_aim_ready = true
 
 
 func _update_player_view() -> void:
-	_player.position = GameSession.interpolated_player_pixels()
+	var pos := GameSession.interpolated_player_pixels()
+	if _freeze_on:
+		pos = _freeze_player
+	pos += _player_knock_offset()
+	_player.position = pos
 	_player.rotation = GameSession.interpolated_aim()
 	var snap := GameSession.curr_snapshot
-	if snap.player_flash_ticks > 0:
-		_player.color = FLASH_COLOR
+	var feel: FeelSettings = GameSession.feel()
+	if snap.player_flash_ticks > 0 and feel != null:
+		_player.color = feel.player_flash_color
 	else:
 		_player.color = PLAYER_COLOR
 	_hp.text = "HP %d / %d" % [snap.player_hp, snap.player_max_hp]
@@ -447,7 +495,12 @@ func _update_enemy_views() -> void:
 		# Rooted Driftcaps and the Warden's candle body do not spin with aim.
 		if not is_cap and not is_warden:
 			view.rotation = e.aim
-		view.color = FLASH_COLOR if e.flash_ticks > 0 else color
+		var feel: FeelSettings = GameSession.feel()
+		if e.flash_ticks > 0 and feel != null:
+			view.color = feel.enemy_flash_color
+		else:
+			view.color = color
+		view.position += _knock_for_target(e.id)
 
 func _on_loot_pressed() -> void:
 	GameSession.interact_pressed = true
@@ -545,7 +598,8 @@ func _update_hud() -> void:
 		_prompt.text = ""
 		_prompt.visible = false
 		_loot_btn.text = "Loot"
-	_loot_btn.visible = _sticks.using_touch and _bag_in_range()
+	_loot_btn.visible = false
+	_sticks.interact_available = _sticks.using_touch and _bag_in_range()
 
 
 func _bag_color(kind: String) -> Color:
@@ -626,81 +680,153 @@ func _update_portal_views() -> void:
 			core.color = PORTAL_CORE
 			core.polygon = _ring_shape(r * 0.45)
 
+func _padded_polygon(pts: PackedVector2Array, pad: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for pt in pts:
+		var n: float = pt.length()
+		if n <= 0.0:
+			out.append(pt)
+		else:
+			out.append(pt * ((n + pad) / n))
+	return out
+
+
 func _ensure_shot_outline(view: Polygon2D, parent: Node2D, radius_px: float) -> void:
 	if parent != _shots and parent != _patterns:
 		return
+	var feel: FeelSettings = GameSession.feel()
+	if feel == null:
+		return
+	var is_enemy: bool = parent == _patterns
+	var pad: float = feel.enemy_outline_px if is_enemy else feel.player_outline_px
+	var col: Color = feel.enemy_outline_color if is_enemy else feel.player_outline_color
 	var outline: Polygon2D = view.get_node_or_null("Outline")
 	if outline == null:
 		outline = Polygon2D.new()
 		outline.name = "Outline"
 		outline.show_behind_parent = true
-		outline.color = SHOT_OUTLINE if parent == _shots else PATTERN_OUTLINE
 		view.add_child(outline)
-	var kind := String(view.get_meta("kind", "diamond"))
-	if kind == "spore":
-		outline.polygon = _circle_shape(radius_px + 1.5)
-	else:
-		outline.polygon = _diamond(radius_px + 1.5)
+		view.move_child(outline, 0)
+	outline.color = col
+	# Grow the live shape so Burrmite diamonds, Driftcap spores, and later
+	# Warden pattern shapes all get the same contrast treatment.
+	outline.polygon = _padded_polygon(view.polygon, pad)
+	var rim: Polygon2D = view.get_node_or_null("Rim")
+	if is_enemy and feel.enemy_rim_px > 0.0:
+		if rim == null:
+			rim = Polygon2D.new()
+			rim.name = "Rim"
+			rim.show_behind_parent = true
+			view.add_child(rim)
+			view.move_child(rim, 1)
+		rim.color = feel.enemy_rim_color
+		rim.polygon = _padded_polygon(view.polygon, feel.enemy_rim_px)
+		rim.visible = true
+	elif rim != null:
+		rim.visible = false
+	# radius_px is kept so callers stay unchanged.
+	var _r: float = radius_px
 
 
 func _update_combat_floaters() -> void:
 	var curr := GameSession.curr_snapshot
-	var prev := GameSession.prev_snapshot
+	var feel: FeelSettings = GameSession.feel()
 	if curr.tick <= 0:
 		_last_player_hp = curr.player_hp
+		_last_player_hp_for_heal = curr.player_hp
 		_last_enemy_hp.clear()
+		_float_tick = curr.tick
 		for e in curr.enemies:
 			_last_enemy_hp[e.id] = e.hp
 		return
-	if _last_player_hp >= 0 and curr.player_hp != _last_player_hp:
-		_spawn_floater(GameSession.interpolated_player_pixels(), curr.player_hp - _last_player_hp)
+	var tick: int = GameSession.last_hit_tick if GameSession.last_hit_tick >= 0 else curr.tick
+	if tick <= _float_tick:
+		return
+	_float_tick = tick
+	var stack: float = feel.floater_stack_offset_px if feel != null else 0.0
+	if GameSession.last_hits.size() > 0:
+		for ev in GameSession.last_hits:
+			var pos := Vector2(ev.x * SimConstants.TILE_PX, ev.y * SimConstants.TILE_PX)
+			if ev.kind == HitEvent.KIND_PLAYER_TAKEN:
+				pos = GameSession.interpolated_player_pixels()
+			var kind: int = DamageNumberPool.KIND_PLAYER_TAKEN if ev.kind == HitEvent.KIND_PLAYER_TAKEN else DamageNumberPool.KIND_DEALT
+			_float_pool.spawn(ev.amount, kind, pos.x, pos.y, stack)
+		_begin_hit_feel(GameSession.last_hits)
+	else:
+		_spawn_from_hp_diff(stack)
+	if _last_player_hp_for_heal >= 0 and curr.player_hp > _last_player_hp_for_heal:
+		var heal: int = curr.player_hp - _last_player_hp_for_heal
+		var p := GameSession.interpolated_player_pixels()
+		_float_pool.spawn(heal, DamageNumberPool.KIND_HEAL, p.x, p.y, stack)
+	_last_player_hp_for_heal = curr.player_hp
 	_last_player_hp = curr.player_hp
-	var seen: Dictionary = {}
+	_last_enemy_hp.clear()
 	for e in curr.enemies:
-		seen[e.id] = true
+		_last_enemy_hp[e.id] = e.hp
+
+
+func _spawn_from_hp_diff(stack: float) -> void:
+	var curr := GameSession.curr_snapshot
+	var prev := GameSession.prev_snapshot
+	if _last_player_hp >= 0 and curr.player_hp < _last_player_hp:
+		var taken: int = _last_player_hp - curr.player_hp
+		var p := GameSession.interpolated_player_pixels()
+		_float_pool.spawn(taken, DamageNumberPool.KIND_PLAYER_TAKEN, p.x, p.y, stack)
+		var ev := HitEvent.new()
+		ev.kind = HitEvent.KIND_PLAYER_TAKEN
+		ev.target_id = curr.player_id
+		_begin_hit_feel([ev])
+	for e in curr.enemies:
 		var prev_hp: int = int(_last_enemy_hp.get(e.id, e.hp))
 		for p in prev.enemies:
 			if p.id == e.id:
 				prev_hp = p.hp
 				break
-		if e.hp != prev_hp:
-			_spawn_floater(Vector2(e.x * SimConstants.TILE_PX, e.y * SimConstants.TILE_PX), e.hp - prev_hp)
-		_last_enemy_hp[e.id] = e.hp
-	for id in _last_enemy_hp.keys():
-		if not seen.has(id):
-			_last_enemy_hp.erase(id)
+		if e.hp < prev_hp:
+			var pos := Vector2(e.x * SimConstants.TILE_PX, e.y * SimConstants.TILE_PX)
+			_float_pool.spawn(prev_hp - e.hp, DamageNumberPool.KIND_DEALT, pos.x, pos.y, stack)
 
 
-func _spawn_floater(pos: Vector2, delta: int) -> void:
-	if delta == 0 or _floats == null:
+func _ensure_float_labels(feel: FeelSettings) -> void:
+	if _floats == null or feel == null:
 		return
-	var lab := Label.new()
-	lab.text = ("+%d" % delta) if delta > 0 else str(delta)
-	lab.add_theme_font_size_override("font_size", 14)
-	lab.add_theme_color_override("font_color", HEAL_COLOR if delta > 0 else DAMAGE_COLOR)
-	lab.position = pos + Vector2(-8.0, -18.0)
-	lab.set_meta("age", 0.0)
-	lab.set_meta("origin", lab.position)
-	_floats.add_child(lab)
+	while _float_labels.size() < feel.floater_pool_size:
+		var lab := Label.new()
+		lab.visible = false
+		lab.add_theme_font_size_override("font_size", feel.floater_font_size)
+		lab.add_theme_constant_override("outline_size", feel.floater_outline_size)
+		lab.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.04, 0.9))
+		_floats.add_child(lab)
+		_float_labels.append(lab)
 
 
-func _update_floaters() -> void:
-	if _floats == null:
+func _sync_float_labels(dt: float) -> void:
+	var feel: FeelSettings = GameSession.feel()
+	if feel == null:
 		return
-	var dt: float = get_process_delta_time()
-	for child in _floats.get_children():
-		var lab := child as Label
-		if lab == null:
+	_ensure_float_labels(feel)
+	_float_pool.advance(dt, feel.floater_lifetime_seconds, feel.floater_rise_px)
+	for i in range(_float_pool.capacity()):
+		if i >= _float_labels.size():
+			break
+		var slot: DamageNumberPool.Slot = _float_pool.slot_at(i)
+		var lab: Label = _float_labels[i]
+		if slot == null or not slot.active:
+			lab.visible = false
 			continue
-		var age: float = float(lab.get_meta("age", 0.0)) + dt
-		lab.set_meta("age", age)
-		var origin: Vector2 = lab.get_meta("origin", lab.position)
-		lab.position = origin + Vector2(0.0, -28.0 * age)
-		var col: Color = lab.get_theme_color("font_color")
-		col.a = clampf(1.0 - age / 0.7, 0.0, 1.0)
+		lab.visible = true
+		if slot.kind == DamageNumberPool.KIND_HEAL:
+			lab.text = "+%d" % slot.amount
+		else:
+			lab.text = str(-slot.amount)
+		var col: Color = feel.floater_dealt_color
+		if slot.kind == DamageNumberPool.KIND_PLAYER_TAKEN:
+			col = feel.floater_player_taken_color
+		elif slot.kind == DamageNumberPool.KIND_HEAL:
+			col = feel.floater_heal_color
+		col.a = _float_pool.alpha_of(slot, feel.floater_lifetime_seconds)
 		lab.add_theme_color_override("font_color", col)
-		if age >= 0.7:
-			lab.queue_free()
+		lab.position = Vector2(slot.x - 10.0, slot.y - 10.0)
 
 
 func _warden_color(e: EnemySnapshot) -> Color:
@@ -726,3 +852,56 @@ func _draw_hazards() -> void:
 		var edge := color
 		edge.a = minf(0.85, color.a + 0.35)
 		draw_arc(Vector2(px, py), r, 0.0, TAU, 32, edge, 1.5, true)
+
+
+func _begin_hit_feel(events: Array) -> void:
+	var feel: FeelSettings = GameSession.feel()
+	if feel == null or events.is_empty():
+		return
+	_hitstop_left = feel.hitstop_seconds
+	_freeze_player = _player.position
+	_freeze_on = feel.hitstop_seconds > 0.0
+	_knock_age = 0.0
+	_knock_active = feel.knockback_px > 0.0
+	var taken: bool = false
+	for ev in events:
+		var hit := ev as HitEvent
+		if hit != null and hit.kind == HitEvent.KIND_PLAYER_TAKEN:
+			taken = true
+			break
+	_knock_dir = Vector2(0.0, -1.0) if taken else Vector2(0.0, 1.0)
+
+
+func _tick_hit_feel(dt: float) -> void:
+	if _hitstop_left > 0.0:
+		_hitstop_left -= dt
+		if _hitstop_left <= 0.0:
+			_freeze_on = false
+	if _knock_active:
+		_knock_age += dt
+
+
+func _player_knock_offset() -> Vector2:
+	var feel: FeelSettings = GameSession.feel()
+	if feel == null or not _knock_active or _knock_dir.y > 0.0:
+		return Vector2.ZERO
+	return _knock_scaled(feel)
+
+
+func _knock_for_target(_id: int) -> Vector2:
+	var feel: FeelSettings = GameSession.feel()
+	if feel == null or not _knock_active or _knock_dir.y < 0.0:
+		return Vector2.ZERO
+	return _knock_scaled(feel)
+
+
+func _knock_scaled(feel: FeelSettings) -> Vector2:
+	var rec: float = feel.knockback_recover_seconds
+	if rec <= 0.0:
+		_knock_active = false
+		return Vector2.ZERO
+	var t: float = _knock_age / rec
+	if t >= 1.0:
+		_knock_active = false
+		return Vector2.ZERO
+	return _knock_dir * feel.knockback_px * (1.0 - t)
