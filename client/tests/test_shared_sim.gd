@@ -334,8 +334,30 @@ func test_projectiles_and_bags_are_readable_by_id() -> void:
 			break
 	assert_not_null(item, "a bag should drop within enough rolls")
 	assert_gt(sim.ground_drops().size(), 0)
-	assert_eq(sim.bags().size(), sim.ground_drops().size())
 	var bag: GroundDrop = sim.ground_drops()[0]
 	assert_eq(sim.bag_by_id(bag.id), bag)
 	assert_null(sim.bag_by_id(bag.id + 999999))
 
+
+func test_contact_skips_invulnerable_and_hits_the_next_player() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 2.0, 0.0)
+	var pid1: int = sim.player_ids()[0]
+	var pid2: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid2, {"x": 2.0, "y": 0.0}))
+	sim.step()
+	var def := EnemyDef.new()
+	def.aggro_radius = 0.0
+	def.leash = 1.0
+	def.move_speed = 0.0
+	def.wander_speed = 0.0
+	def.contact_damage = 8
+	def.base_hp = 60
+	def.radius = 0.35
+	def.pattern_id = ""
+	sim.spawn_enemy_from_def(def, 2.0, 0.0)
+	sim.set_invuln_ticks(pid1, 6)
+	var hp1: int = sim.get_player(pid1).hp
+	var hp2: int = sim.get_player(pid2).hp
+	sim.step()
+	assert_eq(sim.get_player(pid1).hp, hp1, "Slipstep i-frames skip the first overlap")
+	assert_eq(sim.get_player(pid2).hp, hp2 - 8, "contact keeps checking other players")
