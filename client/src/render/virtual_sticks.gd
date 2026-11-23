@@ -74,6 +74,10 @@ func _set_using_touch(touch: bool) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	# Android synthesizes mouse events (device == DEVICE_ID_EMULATION) from
+	# touches; ignoring them keeps keyboard/mouse mode from flickering.
+	if event is InputEventMouse and event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
 	if event is InputEventScreenTouch or event is InputEventScreenDrag:
 		_set_using_touch(true)
 	elif event is InputEventKey or event is InputEventMouseButton:

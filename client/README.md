@@ -56,5 +56,11 @@ godot --headless --path client -s addons/gut/gut_cmdln.gd -gdir=res://tests -gex
 
 The tests cover 8-dir movement and diagonal normalization, fire-on-press
 timing from `docs/design/content-v0.1.md` §1 (float64 `next_ready` in seconds,
-Driftrunner golden ticks 0/6/12/18/23/29, Thornguard 0/10/20, no tap-burst),
-projectile lifetime and range, tick stepping, and the `NetClient` stub.
+Driftrunner golden ticks 0/6/12/18/23/29, Thornguard 0/10/20, no tap-burst,
+Gleamwright cast-lock 0/8/19/27/35, mid-hold rate change), projectile
+lifetime and range, tick stepping, and the `NetClient` stub.
+
+`spawn_tick` is the time index of the tick that spawned a shot (the first
+processed tick is 0). `tick()` and `snapshot.tick` count completed ticks, so
+they are 1 after the first step. A shot fired on the first tick therefore has
+`spawn_tick == 0` while `snapshot.tick == 1`.
