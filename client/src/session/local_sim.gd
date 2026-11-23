@@ -1414,6 +1414,11 @@ func set_focus(player_id: int, value: float) -> void:
 	st.focus = clampf(value, 0.0, float(st.focus_max()))
 
 
+## Focus regen per second for this player (class rate, as used each tick).
+func focus_regen_per_s(player_id: int) -> float:
+	return _ability_of(player_id).focus_regen()
+
+
 func focus_max(player_id: int) -> int:
 	return _ability_of(player_id).focus_max()
 

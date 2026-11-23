@@ -37,12 +37,16 @@ const START_HP: int = 100
 ## Class for remote players until the host-lobby protocol carries one.
 ## TODO(host-lobby protocol PR): take the class from the joining client.
 const DEFAULT_CLASS_ID := "thornguard"
-## Ability state across leave/rejoin: a join that matches a host-verified
-## identity gets back the exact cooldown and Focus it left with. Every other
-## join (new, unknown, or no longer stored) starts conservative: the ability
-## on its full cooldown and 0 Focus, so no join gets a free full bar.
-## Saved states are kept for the life of the lobby, at most this many
-## (oldest dropped; a dropped one rejoins conservative), cleared by stop().
+## Hosted join state (docs/design/content-v0.1.md §1, phase 1). Applies to
+## players the host verifies itself (the listen-host and local players):
+## - first join this host session: ready (full Focus, cooldown 0);
+## - rejoin with a snapshot: the saved cooldown minus the host ticks elapsed
+##   (floor 0) and the saved Focus plus normal regen over them (capped);
+## - a rejoin key with no snapshot (already used, dropped, or not issued by
+##   this host): conservative, the ability on full cooldown and 0 Focus.
+## Remote joins always start conservative until the handshake verifies an
+## identity. Snapshots live as long as this host, at most this many (oldest
+## dropped), and stop() clears them.
 const MAX_ABILITY_STASH: int = 256
 const CONSERVATIVE := {"conservative": true}
 const _LOCAL_KEY_PREFIX := "local:"
@@ -299,14 +303,21 @@ func is_m100_allowed(m100: int) -> bool:
 ## max_players. Returns the player id, or -1 if the lobby is full.
 ## `character` is passed to the shared sim: null (DEFAULT_CLASS_ID), a class
 ## id String, or a Dictionary {class_id, x?, y?, hp?}.
-## `rejoin_token` is the token remove_local_player() returned when this
-## player left: the player gets their id back with the exact cooldown and
-## Focus they left with. Any other value (empty, unknown, already used, or
-## no longer stored) is a new join and starts conservative.
+## No `rejoin_token` is a first join and starts ready. The token
+## remove_local_player() returned gives the player their id back with the
+## state they left with, adjusted for the host time since (see
+## MAX_ABILITY_STASH). Any other token (already used, dropped, or not issued
+## here) starts conservative.
 func add_local_player(character: Variant = null, rejoin_token: String = "") -> int:
 	if players.size() >= max_players:
 		return -1
-	var p := _add_player(character, _LOCAL_KEY_PREFIX + rejoin_token if rejoin_token != "" else "")
+	# Local players are verified by the host itself: no token is a first join
+	# (ready); a token is a rejoin and only its snapshot can restore state.
+	var p: HostPlayer
+	if rejoin_token == "":
+		p = _add_player(character, "", true)
+	else:
+		p = _add_player(character, _LOCAL_KEY_PREFIX + rejoin_token)
 	p.is_local = true
 	return p.id
 
@@ -679,13 +690,16 @@ static func _finite_or_zero(v: float) -> float:
 	return v if is_finite(v) else 0.0
 
 
-## `identity` is a host-verified key ("" = none). Only a stored key gets its
-## saved ability state back; everything else starts conservative.
-## TODO(handshake PR): Hello carries no verifiable identity yet, so remote
-## joins pass "" and always start conservative.
-func _add_player(character: Variant = null, identity: String = "") -> HostPlayer:
+## `identity` is a host-verified key ("" = none) whose snapshot, if stored,
+## is restored. Without one the player starts ready only if `ready_if_new`
+## (a host-verified first join), otherwise conservative.
+## TODO(handshake PR, #50): Hello carries no verifiable identity yet, so
+## remote joins pass "" and always start conservative. The remote key must be
+## an identity the host has verified in the handshake, never an id or
+## character the client merely claims.
+func _add_player(character: Variant = null, identity: String = "", ready_if_new: bool = false) -> HostPlayer:
 	var p := HostPlayer.new()
-	p.restore_ability = CONSERVATIVE
+	p.restore_ability = {} if ready_if_new else CONSERVATIVE
 	# Ids come from the sim's one entity allocator, so a player id never
 	# collides with an enemy, projectile or bag (or a sim-only player such
 	# as LocalSim.place_ally, which never counts toward max_players).
@@ -694,7 +708,8 @@ func _add_player(character: Variant = null, identity: String = "") -> HostPlayer
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
 		p.id = int(saved["id"])
-		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"])}
+		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
+				"left_tick": int(saved["left_tick"])}
 	elif _sim_has_builtin_player():
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
@@ -735,9 +750,14 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 	if identity != "":
 		var saved: Dictionary = p.restore_ability
 		if saved.is_empty() and sim.get_player(p.id) != null:
-			saved = {"cooldown": sim.ability_cooldown_ticks(p.id), "focus": sim.focus(p.id)}
+			saved = {"cooldown": sim.ability_cooldown_ticks(p.id), "focus": sim.focus(p.id), "left_tick": tick}
+		elif saved.has("conservative") and sim.get_player(p.id) != null:
+			# Left before the conservative start was applied: keep it that way.
+			saved = {"cooldown": sim.world_view(p.id).ability_cooldown_max, "focus": 0.0, "left_tick": tick}
 		if saved.has("cooldown"):
-			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"]})
+			# A pending restore that was never applied keeps its own left_tick.
+			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"],
+					"left_tick": saved["left_tick"]})
 	sim.remove_player(p.id)
 	players.erase(p)
 
@@ -751,14 +771,18 @@ func _stash_ability(key: String, saved: Dictionary) -> void:
 		_ability_stash.erase(_ability_stash_order.pop_front())
 
 
-## Applies p.restore_ability: the saved values, or CONSERVATIVE (full
-## cooldown for the player's ability, 0 Focus).
+## Applies p.restore_ability: a snapshot adjusted for the host ticks since
+## it was taken, or CONSERVATIVE (full cooldown for the player's ability,
+## 0 Focus). {} (a ready first join) leaves the sim's fresh state.
 func _restore_ability(p: HostPlayer) -> void:
 	var saved := p.restore_ability
 	p.restore_ability = {}
 	if saved.has("cooldown"):
-		sim.set_ability_cooldown_ticks(p.id, int(saved["cooldown"]))
-		sim.set_focus(p.id, float(saved["focus"]))
+		var elapsed: int = maxi(0, tick - int(saved["left_tick"]))
+		sim.set_ability_cooldown_ticks(p.id, maxi(0, int(saved["cooldown"]) - elapsed))
+		# Normal regen over the elapsed host time; set_focus caps at max Focus.
+		var regen: float = sim.focus_regen_per_s(p.id) * float(elapsed) * SimConstants.TICK_DT
+		sim.set_focus(p.id, float(saved["focus"]) + regen)
 	elif saved.has("conservative"):
 		sim.set_ability_cooldown_ticks(p.id, sim.world_view(p.id).ability_cooldown_max)
 		sim.set_focus(p.id, 0.0)
