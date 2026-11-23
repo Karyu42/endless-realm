@@ -1,0 +1,32 @@
+{
+  "abilities": [
+    {
+      "id": "thorn_ward",
+      "name": "Thorn Ward",
+      "class_id": "thornguard",
+      "focus_cost": 40,
+      "cooldown_ticks": 160,
+      "duration_ticks": 60,
+      "damage_taken_mult": 0.5
+    },
+    {
+      "id": "kindle_pulse",
+      "name": "Kindle Pulse",
+      "class_id": "gleamwright",
+      "focus_cost": 60,
+      "cooldown_ticks": 120,
+      "cast_lock_ticks": 5,
+      "heal_radius_tiles": 4.0,
+      "heal_max_hp_frac": 0.25
+    },
+    {
+      "id": "slipstep",
+      "name": "Slipstep",
+      "class_id": "driftrunner",
+      "focus_cost": 30,
+      "cooldown_ticks": 60,
+      "blink_tiles": 4.0,
+      "invuln_ticks": 6
+    }
+  ]
+}

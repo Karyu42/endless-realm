@@ -80,8 +80,9 @@ godot --path client
 Controls:
 
 - **Desktop:** WASD or arrows to move (diagonals are normalized), mouse to aim,
-  hold the left button to fire.
-- **Android / touch:** left virtual stick moves, right stick aims and fires
+  hold the left button to fire, Space or the right button for the ability.
+- **Android / touch:** left virtual stick moves, right stick aims and fires,
+  an ability button sits above the right stick,
   while held.
 
 Placeholder art is primitive shapes only. Tunables (stride, fire rate, shot
