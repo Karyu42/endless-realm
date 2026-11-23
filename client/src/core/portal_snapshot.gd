@@ -16,6 +16,9 @@ var dungeon_name: String = ""
 var m100: int = 0
 var content_level: int = 0
 var base_level: int = 0
+## A fixed entrance (e.g. the practice yard door): it never expires and
+## keeps one long-lived instance for the life of the host.
+var persistent: bool = false
 ## From the packed entrance: whether the destination instance grants persistent rewards.
 var grants_persistent: bool = false
 ## For KIND_PLACEHOLDER, the packed boss id (not spawned yet).
