@@ -21,3 +21,12 @@ func projectile_lifetime_ticks() -> int:
 	if speed <= SimConstants.MOVE_EPS:
 		return 1
 	return int(ceil(projectile_range_tiles / speed * float(SimConstants.TICK_HZ)))
+
+
+## Ticks between shots: ceil(TICK_HZ / rate). 0 means the weapon cannot fire
+## (rate is zero or negative). At 2 shots/s and 20 Hz this is exactly 10.
+func fire_interval_ticks() -> int:
+	var rate: float = fire_rate_shots_per_s * (1.0 + tempo_bonus)
+	if rate <= SimConstants.MOVE_EPS:
+		return 0
+	return int(ceil(float(SimConstants.TICK_HZ) / rate))

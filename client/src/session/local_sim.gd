@@ -12,7 +12,7 @@ var _py: float = 0.0
 var _aim: float = 0.0
 var _applied_seq: int = 0
 var _intent: InputIntent = InputIntent.new()
-var _fire_acc: float = 0.0
+var _fire_cooldown: int = 0
 var _projectiles: Array[SimProjectile] = []
 var _has_bounds: bool = false
 var _bound_min_x: float = 0.0
@@ -76,18 +76,18 @@ func projectile_count() -> int:
 	return _projectiles.size()
 
 
-func fire_accumulator() -> float:
-	return _fire_acc / float(SimConstants.TICK_HZ)
+func fire_cooldown() -> int:
+	return _fire_cooldown
 
 
 func _apply_movement() -> void:
 	var mx := _intent.move_x
 	var my := _intent.move_y
-	var len := sqrt(mx * mx + my * my)
-	if len > 1.0:
-		mx /= len
-		my /= len
-	elif len <= SimConstants.MOVE_EPS:
+	var move_len := sqrt(mx * mx + my * my)
+	if move_len > 1.0:
+		mx /= move_len
+		my /= move_len
+	elif move_len <= SimConstants.MOVE_EPS:
 		mx = 0.0
 		my = 0.0
 	var step_len: float = _config.move_speed_tiles_per_s * SimConstants.TICK_DT
@@ -100,19 +100,20 @@ func _apply_movement() -> void:
 
 
 func _apply_fire() -> void:
-	# Content-spec timing: add Tempo each tick, fire each time the sum reaches
-	# TICK_HZ (equivalent to adding Tempo/TICK_HZ and firing at 1, but this
-	# stays exact for the designed rates 2.0 / 2.5 / 3.5). On release, cap at
-	# one stored shot so a tap cannot bank extras.
-	var hz: float = float(SimConstants.TICK_HZ)
-	if _intent.fire_held:
-		var tempo: float = _config.fire_rate_shots_per_s * (1.0 + _config.tempo_bonus)
-		_fire_acc += tempo
-		while _fire_acc >= hz:
-			_fire_acc -= hz
-			_spawn_projectile()
-	else:
-		_fire_acc = minf(_fire_acc, hz)
+	# First shot on the tick fire is pressed if the weapon is off cooldown.
+	# Cooldown is ceil(TICK_HZ / (Tempo * (1 + bonus))) ticks, counted from
+	# that shot (10 ticks at 2/s and 20 Hz). It keeps running after release,
+	# so tapping cannot beat the fire rate. Applies to every weapon.
+	if _fire_cooldown > 0:
+		_fire_cooldown -= 1
+	if not _intent.fire_held:
+		return
+	var interval: int = _config.fire_interval_ticks()
+	if interval <= 0:
+		return
+	if _fire_cooldown == 0:
+		_spawn_projectile()
+		_fire_cooldown = interval
 
 
 func _spawn_projectile() -> void:

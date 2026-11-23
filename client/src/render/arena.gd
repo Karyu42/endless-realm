@@ -8,6 +8,8 @@ var _player: Polygon2D
 var _shots: Node2D
 var _camera: Camera2D
 var _hint: Label
+var _shot_views: Dictionary = {} # projectile id -> Polygon2D
+var _hint_touch: bool = false
 
 
 func _ready() -> void:
@@ -23,17 +25,14 @@ func _ready() -> void:
 	add_child(_player)
 	_camera = Camera2D.new()
 	_camera.name = "Camera"
-	_camera.make_current()
 	_camera.zoom = Vector2(1.6, 1.6)
 	add_child(_camera)
+	_camera.make_current()
 	_sticks = VirtualSticks.new()
 	_sticks.name = "VirtualSticks"
 	add_child(_sticks)
 	_hint = Label.new()
 	_hint.name = "Hint"
-	_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire"
-	if _sticks.using_touch:
-		_hint.text = "Left stick moves · right stick aims and fires"
 	_hint.add_theme_font_size_override("font_size", 16)
 	_hint.add_theme_color_override("font_color", Color(0.82, 0.9, 0.88))
 	var layer := CanvasLayer.new()
@@ -45,6 +44,7 @@ func _ready() -> void:
 	margin.add_child(_hint)
 	layer.add_child(margin)
 	add_child(layer)
+	_refresh_hint()
 	queue_redraw()
 
 
@@ -65,6 +65,16 @@ func _process(_delta: float) -> void:
 	_sample_input()
 	_update_player_view()
 	_update_shot_views()
+	if _hint_touch != _sticks.using_touch:
+		_refresh_hint()
+
+
+func _refresh_hint() -> void:
+	_hint_touch = _sticks.using_touch
+	if _hint_touch:
+		_hint.text = "Left stick moves · right stick aims and fires"
+	else:
+		_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire"
 
 
 func _sample_input() -> void:
@@ -74,19 +84,9 @@ func _sample_input() -> void:
 		GameSession.aim = _sticks.aim
 		GameSession.fire_held = _sticks.fire_held
 		return
-	var raw_x := 0.0
-	var raw_y := 0.0
-	if Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT):
-		raw_x -= 1.0
-	if Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT):
-		raw_x += 1.0
-	if Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP):
-		raw_y -= 1.0
-	if Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN):
-		raw_y += 1.0
-	GameSession.move_x = raw_x
-	GameSession.move_y = raw_y
-	GameSession.fire_held = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	GameSession.move_x = Input.get_axis("move_left", "move_right")
+	GameSession.move_y = Input.get_axis("move_up", "move_down")
+	GameSession.fire_held = Input.is_action_pressed("fire")
 	var player_px := GameSession.interpolated_player_pixels()
 	var mouse := get_global_mouse_position()
 	GameSession.aim = atan2(mouse.y - player_px.y, mouse.x - player_px.x)
@@ -101,19 +101,28 @@ func _update_player_view() -> void:
 func _update_shot_views() -> void:
 	var snap := GameSession.curr_snapshot
 	var time := GameSession.render_time_ticks()
-	for child in _shots.get_children():
-		child.queue_free()
+	var live: Dictionary = {}
 	for shot in snap.projectiles:
 		var elapsed: float = time - float(shot.spawn_tick)
 		if elapsed < 0.0 or elapsed >= float(shot.lifetime_ticks):
 			continue
 		if shot.distance_at_time(time) >= shot.range_tiles:
 			continue
-		var view := Polygon2D.new()
+		live[shot.id] = shot
+	for id in _shot_views.keys():
+		if not live.has(id):
+			(_shot_views[id] as Node).queue_free()
+			_shot_views.erase(id)
+	for id in live.keys():
+		if not _shot_views.has(id):
+			var view := Polygon2D.new()
+			_shots.add_child(view)
+			_shot_views[id] = view
+		var shot: SimProjectile = live[id]
+		var view: Polygon2D = _shot_views[id]
 		var r: float = shot.radius_tiles * SimConstants.TILE_PX
 		view.polygon = PackedVector2Array([
 			Vector2(r, 0.0), Vector2(0.0, r), Vector2(-r, 0.0), Vector2(0.0, -r),
 		])
 		view.color = Color(0.48, 0.82, 0.78)
 		view.position = shot.position_at_time(time).to_pixels()
-		_shots.add_child(view)
