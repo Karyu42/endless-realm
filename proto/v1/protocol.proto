@@ -149,6 +149,8 @@ enum ErrorCode {
   ALREADY_IN_INSTANCE = 3;
   INSTANCE_FULL = 4;
   OPEN_PORTAL_LIMIT = 5;
+  // The portal's multiplier is outside the lobby's allowed range.
+  MULTIPLIER_NOT_ALLOWED = 6;
 }
 
 message ErrorReply {

@@ -83,6 +83,8 @@ def run_one(args, clients):
                 "--host", "--port", str(port), "--expect-clients", str(clients),
                 "--emitters", str(args.emitters), "--exit-when-empty",
                 "--run-seconds", str(args.duration + 60)]
+    if args.instances > 1:
+        host_cmd.extend(["--loadtest-instances", str(args.instances)])
     # This override is only used by this load-test driver, never normal lobbies.
     if clients > 50:
         host_cmd.extend(["--loadtest-unsafe-max-players", str(clients)])
@@ -182,6 +184,8 @@ def main():
     ap.add_argument("--clients", default="8,25,50")
     ap.add_argument("--duration", type=int, default=60, help="bot -duration in seconds per run")
     ap.add_argument("--emitters", type=int, default=20)
+    ap.add_argument("--instances", type=int, default=0,
+                    help="spread clients over the overworld and N-1 dungeon instances")
     ap.add_argument("--max-p99-ms", type=float, default=40, help="fail if host tick p99 exceeds this many ms")
     ap.add_argument("--max-skipped-ticks", type=int, default=0, help="fail if host skips more ticks than this")
     ap.add_argument("--godot", default=os.environ.get("GODOT", "godot"))

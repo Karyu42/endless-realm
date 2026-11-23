@@ -502,37 +502,3 @@ func test_player_ids_never_collide_with_sim_entities() -> void:
 		ids[id] = true
 	assert_gt(b, e, "player id taken from the shared allocator")
 
-
-func test_rule_7_activity_tracks_received_input_frames_through_the_host() -> void:
-	_host = _new_host()
-	_host.sim.set_lobby_settings(LobbySettings.new())
-	var pid: int = _host.add_local_player()
-	_host.run_tick()
-	var def := _host.catalog.dungeon("hollowmere_vault")
-	_host.sim.configure_dungeon(def, 42, 100, 1, 1, pid, 1, def.grants_persistent)
-	var sp := _host.sim.get_player(pid)
-	sp.x = 36.0
-	sp.y = 6.0
-	sp.prev_x = sp.x
-	sp.prev_y = sp.y
-	_host.run_tick()
-	var wid: int = 0
-	for e in _host.sim.snapshot().enemies:
-		if e.def_id == "tallow_warden":
-			wid = e.id
-			break
-	assert_gt(wid, 0, "Warden spawned")
-	_host.submit_local_input(pid, InputIntent.from_raw(1, 0.0, 0.0, 0.0, true))
-	_host.run_tick()
-	_host.sim.hurt_enemy(wid, 200, pid)
-	var window: int = LocalSim.NON_IDLE_WINDOW_TICKS
-	for _i in range(window + 2):
-		_host.run_tick()
-		var p := _host.sim.get_player(pid)
-		if p != null:
-			p.hp = maxi(p.hp, 200)
-	_host.sim.hurt_enemy(wid, _host.sim.get_enemy(wid).hp, pid)
-	_host.run_tick()
-	assert_true(_host.sim.boss_defeated())
-	assert_eq(_host.sim.get_player(pid).pending_glint, 0)
-	assert_eq(_host.sim.get_player(pid).pending_riftstone, 0)

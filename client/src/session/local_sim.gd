@@ -62,6 +62,11 @@ var _scaling: SimScaling = SimScaling.new()
 var _loot: LootTables = LootTables.new()
 var _ground_drops: Array[GroundDrop] = []
 var _granted_drop_ids: Dictionary = {} # drop_id -> true
+## Host item rules for an instance (true everywhere except where the host
+## turns them off): whether loot bags may spawn, and whether items may move
+## between a player and the world.
+var _loot_bags_allowed: bool = true
+var _item_transfers_allowed: bool = true
 var _instance_m100: int = 100
 var _in_portal: bool = false
 var _practice_yard: bool = false
@@ -355,6 +360,16 @@ func _player_id_accept(id: int) -> bool:
 	if _id_is_live(id):
 		push_warning("LocalSim: id %d is already live" % id)
 		return false
+	return true
+
+
+## Raises the entity allocator to `floor` so a host running several sims
+## can give each a disjoint id range. Ids below it are never issued here.
+func set_id_floor(floor: int) -> bool:
+	if floor <= 0 or floor >= MAX_ENTITY_ID:
+		return false
+	if floor > _next_id:
+		_next_id = floor
 	return true
 
 
@@ -1073,6 +1088,20 @@ func pending_glint() -> int:
 	return p.pending_glint if p != null else 0
 
 
+func set_item_rules(loot_bags_allowed: bool, item_transfers_allowed: bool) -> void:
+	_loot_bags_allowed = loot_bags_allowed
+	_item_transfers_allowed = item_transfers_allowed
+
+
+## Removes every ground bag (host use: instances that allow none).
+func clear_ground_drops() -> void:
+	_ground_drops.clear()
+
+
+func item_transfers_allowed() -> bool:
+	return _item_transfers_allowed
+
+
 ## Read-only view of ground bags. Do not mutate or keep past a step().
 func ground_drops() -> Array[GroundDrop]:
 	return _ground_drops
@@ -1308,6 +1337,11 @@ func take_pending_transfers() -> Array[PortalTransfer]:
 	return out
 
 
+## Read-only copy of the live portal roster for host admission lifetimes.
+func portals() -> Array[PortalSnapshot]:
+	return _portals.duplicate()
+
+
 func portal_by_id(id: int) -> PortalSnapshot:
 	for portal in _portals:
 		if portal.id == id:
@@ -1347,6 +1381,7 @@ func spawn_practice_portal(dungeon_id: String) -> int:
 	var practice_base: int = int(src["practice_base_level"])
 	portal.base_level = practice_base
 	portal.content_level = _scaling.portal_content_level(practice_base, portal.m100)
+	portal.persistent = bool(src.get("persistent", false))
 	if not src.has("grants_persistent"):
 		push_error("DataCatalog: unknown id %s.practice_yard_portal.grants_persistent" % def.id)
 		return 0
@@ -1423,8 +1458,7 @@ func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
 	if carry.inventory != null:
 		p.inventory = carry.inventory
 	_recompute_player_stats(p, false)
-	if carry.hp > 0:
-		p.hp = mini(carry.hp, _current_max_hp(p))
+	p.hp = clampi(carry.hp, 0, _current_max_hp(p))
 	if carry.ability != null:
 		var st := _ability_of(p.id)
 		st.class_def = carry.ability.class_def
@@ -1609,7 +1643,7 @@ func _try_grant_roll(e: EnemyState, looter_id: int, drop_index: int, looter_clas
 	)
 	# A miss still consumes the id so a retry cannot reroll the chance.
 	_granted_drop_ids[did] = true
-	if item == null:
+	if item == null or not _loot_bags_allowed:
 		return null
 	item.drop_id = did
 	var bag := GroundDrop.new()
@@ -1978,6 +2012,8 @@ func _apply_interact(p: SimPlayerState, sim_tick: int) -> void:
 		return
 	p.last_interact_seq = p.intent.seq
 	var bag := _bag_by_id(target_id)
+	if bag != null and not _item_transfers_allowed:
+		return
 	if _live_own_bag(p, bag):
 		if not _scaling.in_accept_range(_bag_distance(p, bag)):
 			return

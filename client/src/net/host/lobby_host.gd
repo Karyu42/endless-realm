@@ -50,6 +50,9 @@ const DEFAULT_CLASS_ID := "thornguard"
 const MAX_ABILITY_STASH: int = 256
 const CONSERVATIVE := {"conservative": true}
 const _LOCAL_KEY_PREFIX := "local:"
+## Each instance's sim allocates entity ids from its own block, so ids
+## stay unique across instances (instance k starts at k * INSTANCE_ID_BLOCK).
+const INSTANCE_ID_BLOCK: int = 1 << 40
 const EMITTER_RADIUS: float = 0.6
 ## Matches the Go server's instance.DefaultInstanceID (the smoke instance).
 const DEFAULT_INSTANCE_ID: int = 1
@@ -84,6 +87,8 @@ const IMPORT_FLAG_PLAYED_OFFLINE: int = 1
 signal settings_changed(s: LobbySettings)
 ## Emitted at the end of every host tick, after the sim step and sends.
 signal ticked(tick: int)
+## A portal entry the host refused (code is a proto ErrorCode).
+signal portal_rejected(player_id: int, code: int, reason: String)
 
 
 class HostConn:
@@ -97,9 +102,67 @@ class HostConn:
 	var errors_in_window: int = 0
 
 
+## One world the host runs: the overworld (index 0) or a portal dungeon.
+## Each has its own LocalSim, ticked once per host tick.
+class HostInstance:
+	extends RefCounted
+	var index: int = 0
+	var sim: LocalSim
+	var dungeon_id: String = ""
+	## "<source instance index>:<portal id>" for a dungeon, "" for the overworld.
+	var portal_key: String = ""
+	var seed: int = 0
+	var m100: int = 100
+	var grants_persistent: bool = false
+	## The transfer this instance was created from (seed, M, B, E, opener),
+	## so a reset rebuilds the same slice.
+	var created_from: PortalTransfer = null
+	## §7.3: a player who left from inside still counts as present until then.
+	var linger_until_tick: int = -1
+	var arrival_x: float = 0.0
+	var arrival_y: float = 0.0
+	## Distinct players this instance may admit, locked at creation (vision §6 rule 5).
+	var capacity: int = 0
+	var admitted: Dictionary = {}  # lobby player id -> true
+	func is_overworld() -> bool:
+		return portal_key == ""
+
+
+## Admission history outlives the running sim. A closed entrance id never
+## creates a replacement instance while its source portal still exists.
+class PortalRecord:
+	extends RefCounted
+	var source: HostInstance
+	var portal_id: int
+	var instance_id: int = 0
+	var instance: HostInstance
+	var admitted: Dictionary = {}  # lobby player id -> true; never shrinks
+	var sim_ids: Dictionary = {}  # lobby player id -> id inside this instance
+	## Opener ids as they were in the source world, and in the lobby.
+	var opener_source_id: int = 0
+	var opener_lobby_id: int = 0
+	var capacity: int
+	var created_tick: int
+	var empty_since_tick: int = -1
+	var cleared: bool = false
+	var closed: bool = false
+	## Persistent entrance: no admission expiry, one instance for the life
+	## of the host (never closed or replaced), capacity counts occupants.
+	var persistent: bool = false
+	var grants_persistent: bool = false
+	var reset_when_empty: bool = false
+
+
 class HostPlayer:
 	extends RefCounted
+	## Lobby-wide player id (Welcome.player_id); the overworld sim uses it too.
 	var id: int = 0
+	## Instance this player is in, and their id inside that instance's sim.
+	var instance: HostInstance = null
+	var sim_id: int = 0
+	var loadtest_spread: bool = false
+	var progression_entries: Array[Dictionary] = []
+	var restore_progression: Dictionary = {}
 	var seq: int = 0
 	## Last seq handed to LocalSim.apply_input. rule 7 activity tracks
 	## received input frames: is_new_frame is true only when seq advanced
@@ -168,8 +231,21 @@ var interact_validator := HostInteractValidator.new()
 ## interact press, before the sim step. The default hands the target to the
 ## shared sim, which picks the bag up into that player's inventory.
 var on_interact: Callable = Callable()
-## The shared world: every player, enemy, projectile and loot bag.
+## The overworld's shared LocalSim (instances[0].sim).
 var sim: LocalSim
+## Every running instance; [0] is the overworld. Dungeon instances are
+## created by portal transfers and torn down when empty.
+var instances: Array[HostInstance] = []
+## Load test only: spread joining remote players over this many dungeon
+## instances (0 or 1 = everyone stays in the overworld).
+var loadtest_instances: int = 0
+const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
+const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
+const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
+var _portal_records: Dictionary = {}  # source instance / entrance -> PortalRecord
+var _next_instance_index: int = 1
+var _instance_by_portal: Dictionary = {}  # portal_key -> HostInstance
+var portal_rejections: int = 0
 var catalog: DataCatalog
 ## identity key -> {"id", "cooldown", "focus"} for players who left (bounded
 ## FIFO). Keys are host-verified identities, never raw player ids.
@@ -186,6 +262,7 @@ var bullets: HostStandinBulletField
 var enemy_hits: int = 0
 var player_deaths: int = 0
 var peak_players: int = 0
+var peak_players_per_instance: Array = []
 var last_snapshot_bytes: int = 0
 var last_full_bytes: int = 0
 # Connection-limit counters
@@ -230,6 +307,11 @@ func _init(config: SimConfig = null) -> void:
 	# LocalSim starts with a solo player 1; the host owns the roster, so
 	# drop it at the first step unless a host player 1 joins first.
 	sim.remove_player(1)
+	var ow := HostInstance.new()
+	ow.index = 0
+	ow.sim = sim
+	ow.grants_persistent = true  # the overworld keeps what players earn
+	instances.append(ow)
 	_configure_sim()
 	interact_validator.resolver = _resolve_bag
 	on_interact = _forward_interact
@@ -240,6 +322,7 @@ func _init(config: SimConfig = null) -> void:
 func _configure_sim() -> void:
 	sim.set_bounds(0.0, 0.0, arena_size, arena_size)
 	sim.set_world_seed(instance_seed)
+	sim.set_lobby_settings(_settings)
 
 
 func start() -> Error:
@@ -247,6 +330,8 @@ func start() -> Error:
 		_settings.join_code = LobbySettings.generate_join_code()
 	bullets = HostStandinBulletField.new(instance_seed, emitter_count, arena_size, arena_size)
 	_configure_sim()
+	for i in range(loadtest_instances - 1):
+		_create_loadtest_instance(i)
 	var err := _tcp.listen(port, bind_address)
 	if err != OK:
 		return err
@@ -261,8 +346,12 @@ func stop() -> void:
 		c.ws.close()
 	_conns.clear()
 	for p in players:
-		sim.remove_player(p.id)
+		if p.instance != null:
+			p.instance.sim.remove_player(p.sim_id)
 	players.clear()
+	instances.resize(1)
+	_instance_by_portal.clear()
+	_portal_records.clear()
 	# The lobby is closing: saved ability states do not outlive it.
 	_ability_stash.clear()
 	_ability_stash_order.clear()
@@ -280,6 +369,8 @@ func apply_settings(s: LobbySettings) -> Error:
 	if next.join_code == "":
 		next.join_code = _settings.join_code if _settings.join_code != "" else LobbySettings.generate_join_code()
 	_settings = next
+	for inst in instances:
+		inst.sim.set_lobby_settings(_settings)
 	settings_changed.emit(_settings.duplicate_settings())
 	return OK
 
@@ -355,9 +446,19 @@ func remove_local_player(player_id: int) -> String:
 ## unknown or not in the sim yet (joins apply at the next step).
 func world_view(player_id: int) -> WorldSnapshot:
 	var p := _find_player(player_id)
-	if p == null or not p.in_sim or sim.get_player(player_id) == null:
+	if p == null or not p.in_sim or p.instance == null or p.instance.sim.get_player(p.sim_id) == null:
 		return null
-	var v := copy_snapshot(sim.world_view(player_id))
+	var v := copy_snapshot(p.instance.sim.world_view(p.sim_id))
+	# LocalSim scopes this already; explicitly retain only this viewer's
+	# current-instance live bags, never bags from a previous world.
+	var own: Array[GroundDrop] = []
+	for bag in v.ground_drops:
+		if bag.item != null and bag.item.state == ItemState.STATE_LIVE and bag.item.owner_player_id == p.sim_id:
+			own.append(bag)
+	v.ground_drops = own
+	v.player_id = p.id
+	if not p.instance.is_overworld():
+		return v  # stand-in bullets are an overworld load-test aid
 	if bullets != null and bullets.b_count > 0:
 		# Stand-in hits are host-side; show host hp and the stand-in bullets
 		# in the sim's time base.
@@ -517,6 +618,8 @@ func run_tick() -> void:
 	peak_players = maxi(peak_players, players.size())
 	var record := players.size() > 0 and players.size() >= expect_clients
 	if record:
+		if players.size() == peak_players and _n % 20 == 0:
+			peak_players_per_instance = _players_per_instance()
 		if st_first_usec < 0:
 			st_first_usec = t0
 			st_skipped_at_start = skipped_ticks
@@ -708,10 +811,13 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# collides with an enemy, projectile or bag (or a sim-only player such
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
+	if not saved.is_empty() and not _stash_id_issued_here(saved):
+		saved = {}  # not an id this host's overworld sim issued: start fresh
 	if not saved.is_empty() and _find_player(int(saved["id"])) == null:
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
 		p.id = int(saved["id"])
+		p.restore_progression = saved.get("progression", {})
 		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
 				"left_tick": int(saved["left_tick"])}
 	elif _sim_has_builtin_player():
@@ -719,6 +825,8 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		_builtin_taken = true
 	else:
 		p.id = sim.alloc_player_id()
+	p.instance = instances[0]  # every join lands in the overworld
+	p.sim_id = p.id
 	# Spread spawns over the arena deterministically by id.
 	var a: float = float(p.id) * 2.399963
 	var r: float = arena_size * 0.35 * sqrt(float(p.id % 50) / 50.0)
@@ -750,22 +858,42 @@ func _sim_has_builtin_player() -> bool:
 ## identity, saves their ability state under it for a later rejoin.
 func _leave(p: HostPlayer, identity: String = "") -> void:
 	interact_validator.forget_player(p.id)
+	var progression: Dictionary = {}
+	var leaving := p.instance.sim.get_player(p.sim_id)
+	if leaving != null and not p.progression_entries.is_empty():
+		var carry := PlayerCarry.from_sim(leaving, p.instance.sim.ability_state(p.sim_id))
+		_restore_entry_progression(p, carry)
+		progression = _progression_fields(carry)
+		p.instance.sim.apply_carried_player(carry, leaving.x, leaving.y)
+	# TODO(§7.3): a full 5 s in-world linger. Until then the host treats
+	# the leaver as present for that long, so a reset never runs under them.
+	if not p.instance.is_overworld() and leaving != null and leaving.hp > 0:
+		p.instance.linger_until_tick = maxi(p.instance.linger_until_tick, tick + LINGER_TICKS)
+	# Persistent entrances admit by occupancy, so per-player entries of
+	# players who left the lobby are dropped to keep them bounded.
+	for record: PortalRecord in _portal_records.values():
+		if record.persistent:
+			record.admitted.erase(p.id)
+			record.sim_ids.erase(p.id)
 	if identity != "":
+		var isim: LocalSim = p.instance.sim
+		var sid: int = p.sim_id
 		var saved: Dictionary = p.restore_ability
-		if saved.is_empty() and sim.get_player(p.id) != null:
-			saved = {"cooldown": sim.ability_cooldown_ticks(p.id), "focus": sim.focus(p.id), "left_tick": tick}
-		elif saved.has("conservative") and sim.get_player(p.id) != null:
+		if saved.is_empty() and isim.get_player(sid) != null:
+			saved = {"cooldown": isim.ability_cooldown_ticks(sid), "focus": isim.focus(sid), "left_tick": tick}
+		elif saved.has("conservative") and isim.get_player(sid) != null:
 			# Left before the conservative start was applied: keep it that way.
-			saved = {"cooldown": sim.world_view(p.id).ability_cooldown_max, "focus": 0.0, "left_tick": tick}
+			saved = {"cooldown": isim.world_view(sid).ability_cooldown_max, "focus": 0.0, "left_tick": tick}
 		if saved.has("cooldown"):
 			# A pending restore that was never applied keeps its own left_tick.
 			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"],
-					"left_tick": saved["left_tick"]})
-	sim.remove_player(p.id)
+					"left_tick": saved["left_tick"], "progression": progression})
+	p.instance.sim.remove_player(p.sim_id)
 	players.erase(p)
 
 
 func _stash_ability(key: String, saved: Dictionary) -> void:
+	saved["sim"] = sim.get_instance_id()  # the sim that issued saved["id"]
 	if _ability_stash.has(key):
 		_ability_stash_order.erase(key)
 	_ability_stash[key] = saved
@@ -774,21 +902,36 @@ func _stash_ability(key: String, saved: Dictionary) -> void:
 		_ability_stash.erase(_ability_stash_order.pop_front())
 
 
+## A rejoin re-adds an old player id only when the host itself recorded it
+## from this overworld sim (issued by its alloc_player_id or the built-in
+## player). The sim no longer has to tell returning ids from reused ones.
+func _stash_id_issued_here(saved: Dictionary) -> bool:
+	var id := int(saved.get("id", 0))
+	return id > 0 and id < INSTANCE_ID_BLOCK and int(saved.get("sim", 0)) == sim.get_instance_id()
+
+
 ## Applies p.restore_ability: a snapshot adjusted for the host ticks since
 ## it was taken, or CONSERVATIVE (full cooldown for the player's ability,
 ## 0 Focus). {} (a ready first join) leaves the sim's fresh state.
 func _restore_ability(p: HostPlayer) -> void:
 	var saved := p.restore_ability
 	p.restore_ability = {}
+	var isim: LocalSim = p.instance.sim
+	var sid: int = p.sim_id
+	if not p.restore_progression.is_empty():
+		var carry := PlayerCarry.from_sim(isim.get_player(sid), isim.ability_state(sid))
+		_apply_progression(carry, p.restore_progression)
+		isim.apply_carried_player(carry, p.x, p.y)
+		p.restore_progression = {}
 	if saved.has("cooldown"):
 		var elapsed: int = maxi(0, tick - int(saved["left_tick"]))
-		sim.set_ability_cooldown_ticks(p.id, maxi(0, int(saved["cooldown"]) - elapsed))
+		isim.set_ability_cooldown_ticks(sid, maxi(0, int(saved["cooldown"]) - elapsed))
 		# Normal regen over the elapsed host time; set_focus caps at max Focus.
-		var regen: float = sim.focus_regen_per_s(p.id) * float(elapsed) * SimConstants.TICK_DT
-		sim.set_focus(p.id, float(saved["focus"]) + regen)
+		var regen: float = isim.focus_regen_per_s(sid) * float(elapsed) * SimConstants.TICK_DT
+		isim.set_focus(sid, float(saved["focus"]) + regen)
 	elif saved.has("conservative"):
-		sim.set_ability_cooldown_ticks(p.id, sim.world_view(p.id).ability_cooldown_max)
-		sim.set_focus(p.id, 0.0)
+		isim.set_ability_cooldown_ticks(sid, isim.world_view(sid).ability_cooldown_max)
+		isim.set_focus(sid, 0.0)
 
 
 ## Number of saved ability states (bounded by MAX_ABILITY_STASH).
@@ -820,13 +963,15 @@ func _drop_player(c: HostConn) -> void:
 	c.player = null
 
 
-## Feeds every player's newest accepted input to the shared sim (once per
-## player), steps it once, then the stand-in bullets. Returns new player
-## shots as [owner, host_spawn_tick, x, y, angle].
+## Feeds every player's newest accepted input to the sim of the instance
+## they are in (once per player), steps every instance once, applies portal
+## transfers, then the stand-in bullets. Returns new player shots as
+## [owner, host_spawn_tick, x, y, angle].
 func _step_sim() -> Array[PackedFloat64Array]:
-	var n: int = players.size()
+	_sync_portal_records()
 	for p in players:
-		var sp := sim.get_player(p.id)
+		var psim: LocalSim = p.instance.sim
+		var sp := psim.get_player(p.sim_id)
 		if sp == null:
 			continue  # joins next step; keep one-shots for then
 		if not p.interacts.is_empty():
@@ -839,18 +984,24 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			intent.ability_pressed = true
 			p.ability_pressed = false  # one-shot
 		# rule 7 activity tracks received input frames
-		sim.apply_input(p.id, intent, p.seq != p.fed_seq)
+		psim.apply_input(p.sim_id, intent, p.seq != p.fed_seq)
 		p.fed_seq = p.seq
-	sim.step()
-	var px := PackedFloat64Array()
-	var py := PackedFloat64Array()
-	var hp := PackedInt32Array()
-	px.resize(n)
-	py.resize(n)
-	hp.resize(n)
-	for i in range(n):
-		var p := players[i]
-		var sp := sim.get_player(p.id)
+	var stepped: Array[HostInstance] = instances.duplicate()
+	for inst in stepped:
+		inst.sim.step()
+	var shots: Array[PackedFloat64Array] = []
+	for inst in stepped:
+		var done: int = inst.sim.tick()
+		# Read-only walk of the sim's live shots (load-test projection and
+		# stand-in emitter hits); avoids building a full world_view per tick.
+		for shot in inst.sim.projectiles():
+			if shot.spawn_tick == done - 1:
+				shots.append(PackedFloat64Array([float(_lobby_id(inst, shot.owner_id)), float(tick),
+						shot.origin_x, shot.origin_y, atan2(shot.dir_y, shot.dir_x)]))
+			if inst.is_overworld() and bullets.emitters_x.size() > 0:
+				_shot_vs_emitters(shot, done)
+	for p in players:
+		var sp := p.instance.sim.get_player(p.sim_id)
 		if sp != null:
 			p.in_sim = true
 			if not p.restore_ability.is_empty():
@@ -859,29 +1010,55 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			p.x = sp.x
 			p.y = sp.y
 			p.aim_applied = sp.aim
-		px[i] = p.x
-		py[i] = p.y
-		hp[i] = p.hp
-	var shots: Array[PackedFloat64Array] = []
-	var done: int = sim.tick()
-	# Read-only walk of the sim's live shots (load-test projection and
-	# stand-in emitter hits); avoids building a full world_view per tick.
-	for shot in sim.projectiles():
-		if shot.spawn_tick == done - 1:
-			shots.append(PackedFloat64Array([float(shot.owner_id), float(tick), shot.origin_x, shot.origin_y, atan2(shot.dir_y, shot.dir_x)]))
-		if bullets.emitters_x.size() > 0:
-			_shot_vs_emitters(shot, done)
+	for inst in stepped:
+		if not inst.grants_persistent:
+			_enforce_practice_items(inst)
+			_route_practice_deaths(inst)
+	# Transfers queued during this step: the mover is rostered in the
+	# destination now and first steps there next tick (one step per tick).
+	for inst in stepped:
+		for xfer in inst.sim.take_pending_transfers():
+			_route_transfer(inst, xfer)
+	if loadtest_instances > 1:
+		_spread_loadtest_players()
+	_teardown_empty_instances()
+	# Stand-in bullets live in the overworld only.
+	var ow: Array[HostPlayer] = []
+	for p in players:
+		if p.instance == instances[0]:
+			ow.append(p)
+	var n: int = ow.size()
+	var px := PackedFloat64Array()
+	var py := PackedFloat64Array()
+	var hp := PackedInt32Array()
+	px.resize(n)
+	py.resize(n)
+	hp.resize(n)
+	for i in range(n):
+		px[i] = ow[i].x
+		py[i] = ow[i].y
+		hp[i] = ow[i].hp
 	bullets.step(tick, px, py, _config.player_radius_tiles, hp)
 	for i in range(n):
 		if hp[i] <= 0:
 			player_deaths += 1
 			hp[i] = START_HP
-		players[i].hp = hp[i]
+		ow[i].hp = hp[i]
 	return shots
 
 
-## Runs this tick's interact presses through the validator, using the shared
-## sim's position for the player. Accepted presses go to on_interact.
+## Lobby id of the player with `sim_id` in `inst`, or sim_id if none.
+func _lobby_id(inst: HostInstance, sim_id: int) -> int:
+	if inst.is_overworld():
+		return sim_id
+	for p in players:
+		if p.instance == inst and p.sim_id == sim_id:
+			return p.id
+	return sim_id
+
+
+## Runs this tick's interact presses through the validator, using the
+## player's position in their instance. Accepted presses go to on_interact.
 func _apply_interacts(p: HostPlayer, sp: SimPlayerState) -> void:
 	var pending := p.interacts
 	p.interacts = []
@@ -890,14 +1067,557 @@ func _apply_interacts(p: HostPlayer, sp: SimPlayerState) -> void:
 			on_interact.call(p.id, press[1])
 
 
-## interact_validator.resolver: a live bag in the shared sim owned by this
-## player, as {"x", "y"}; {} for anything else (dropped silently).
+## interact_validator.resolver: in the player's instance, a live bag they
+## own or a portal they can use now (see _resolve_portal), as {"x", "y"};
+## {} for anything else. The validator applies scaling.json's accept range.
 func _resolve_bag(target_id: int, player_id: int) -> Dictionary:
-	var bag: GroundDrop = sim.bag_by_id(target_id)
-	if bag == null or bag.item == null or bag.item.state != ItemState.STATE_LIVE \
-			or bag.item.owner_player_id != player_id:
+	var p := _find_player(player_id)
+	if p == null or p.instance == null:
+		return {}
+	if not p.instance.grants_persistent:
+		# Practice instances: no pickups, deposits or hand-offs; only the
+		# exit can be used.
+		var exit: PortalSnapshot = p.instance.sim.portal_by_id(target_id)
+		if exit == null or exit.kind != PortalSnapshot.KIND_EXIT:
+			return {}
+		return {"x": exit.x, "y": exit.y}
+	var bag: GroundDrop = p.instance.sim.bag_by_id(target_id)
+	if bag == null:
+		return _resolve_portal(p, target_id)
+	if bag.item == null or bag.item.state != ItemState.STATE_LIVE \
+			or bag.item.owner_player_id != p.sim_id:
 		return {}
 	return {"x": bag.x, "y": bag.y}
+
+
+## A live portal in the player's instance they can use: an exit, or an
+## entrance whose M the lobby allows, whose join floor they meet and whose
+## instance still has room for them (refusals are reported to the player).
+func _resolve_portal(p: HostPlayer, target_id: int) -> Dictionary:
+	var portal: PortalSnapshot = p.instance.sim.portal_by_id(target_id)
+	if portal == null or not portal.is_interactable():
+		return {}
+	if portal.kind == PortalSnapshot.KIND_ENTER:
+		var refusal := _enter_refusal(p, portal)
+		if String(refusal[1]) != "":
+			_reject_portal(p, int(refusal[0]), String(refusal[1]))
+			return {}
+	return {"x": portal.x, "y": portal.y}
+
+
+## [code, reason] for why `p` may not enter `portal` now; reason "" if they may.
+func _enter_refusal(p: HostPlayer, portal: PortalSnapshot) -> Array:
+	var psim: LocalSim = p.instance.sim
+	if not is_m100_allowed(portal.m100) or not psim.m100_allowed(portal.m100):
+		return [PB.ErrorCode.MULTIPLIER_NOT_ALLOWED, "portal multiplier is not allowed in this lobby"]
+	var sp := psim.get_player(p.sim_id)
+	var sc := psim.scaling()
+	if sp == null or sc == null or sc.below_join_floor(sp.level, portal.content_level):
+		return [PB.ErrorCode.ERROR_CODE_UNSPECIFIED, "level is below this portal's join floor"]
+	return _record_refusal(_record_for(p.instance, portal.id), p.id)
+
+
+## Policy is read only from the host's packed practice entrance definition.
+## Snapshot flags, transfers and network input cannot choose host policy.
+func _portal_policy(portal: PortalSnapshot) -> Dictionary:
+	if portal == null or portal.kind != PortalSnapshot.KIND_ENTER or catalog == null:
+		return {}
+	var def: DungeonDef = catalog.dungeon(portal.dungeon_id)
+	if def == null or def.practice_yard_portal.is_empty():
+		return {}
+	var src: Dictionary = def.practice_yard_portal
+	if not is_equal_approx(portal.x, float(src["x"])) or not is_equal_approx(portal.y, float(src["y"])) \
+			or portal.m100 != int(src["m100"]) or portal.base_level != int(src["practice_base_level"]):
+		return {"grants_persistent": def.grants_persistent}
+	return src
+
+
+## Players in `inst` other than `except_id` (lobby id).
+func _occupants(inst: HostInstance, except_id: int) -> int:
+	var n := 0
+	for p in players:
+		if p.instance == inst and p.id != except_id:
+			n += 1
+	return n
+
+
+## Packed scaling.json lifetime when present; otherwise vision §6.1's 120 s.
+func _entrance_lifetime_ticks(record: PortalRecord) -> int:
+	var sc := record.source.sim.scaling()
+	if sc != null and sc.portal_entrance_lifetime_ticks > 0:
+		return sc.portal_entrance_lifetime_ticks
+	return ENTRANCE_LIFETIME_TICKS
+
+
+func _record_for(source: HostInstance, portal_id: int) -> PortalRecord:
+	var key := _portal_key(source, portal_id)
+	if not _portal_records.has(key):
+		var record := PortalRecord.new()
+		record.source = source
+		record.portal_id = portal_id
+		record.capacity = _settings.max_players
+		record.created_tick = tick
+		var policy := _portal_policy(source.sim.portal_by_id(portal_id))
+		record.persistent = bool(policy.get("persistent", false))
+		record.grants_persistent = bool(policy.get("grants_persistent", false))
+		# Reset is permitted only with host-enforced progression isolation.
+		record.reset_when_empty = record.persistent and not record.grants_persistent and bool(policy.get("reset_when_empty", false))
+		_portal_records[key] = record
+	return _portal_records[key]
+
+
+func _sync_portal_records() -> void:
+	for inst in instances:
+		for portal in inst.sim.portals():
+			if portal.kind == PortalSnapshot.KIND_ENTER:
+				_record_for(inst, portal.id)
+
+
+func _record_refusal(record: PortalRecord, player_id: int) -> Array:
+	if record.closed:
+		return [PB.ErrorCode.INSTANCE_NOT_FOUND, "portal entrance is closed"]
+	if record.persistent:
+		if record.instance != null and _occupants(record.instance, player_id) >= record.capacity:
+			return [PB.ErrorCode.INSTANCE_FULL, "portal instance is full"]
+		return [0, ""]
+	if not record.admitted.has(player_id):
+		if record.admitted.size() >= record.capacity:
+			return [PB.ErrorCode.INSTANCE_FULL, "portal instance is full"]
+		if tick - record.created_tick >= _entrance_lifetime_ticks(record):
+			return [PB.ErrorCode.INSTANCE_NOT_FOUND, "portal entrance is closed"]
+	return [0, ""]
+
+
+func _portal_key(source: HostInstance, portal_id: int) -> String:
+	return "%d:%d" % [source.index, portal_id]
+
+
+## Tells the player (remote: an Error message) and the host (signal) why a
+## portal entry was refused.
+func _reject_portal(p: HostPlayer, code: int, reason: String) -> void:
+	portal_rejections += 1
+	portal_rejected.emit(p.id, code, reason)
+	for c in _conns:
+		if c.player == p:
+			_send_error(c, code, reason)
+			return
+
+
+## Applies one transfer queued by `source`'s sim: enter creates (or joins)
+## the portal's dungeon instance; exit returns to the overworld.
+func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
+	var p: HostPlayer = null
+	for q in players:
+		if q.instance == source and q.sim_id == xfer.player_id:
+			p = q
+			break
+	if p == null:
+		return  # left during the step
+	if xfer.kind == PortalTransfer.KIND_EXIT:
+		# TODO(portal lifetime): Hearth routing, seal and re-entry rules;
+		# for now an exit returns to the overworld.
+		_move_player(p, instances[0], p.id, xfer.arrival_x, xfer.arrival_y)
+		return
+	if not source.grants_persistent:
+		_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "only the practice exit is available here")
+		return
+	if not is_m100_allowed(xfer.m100) or not source.sim.m100_allowed(xfer.m100):
+		_reject_portal(p, PB.ErrorCode.MULTIPLIER_NOT_ALLOWED, "portal multiplier is not allowed in this lobby")
+		return
+	if source.sim.portal_by_id(xfer.portal_id) == null:
+		_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "portal entrance not found")
+		return
+	var key := _portal_key(source, xfer.portal_id)
+	var record := _record_for(source, xfer.portal_id)
+	var refusal := _record_refusal(record, p.id)
+	if String(refusal[1]) != "":
+		_reject_portal(p, int(refusal[0]), String(refusal[1]))
+		return
+	var dest: HostInstance = record.instance
+	if dest != null and record.reset_when_empty and _no_living_player_inside(dest):
+		if not _reset_instance(record):
+			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "practice instance unavailable")
+			return
+	if dest == null:
+		# A record with an assigned id is never restarted after closure.
+		if record.instance_id != 0:
+			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "portal instance is closed")
+			return
+		# The opener as they are in the source world (the sim that queued
+		# this transfer), never an id from the new instance.
+		xfer.opener_id = p.sim_id
+		record.opener_source_id = p.sim_id
+		record.opener_lobby_id = p.id
+		dest = _create_dungeon_instance(xfer, record.grants_persistent)
+		if dest == null:
+			_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "dungeon unavailable or instance id space exhausted")
+			return
+		dest.portal_key = key
+		dest.grants_persistent = record.grants_persistent
+		if not dest.grants_persistent:
+			dest.sim.set_item_rules(false, false)
+		dest.capacity = record.capacity
+		dest.admitted = record.admitted
+		record.instance = dest
+		record.instance_id = dest.index
+		_instance_by_portal[key] = dest
+	record.admitted[p.id] = true
+	record.empty_since_tick = -1
+	# Re-entry keeps the player's id in this instance (and their bags there).
+	if not record.sim_ids.has(p.id):
+		record.sim_ids[p.id] = dest.sim.alloc_player_id()
+	_move_player(p, dest, int(record.sim_ids[p.id]), dest.arrival_x, dest.arrival_y)
+
+
+## A new dungeon instance with its own LocalSim, seed and multiplier (locked
+## from the transfer at creation), its own entity id block, and capacity
+## locked to the lobby's current max players.
+func _create_dungeon_instance(xfer: PortalTransfer, grants_persistent: bool = false) -> HostInstance:
+	var def: DungeonDef = catalog.dungeon(xfer.dungeon_id) if catalog != null else null
+	if def == null:
+		return null
+	# Check the quotient before multiplication: no signed overflow can
+	# wrap the block start into another instance's entity range.
+	if _next_instance_index <= 0 or _next_instance_index >= LocalSim.MAX_ENTITY_ID / INSTANCE_ID_BLOCK:
+		return null
+	var inst := HostInstance.new()
+	inst.index = _next_instance_index
+	_next_instance_index += 1
+	inst.dungeon_id = xfer.dungeon_id
+	inst.seed = xfer.seed
+	inst.m100 = xfer.m100
+	inst.created_from = xfer
+	inst.grants_persistent = grants_persistent
+	inst.arrival_x = xfer.arrival_x
+	inst.arrival_y = xfer.arrival_y
+	inst.capacity = _settings.max_players
+	var dsim := _build_dungeon_sim(def, xfer, inst.index * INSTANCE_ID_BLOCK, grants_persistent)
+	if dsim == null:
+		return null
+	inst.sim = dsim
+	instances.append(inst)
+	return inst
+
+
+## TODO(persistence): all future save/export code must call this helper,
+## not world_view or get_player: practice progression is the entry snapshot.
+## No host character save/export path exists yet.
+func effective_character(player_id: int) -> PlayerCarry:
+	var p := _find_player(player_id)
+	if p == null or p.instance == null:
+		return null
+	var sp := p.instance.sim.get_player(p.sim_id)
+	if sp == null:
+		return null
+	var carry := PlayerCarry.from_sim(sp, p.instance.sim.ability_state(p.sim_id))
+	if not p.progression_entries.is_empty():
+		_apply_progression(carry, p.progression_entries.back()["fields"])
+	else:
+		carry.inventory = _copy_inventory(carry.inventory)
+	return carry
+
+
+## Practice instances: nothing leaves its owner's inventory. Items a
+## player did not bring in are removed, brought-in items that left are put
+## back, and any copy of them elsewhere in the instance is removed.
+func _enforce_practice_items(inst: HostInstance) -> void:
+	var owned: Dictionary = {}  # drop_id -> HostPlayer that brought it in
+	var originals: Dictionary = {}  # drop_id -> ItemState (entry copy)
+	var here: Array[HostPlayer] = []
+	for p in players:
+		if p.instance != inst or p.progression_entries.is_empty():
+			continue
+		here.append(p)
+		var inv: PlayerInventory = p.progression_entries.back()["fields"].get("inventory")
+		if inv == null:
+			continue
+		for item in inv.live_items():
+			if item.drop_id != "":
+				owned[item.drop_id] = p
+				originals[item.drop_id] = item
+	for p in here:
+		var sp := inst.sim.get_player(p.sim_id)
+		if sp == null or sp.inventory == null:
+			continue
+		# Each player keeps at most as many copies of an item as they brought
+		# in (items without an id are counted the same way): nothing extra.
+		var allowed: Dictionary = {}
+		var entry_inv: PlayerInventory = p.progression_entries.back()["fields"].get("inventory")
+		if entry_inv != null:
+			for item in entry_inv.live_items():
+				if item.drop_id == "" or owned.get(item.drop_id) == p:
+					allowed[item.drop_id] = int(allowed.get(item.drop_id, 0)) + 1
+		var inv := sp.inventory
+		for slot in ["weapon", "armor", "charm"]:
+			var eq: ItemState = inv.equipped_for(slot)
+			if eq != null:
+				if int(allowed.get(eq.drop_id, 0)) > 0:
+					allowed[eq.drop_id] = int(allowed[eq.drop_id]) - 1
+				else:
+					inv.set_equipped(slot, null)
+		for i in range(inv.slots.size()):
+			var it: ItemState = inv.slots[i]
+			if it == null or _is_equipped(inv, it):
+				continue
+			if int(allowed.get(it.drop_id, 0)) > 0:
+				allowed[it.drop_id] = int(allowed[it.drop_id]) - 1
+			else:
+				inv.slots[i] = null
+	if not inst.sim.ground_drops().is_empty():
+		inst.sim.clear_ground_drops()  # no ground piles in a practice instance
+	for p in here:
+		var sp := inst.sim.get_player(p.sim_id)
+		if sp == null or sp.inventory == null:
+			continue
+		var have := {}
+		for it in sp.inventory.live_items():
+			have[it.drop_id] = true
+		for did in owned:
+			if owned[did] == p and not have.has(did):
+				sp.inventory.add((originals[did] as ItemState).duplicate_item())
+
+
+func _is_equipped(inv: PlayerInventory, it: ItemState) -> bool:
+	for slot in ["weapon", "armor", "charm"]:
+		if inv.equipped_for(slot) == it:
+			return true
+	return false
+
+
+## Practice instances: a player who dies leaves for the overworld (the
+## Hearth stand-in) with the same restore as any other way out.
+## TODO(§7 Hearth): route to the Hearth once it exists.
+func _route_practice_deaths(inst: HostInstance) -> void:
+	for p in players.duplicate():
+		if p.instance != inst:
+			continue
+		var sp := inst.sim.get_player(p.sim_id)
+		if sp != null and sp.hp <= 0:
+			_move_player(p, instances[0], p.id, 16.0, 16.0)
+
+
+## Deep inventory snapshot, preserving equipment/slot references within it.
+func _copy_inventory(src: PlayerInventory) -> PlayerInventory:
+	if src == null:
+		return null
+	var dst := PlayerInventory.new(src.slot_count)
+	var copies: Dictionary = {}
+	for item in src.live_items():
+		copies[item] = item.duplicate_item()
+	for i in range(src.slots.size()):
+		dst.slots[i] = copies.get(src.slots[i])
+	for slot in ["weapon", "armor", "charm"]:
+		dst.set_equipped(slot, copies.get(src.equipped_for(slot)))
+	return dst
+
+
+## Capture all carried persistent fields, including future currencies or
+## vault fields, while excluding identity and transient combat/input state.
+func _progression_fields(carry: PlayerCarry) -> Dictionary:
+	var fields: Dictionary = {}
+	for prop in carry.get_property_list():
+		var key: String = prop["name"]
+		if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE == 0 or key in ["player_id", "hp", "aim", "ability", "last_interact_seq"]:
+			continue
+		var value: Variant = carry.get(key)
+		if value is PlayerInventory:
+			value = _copy_inventory(value)
+		elif value is Array or value is Dictionary:
+			value = value.duplicate(true)
+		fields[key] = value
+	return fields
+
+
+func _apply_progression(carry: PlayerCarry, fields: Dictionary) -> void:
+	for key in fields:
+		var value: Variant = fields[key]
+		carry.set(key, _copy_inventory(value) if value is PlayerInventory else value)
+
+
+func _restore_entry_progression(p: HostPlayer, carry: PlayerCarry) -> void:
+	if not p.progression_entries.is_empty():
+		var entry: Dictionary = p.progression_entries.back()
+		_apply_progression(carry, entry["fields"])
+		if carry.hp <= 0:
+			carry.hp = int(entry.get("hp", 1))
+		p.progression_entries.pop_back()
+
+
+func _build_dungeon_sim(def: DungeonDef, xfer: PortalTransfer, id_floor: int, grants_persistent: bool = false) -> LocalSim:
+	var dsim := LocalSim.new(_config, xfer.arrival_x, xfer.arrival_y, catalog)
+	dsim.remove_player(1)  # the built-in player; gone at the first step
+	if not dsim.set_id_floor(id_floor):
+		return null
+	dsim.set_lobby_settings(_settings)
+	if not grants_persistent:
+		# Practice instances: no loot bags and no item transfers (§2.5).
+		dsim.set_item_rules(false, false)
+	# opener_id is the opener's sim id in the SOURCE world, not the
+	# destination id allocated later. Preserve that creation provenance.
+	dsim.configure_dungeon(def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
+			xfer.opener_id, xfer.opener_lp, grants_persistent)
+	return dsim
+
+
+## content §2.5: no living (or lingering) player inside the instance.
+func _no_living_player_inside(inst: HostInstance) -> bool:
+	if inst.linger_until_tick > tick:
+		return false
+	for p in players:
+		if p.instance == inst:
+			var sp := inst.sim.get_player(p.sim_id)
+			if sp != null and sp.hp > 0:
+				return false
+	return true
+
+
+## Rebuilds a reset-when-empty instance in place: same instance id and id
+## block, a fresh slice (rooms, boss, exit) from the creation transfer, and
+## entity ids that keep counting up. Any remaining (dead) occupants are sent
+## to the overworld with their entry state, never revived inside.
+func _reset_instance(record: PortalRecord) -> bool:
+	var inst := record.instance
+	var def: DungeonDef = catalog.dungeon(inst.dungeon_id) if catalog != null else null
+	if def == null or inst.created_from == null:
+		return false
+	var old := inst.sim
+	var floor := old.alloc_player_id() + 1
+	if floor >= (inst.index + 1) * INSTANCE_ID_BLOCK:
+		return false
+	var fresh := _build_dungeon_sim(def, inst.created_from, floor, inst.grants_persistent)
+	if fresh == null:
+		return false
+	for p in players.duplicate():
+		if p.instance == inst:
+			_move_player(p, instances[0], p.id, 16.0, 16.0)
+	record.sim_ids.clear()
+	inst.sim = fresh
+	record.cleared = false
+	inst.linger_until_tick = -1
+	return true
+
+
+## Moves `p` into `dest` as `dest_id` at (x, y), carrying class, level,
+## inventory, HP and ability state (Focus and cooldown exactly as they are,
+## never refreshed). Removal from the old sim takes effect at its next step.
+func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: float,
+		issued_now: bool = false) -> bool:
+	var src: LocalSim = p.instance.sim
+	var from := src.get_player(p.sim_id)
+	if from == null or dest == p.instance:
+		return false
+	if not issued_now and not _dest_id_issued(p, dest, dest_id):
+		push_warning("LobbyHost: refusing to place player %d with an id the host did not issue" % p.id)
+		return false
+	var carry := PlayerCarry.from_sim(from, src.ability_state(p.sim_id))
+	_restore_entry_progression(p, carry)
+	if not dest.grants_persistent:
+		p.progression_entries.append({"instance": dest.index, "fields": _progression_fields(carry), "hp": carry.hp})
+		# The practice copy must not mutate the source inventory or entry copy.
+		carry.inventory = _copy_inventory(carry.inventory)
+	carry.player_id = dest_id
+	dest.sim.place_player(dest_id, x, y)
+	dest.sim.apply_carried_player(carry, x, y)
+	# The source copy is gone at its next step; it holds no items meanwhile.
+	if from.inventory != null:
+		from.inventory = PlayerInventory.new(from.inventory.slot_count)
+	src.remove_player(p.sim_id)
+	p.instance = dest
+	p.sim_id = dest_id
+	p.x = x
+	p.y = y
+	p.interacts = []
+	p.interact_forward = 0
+	return true
+
+
+## Instance lifetime follows vision §6.1: keep progress while empty,
+## then retire the entrance and sim together after the empty grace period.
+func _teardown_empty_instances() -> void:
+	for record: PortalRecord in _portal_records.values():
+		var inst := record.instance
+		if inst == null:
+			continue
+		# TODO(#54): read boss_defeated() / dungeon_state() once they exist;
+		# cleared is recorded for deposits and later lifetime rules.
+		if inst.sim.has_method("boss_defeated"):
+			record.cleared = record.cleared or bool(inst.sim.call("boss_defeated"))
+		if record.persistent:
+			continue  # a persistent entrance keeps its one instance
+		var used := false
+		for p in players:
+			if p.instance == inst:
+				used = true
+				break
+		if used:
+			record.empty_since_tick = -1
+			continue
+		if record.empty_since_tick < 0:
+			record.empty_since_tick = tick
+		if tick - record.empty_since_tick < EMPTY_INSTANCE_CLOSE_TICKS:
+			continue
+		record.closed = true
+		record.instance = null
+		instances.erase(inst)
+		_instance_by_portal.erase(inst.portal_key)
+	# Records persist even when a sim is retired, while its source entrance
+	# remains. Never remove a tombstone simply because its instance is empty.
+	for key in _portal_records.keys():
+		var record: PortalRecord = _portal_records[key]
+		if record.closed and record.source.sim.portal_by_id(record.portal_id) == null:
+			_portal_records.erase(key)
+
+
+## Load test only: a dungeon instance remote players are spread over.
+func _create_loadtest_instance(i: int) -> void:
+	var xfer := PortalTransfer.new()
+	xfer.dungeon_id = "hollowmere_vault"
+	xfer.seed = instance_seed + 1 + i
+	xfer.m100 = 100
+	xfer.base_level = 1
+	xfer.content_level = 1
+	var def: DungeonDef = catalog.dungeon(xfer.dungeon_id) if catalog != null else null
+	if def != null:
+		var at: Vector2 = def.arrival_point()
+		xfer.arrival_x = at.x
+		xfer.arrival_y = at.y
+	var inst := _create_dungeon_instance(xfer, true)
+	if inst != null:
+		inst.portal_key = "loadtest:%d" % i
+		inst.capacity = 1 << 30
+		_instance_by_portal[inst.portal_key] = inst
+
+
+## Load test only: remote players in the overworld sim are spread by id
+## over the overworld and the load-test instances, once each.
+func _spread_loadtest_players() -> void:
+	var targets: Array[HostInstance] = [instances[0]]
+	for i in range(loadtest_instances - 1):
+		var inst: HostInstance = _instance_by_portal.get("loadtest:%d" % i)
+		if inst != null:
+			targets.append(inst)
+	for p in players:
+		if p.is_local or not p.in_sim or p.instance != instances[0] or p.loadtest_spread:
+			continue
+		p.loadtest_spread = true
+		var dest: HostInstance = targets[p.id % targets.size()]
+		if dest != instances[0]:
+			_move_player(p, dest, dest.sim.alloc_player_id(), dest.arrival_x, dest.arrival_y, true)
+
+
+## An id is placed into `dest` only if the host's own records map it to `p`:
+## the overworld uses the player's lobby id; a dungeon uses the id its sim
+## issued for this player, held in that entrance's record.
+func _dest_id_issued(p: HostPlayer, dest: HostInstance, dest_id: int) -> bool:
+	for other in players:
+		if other != p and other.instance == dest and other.sim_id == dest_id:
+			return false
+	if dest.is_overworld():
+		return dest_id == p.id
+	for record: PortalRecord in _portal_records.values():
+		if record.instance == dest and int(record.sim_ids.get(p.id, 0)) == dest_id:
+			return true
+	return false
 
 
 ## Default on_interact: the sim applies the pickup in this tick's step.
@@ -923,37 +1643,48 @@ func _encode_snapshot() -> PackedByteArray:
 	return _encode_snapshot_for([])
 
 
-## Snapshot with the given bags (one viewer's own). Every viewer without
-## bags gets the same bytes.
-func _encode_snapshot_for(bags: Array) -> PackedByteArray:
+## Snapshot of one instance (default: the overworld) with the given bags
+## (one viewer's own). Every viewer there without bags gets the same bytes.
+func _encode_snapshot_for(bags: Array, inst: HostInstance = null, owner_id: int = -1) -> PackedByteArray:
+	if inst == null:
+		inst = instances[0]
 	var msg = PB.ServerMessage.new()
 	var s = msg.new_snapshot()
 	s.set_tick(tick)
 	for p in players:
+		if p.instance != inst:
+			continue
 		var stub = s.add_players()
 		stub.set_id(p.id)
 		stub.set_applied_seq(p.seq)
 	for bag in bags:
+		if not inst.sim.ground_drops().has(bag):
+			continue
 		var b = s.add_bags()
 		b.set_id((bag as GroundDrop).id)
 		b.set_x(bag.x)
 		b.set_y(bag.y)
-		b.set_owner_player_id(bag.item.owner_player_id)
+		b.set_owner_player_id(owner_id if owner_id >= 0 else bag.item.owner_player_id)
 		b.set_t_star(maxi(bag.t_star, 0))
 		b.set_spawn_tick(maxi(bag.spawn_tick, 0))
 	return msg.to_bytes()
 
 
-## Live bags in the shared sim, grouped by owner: owner_id -> Array[GroundDrop].
+## Live bags in every instance, grouped by owner's lobby id:
+## owner_id -> Array[GroundDrop].
 func _bags_by_owner() -> Dictionary:
 	var out := {}
-	for bag in sim.ground_drops():
-		if bag.item == null or bag.item.state != ItemState.STATE_LIVE:
-			continue
-		var owner: int = bag.item.owner_player_id
-		if not out.has(owner):
-			out[owner] = []
-		out[owner].append(bag)
+	for inst in instances:
+		for bag in inst.sim.ground_drops():
+			if bag.item == null or bag.item.state != ItemState.STATE_LIVE:
+				continue
+			var owner: int = _lobby_id(inst, bag.item.owner_player_id)
+			var viewer := _find_player(owner)
+			if viewer == null or viewer.instance != inst or viewer.sim_id != bag.item.owner_player_id:
+				continue
+			if not out.has(owner):
+				out[owner] = []
+			out[owner].append(bag)
 	return out
 
 
@@ -987,21 +1718,36 @@ func _encode_full(new_shots: Array[PackedFloat64Array]) -> PackedByteArray:
 	return full.to_bytes()
 
 
-## Sends the shared Snapshot, or a per-viewer one carrying only that
-## viewer's own bags.
+## Sends each viewer their instance's Snapshot (`bytes` is the overworld's),
+## or a per-viewer one carrying only that viewer's own bags.
 func _send(bytes: PackedByteArray) -> int:
 	var sent: int = 0
 	var bags := _bags_by_owner()
+	var by_instance := {instances[0]: bytes}
 	for c in _conns:
 		if c.player == null or c.ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
 			continue
-		var out := bytes
+		var inst: HostInstance = c.player.instance
+		if not by_instance.has(inst):
+			by_instance[inst] = _encode_snapshot_for([], inst)
+		var out: PackedByteArray = by_instance[inst]
 		if bags.has(c.player.id):
-			out = _encode_snapshot_for(bags[c.player.id])
+			out = _encode_snapshot_for(bags[c.player.id], inst, c.player.id)
 		if c.ws.put_packet(out) == OK:
 			sent += 1
 		c.ws.poll()  # flush now instead of 50 ms later
 	return sent
+
+
+func _players_per_instance() -> Array:
+	var out: Array = []
+	for inst in instances:
+		var n := 0
+		for p in players:
+			if p.instance == inst:
+				n += 1
+		out.append(n)
+	return out
 
 
 ## Summary of recorded ticks as a Dictionary (JSON-friendly).
@@ -1022,6 +1768,8 @@ func stats() -> Dictionary:
 		"achieved_tick_hz": snappedf(float(nrec) / wall_s, 0.01) if nrec > 1 else 0.0,
 		"expected_ticks": expected_ticks,
 		"peak_players": peak_players,
+		"peak_players_per_instance": peak_players_per_instance,
+		"portal_rejections": portal_rejections,
 		"tick_us": _pct(st_total),
 		"net_in_us": _pct(st_net_in),
 		"sim_us": _pct(st_sim),
