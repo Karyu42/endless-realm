@@ -5,9 +5,11 @@ Versioned JSON loaded by both the Godot client and the Go server. Schemas live i
 and converted to radians (Godot 2D convention) at load. Distances are **tiles**.
 
 This pack has the first practice-yard enemy (`burrmite`) and its `burr_spit`
-pattern, plus a `fixture_gap_ring` pattern used only by golden tests
-(to cover PCG32 `skip.start = "rng"`), class bases and the three v0.1 class abilities, vision scaling
-coefficients, and v0.1 loot tables. Names and numbers follow
+pattern, class bases and the three v0.1 class abilities, vision scaling
+coefficients, and v0.1 loot tables. The `fixture_gap_ring` pattern used only
+by golden tests (to cover PCG32 `skip.start = "rng"`) lives in
+`fixtures/patterns/defs.json`, not in the shipped game pack. Names and
+numbers follow
 [`docs/design/content-v0.1.md`](../docs/design/content-v0.1.md).
 
 The Godot client ships a copy under [`client/data/`](../client/data/) so the

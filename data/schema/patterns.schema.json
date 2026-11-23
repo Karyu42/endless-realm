@@ -123,10 +123,6 @@
             "on_death",
             "phase_enter"
           ]
-        },
-        "interval_ticks": {
-          "type": "integer",
-          "minimum": 1
         }
       }
     }

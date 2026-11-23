@@ -4,7 +4,7 @@
   "title": "Endless Realm loot tables",
   "type": "object",
   "additionalProperties": false,
-  "required": ["tier_rows", "slot_weights", "weapon_class_weights", "tables"],
+  "required": ["tier_rows", "slot_weights", "weapon_class_weights", "tables", "armor", "class_order"],
   "properties": {
     "tier_rows": {
       "type": "object",
@@ -57,7 +57,17 @@
         }
       }
     },
-    "armor": { "type": "object" },
+    "armor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "hp_coef", "ward_coef"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "hp_coef": { "type": "number" },
+        "ward_coef": { "type": "number" }
+      }
+    },
     "charm": {
       "type": "object",
       "additionalProperties": false,
@@ -68,7 +78,7 @@
       }
     },
     "weapons": { "type": "object" },
-    "class_order": { "type": "array", "items": { "type": "string" } },
+    "class_order": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
     "tables": {
       "type": "object",
       "additionalProperties": {

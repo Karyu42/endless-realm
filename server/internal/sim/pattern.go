@@ -48,21 +48,20 @@ type SkipSpec struct {
 
 // PatternDef is one entry from data/patterns.json.
 type PatternDef struct {
-	ID                    string    `json:"id"`
-	Type                  string    `json:"type"`
-	Count                 int       `json:"count"`
-	SpreadDeg             float64   `json:"spread_deg"`
-	Aim                   string    `json:"aim"`
-	StartAngleDeg         float64   `json:"start_angle_deg"`
-	RotatePerFireDeg      float64   `json:"rotate_per_fire_deg"`
-	AngleOffsetCycleDeg   []float64 `json:"angle_offset_cycle_deg"`
-	Skip                  *SkipSpec `json:"skip"`
-	Speed                 float64   `json:"speed"`
-	Range                 float64   `json:"range"`
-	Size                  string    `json:"size"`
-	DamageKey             string    `json:"damage_key"`
-	Trigger               string    `json:"trigger"`
-	IntervalTicks         int       `json:"interval_ticks"`
+	ID                  string    `json:"id"`
+	Type                string    `json:"type"`
+	Count               int       `json:"count"`
+	SpreadDeg           float64   `json:"spread_deg"`
+	Aim                 string    `json:"aim"`
+	StartAngleDeg       float64   `json:"start_angle_deg"`
+	RotatePerFireDeg    float64   `json:"rotate_per_fire_deg"`
+	AngleOffsetCycleDeg []float64 `json:"angle_offset_cycle_deg"`
+	Skip                *SkipSpec `json:"skip"`
+	Speed               float64   `json:"speed"`
+	Range               float64   `json:"range"`
+	Size                string    `json:"size"`
+	DamageKey           string    `json:"damage_key"`
+	Trigger             string    `json:"trigger"`
 }
 
 type patternFile struct {
@@ -71,14 +70,14 @@ type patternFile struct {
 
 // Bullet is one emitted shot from a pattern spawn (closed-form).
 type Bullet struct {
-	Index          int
-	AngleRad       float64
-	OriginX        float64
-	OriginY        float64
-	Speed          float64
-	RangeTiles     float64
-	LifetimeTicks  int
-	RadiusTiles    float64
+	Index         int
+	AngleRad      float64
+	OriginX       float64
+	OriginY       float64
+	Speed         float64
+	RangeTiles    float64
+	LifetimeTicks int
+	RadiusTiles   float64
 }
 
 // DirX/DirY are Godot 2D: +X = 0, +Y down, clockwise positive.
@@ -130,6 +129,30 @@ func LoadPatterns(repoRoot string) (map[string]PatternDef, error) {
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no patterns in data/patterns.json")
+	}
+	return out, nil
+}
+
+// LoadPatternFile reads a { "patterns": [...] } file, such as the
+// fixtures-only pack at fixtures/patterns/defs.json.
+func LoadPatternFile(path string) (map[string]PatternDef, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var file patternFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return nil, err
+	}
+	out := make(map[string]PatternDef, len(file.Patterns))
+	for _, p := range file.Patterns {
+		if p.Count <= 0 {
+			p.Count = 1
+		}
+		if p.Aim == "" {
+			p.Aim = "aimed"
+		}
+		out[p.ID] = p
 	}
 	return out, nil
 }

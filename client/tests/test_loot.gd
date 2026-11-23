@@ -341,3 +341,12 @@ func test_inventory_slot_bounds() -> void:
 		assert_true(inv.add(ItemState.new()))
 	assert_true(inv.is_full())
 	assert_false(inv.add(ItemState.new()))
+
+
+func test_armor_and_class_order_default_to_empty() -> void:
+	var tables := LootTables.from_json({})
+	assert_eq(tables.armor_id, "")
+	assert_eq(tables.armor_name, "")
+	assert_almost_eq(tables.armor_hp_coef, 0.0, 0.0)
+	assert_almost_eq(tables.armor_ward_coef, 0.0, 0.0)
+	assert_eq(tables.class_order.size(), 0)

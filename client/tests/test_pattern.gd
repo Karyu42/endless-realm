@@ -16,7 +16,9 @@ func test_size_radii() -> void:
 
 func test_pattern_fixtures() -> void:
 	var catalog := DataCatalog.load_default()
+	catalog.load_patterns_file(DataCatalog.repo_root().path_join("fixtures/patterns/defs.json"))
 	assert_gt(catalog.patterns.size(), 0, "data/patterns.json did not load")
+	assert_not_null(catalog.pattern("fixture_gap_ring"), "fixtures-only pack should load fixture_gap_ring")
 	var dir := DataCatalog.repo_root().path_join("fixtures/patterns")
 	var files := DirAccess.get_files_at(dir)
 	assert_gt(files.size(), 0, "no pattern fixtures")
@@ -25,6 +27,9 @@ func test_pattern_fixtures() -> void:
 			continue
 		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(dir.path_join(fname)))
 		assert_true(parsed is Dictionary, fname)
+		# defs.json is the fixtures-only pack, not a case file.
+		if not (parsed as Dictionary).has("cases"):
+			continue
 		for c in parsed["cases"]:
 			_assert_case(catalog, String(c.get("name", fname)), c)
 
@@ -32,7 +37,7 @@ func test_pattern_fixtures() -> void:
 func _assert_case(catalog: DataCatalog, name: String, c: Dictionary) -> void:
 	var def := catalog.pattern(String(c["pattern_id"]))
 	assert_not_null(def, "%s: unknown pattern" % name)
-	var seed := int(c["seed"])
+	var seed := PCG32.parse_u64(String(c["seed"]))
 	var spawn_tick := int(c["spawn_tick"])
 	var origin: Array = c["origin"]
 	var aim := float(c["aim_rad"])

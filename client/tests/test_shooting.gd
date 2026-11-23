@@ -207,6 +207,8 @@ func test_rate_change_mid_hold_applies_from_the_next_shot() -> void:
 	# A pending next_ready is kept; the new cooldown is applied after the
 	# next volley. Thornguard 2.0 fires on 0 then would fire on 10; changing
 	# to 4.0/s (cd 0.25 s) on tick 5 still fires at 10, then 15, 20, 25.
+	# This relies on LocalSim holding its SimConfig by reference, so the
+	# mid-hold write to sim.config().fire_rate_shots_per_s is visible later.
 	var cfg := _thornguard()
 	cfg.projectile_range_tiles = 100.0
 	cfg.projectile_lifetime_ticks_override = 100

@@ -46,6 +46,17 @@ this list so existing fixtures stay stable.
 `fixtures/pcg32/known.json` lists official first outputs for fixed
 `(initstate, initseq)` pairs. Both sides must match these bits exactly.
 
+`initstate`, `initseq`, and pattern `seed` values are strings encoding a
+u64: a decimal integer, or hex with a `0x` prefix. GDScript cannot pass
+values ≥ 2^63 through `int()`, so both sides parse with `ParseU64` /
+`PCG32.parse_u64`, which returns the bit-identical unsigned value (the
+signed bit pattern in GDScript). The official pcg32-demo pair `(42, 54)`
+and a high-bit seed/stream case live in `known.json`.
+
+Pattern fixtures that are not part of the shipped pack, including
+`fixture_gap_ring`, are defined in `fixtures/patterns/defs.json` and
+merged in at test time.
+
 ## Patterns
 
 JSON in `data/patterns.json`. `lifetime_ticks = ceil(range / speed * 20)`.

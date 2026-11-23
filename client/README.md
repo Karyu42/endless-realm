@@ -174,3 +174,71 @@ set `host.interact_validator.resolver` to
 may use, or `{}` otherwise. Set `host.on_interact` to
 `func(player_id: int, target_id: int) -> void` to apply accepted presses.
 The resolver defaults to unknown, so no interaction is accepted until wired.
+
+## Host API (lobby UI)
+
+Everything lives in `src/net/host/`. `LobbyHost` is the one host core; the
+lobby UI drives it through these calls.
+
+**Settings**: `LobbySettings` (`lobby_settings.gd`):
+
+| field | default | rule |
+|---|---|---|
+| `max_players: int` | 50 | 1–50 |
+| `m100_min: int`, `m100_max: int` | 100, 100 | 50–150, multiples of 5, `min <= 100 <= max` |
+| `imports_allowed: bool` | true | |
+| `offline_allowed: bool` | true | |
+| `lobby_name: String` | "" | at most 32 chars, no control chars |
+| `join_code: String` | "" | empty = host generates one; else 4–12 chars from `LobbySettings.JOIN_CODE_ALPHABET` |
+
+- `validate() -> PackedStringArray`: empty when valid, otherwise short
+  reasons meant to be shown to players as-is. `duplicate_settings()` copies.
+- `host.apply_settings(s) -> Error`: `ERR_INVALID_PARAMETER` if `validate()`
+  fails (nothing changes); otherwise applies a copy and emits
+  `settings_changed(s)` with another copy.
+- `host.settings() -> LobbySettings`: a copy. An empty `join_code` is filled
+  with a generated code (6 chars, no 0/O/1/I/L, from `Crypto` random bytes,
+  never the sim RNG), so read the code from here for the UI and beacon.
+- Runtime changes: lowering `max_players` never kicks anyone, it only makes
+  new joins fail with `INSTANCE_FULL`. The M range applies to portals opened
+  afterwards (`host.is_m100_allowed(m100)`; the Godot host does not handle
+  OpenPortal yet, and the protocol PR adds the check there). Import flags
+  apply to future imports.
+- `--max-players` / `ER_MAX_PLAYERS` go through `apply_settings()`.
+
+**Local player** (listen host): `add_local_player(character = null) -> int`
+returns the id, or -1 when full; it counts toward `max_players`.
+`submit_local_input(player_id, intent: InputIntent)` uses the same per-tick
+queue and rules as a remote InputFrame (applied once per seq, interact presses
+go through the interact validator), with no socket and no message budget.
+`remove_local_player(player_id)`.
+
+**View**: `signal ticked(tick: int)` fires at the end of every host tick.
+`world_view(player_id) -> WorldSnapshot` (null before the player's first
+tick) is a read-only `HostWorldSnapshot`: that player's sim snapshot, with
+`host_tick` and `others` (`{"id","x","y","aim","hp","local"}`) added.
+`tick` and spawn ticks inside use that player's sim clock.
+
+**Imports**: `import_character(blob, player_id) -> int` returns an
+`ImportResult` constant (`import_result.gd`). Checked only at import, never at
+Hello, so a lobby with imports off can still be joined.
+
+| constant | meaning |
+|---|---|
+| `IMPORT_RESULT_OK` (0) | imported |
+| `REJECTED_IMPORTS_OFF` (1) | lobby has `imports_allowed = false` |
+| `REJECTED_OFFLINE_OFF` (2) | character was played offline, lobby has `offline_allowed = false` |
+| `REJECTED_BAD_FORMAT` (3) | not a character file |
+| `REJECTED_UNSUPPORTED_VERSION` (4) | character file version this host can't read |
+| `REJECTED_BAD_SIGNATURE` (5) | signature doesn't verify (not checked yet) |
+| `REJECTED_ALREADY_EXISTS` (6) | this player already imported a character here |
+| `REJECTED_UNKNOWN_PLAYER` (7) | no such player |
+
+`ImportResult.name_of(code)` and `ImportResult.all()` help map them. The blob
+format is a stub for now (`LobbyHost.make_stub_import_blob()`); the real format
+and signature check come with the identity work.
+
+**Sim**: each player is simulated by the shared `LocalSim` rules (movement,
+shots). The world is not one shared multi-player `LocalSim` yet, so players
+don't see shared enemies. The stand-in bullet field only runs for the load
+test (`--emitters N`, default 0).

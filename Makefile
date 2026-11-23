@@ -54,14 +54,27 @@ client-test:
 
 # Keep a packed copy of the shared data pack under client/data (res://data)
 # so editor and export load the same files. data/ remains the source of truth.
-CLIENT_DATA_FILES := enemies.json patterns.json classes.json loot.json scaling.json abilities.json
-
+# Every data/*.json is synced; schema/ and README stay only in data/.
 sync-client-data:
 	@mkdir -p client/data
-	@cp -f $(addprefix data/,$(CLIENT_DATA_FILES)) client/data/
+	@cp -f data/*.json client/data/
 
 check-client-data:
-	@for f in $(CLIENT_DATA_FILES); do 		if [ ! -f "client/data/$$f" ] || ! cmp -s "data/$$f" "client/data/$$f"; then 			echo "client/data/$$f is out of sync with data/$$f. Run 'make sync-client-data' and commit the copy." >&2; 			exit 1; 		fi; 	done
+	@set -e; \
+	for f in data/*.json; do \
+		b=$$(basename "$$f"); \
+		if [ ! -f "client/data/$$b" ] || ! cmp -s "$$f" "client/data/$$b"; then \
+			echo "client/data/$$b is out of sync with data/$$b. Run 'make sync-client-data' and commit the copy." >&2; \
+			exit 1; \
+		fi; \
+	done; \
+	for f in client/data/*.json; do \
+		b=$$(basename "$$f"); \
+		if [ ! -f "data/$$b" ]; then \
+			echo "client/data/$$b has no source in data/. Remove it or add the source file." >&2; \
+			exit 1; \
+		fi; \
+	done
 
 # Shared data pack: JSON parse + schema checks (requires check-jsonschema),
 # pattern-reference and damage_key checks (content-v0.1 §5), and packed-copy sync.

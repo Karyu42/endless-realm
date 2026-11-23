@@ -18,14 +18,14 @@ var slot_charm: int = 25
 var weapon_own: int = 70
 var weapon_other_each: int = 15
 var charm_lines: Array = []
-var armor_id: String = "wardweave"
-var armor_name: String = "Wardweave"
-var armor_hp_coef: float = 30.0
-var armor_ward_coef: float = 4.0
+var armor_id: String = ""
+var armor_name: String = ""
+var armor_hp_coef: float = 0.0
+var armor_ward_coef: float = 0.0
 var charm_id: String = ""
 var charm_name: String = ""
 var weapons: Dictionary = {} # class_id -> {id, name, base_damage}
-var class_order: PackedStringArray = PackedStringArray(["thornguard", "gleamwright", "driftrunner"])
+var class_order: PackedStringArray = PackedStringArray()
 var tables: Dictionary = {}
 var rank_tables: Dictionary = {}
 var eligibility_range_tiles: float = 10.0
@@ -53,10 +53,10 @@ static func from_json(d: Dictionary) -> LootTables:
 		t.charm_lines = lines
 	var armor: Variant = d.get("armor", {})
 	if armor is Dictionary:
-		t.armor_id = String(armor.get("id", "wardweave"))
-		t.armor_name = String(armor.get("name", "Wardweave"))
-		t.armor_hp_coef = float(armor.get("hp_coef", 30.0))
-		t.armor_ward_coef = float(armor.get("ward_coef", 4.0))
+		t.armor_id = String(armor.get("id", ""))
+		t.armor_name = String(armor.get("name", ""))
+		t.armor_hp_coef = float(armor.get("hp_coef", 0.0))
+		t.armor_ward_coef = float(armor.get("ward_coef", 0.0))
 	var charm: Variant = d.get("charm", {})
 	if charm is Dictionary:
 		t.charm_id = String(charm.get("id", ""))

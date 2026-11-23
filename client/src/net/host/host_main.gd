@@ -6,12 +6,15 @@ extends SceneTree
 ##   --port N               listen port (default 8090; 0 = any free port)
 ##   --bind ADDR            bind address (default 127.0.0.1)
 ##   --seed N               instance seed sent in Welcome (default 1, matches the bot's -seed)
-##   --max-players N        lobby player cap, 1-50, default 50 (env ER_MAX_PLAYERS; the flag wins).
-##                          Out-of-range or non-integer values exit with code 2; never clamped.
+##   --max-players N        lobby player cap, 1-50, default 50. Falls back to env ER_MAX_PLAYERS
+##                          when the flag is absent; a given flag wins, even over an invalid env
+##                          value. Exits with code 2 only if the value actually used is
+##                          out of range or not an integer; never clamped.
 ##   --loadtest-unsafe-max-players N
 ##                          TEST ONLY: overrides the cap above 50 (up to 1000) for load tests.
 ##                          Not for real lobbies; prints a warning.
-##   --emitters N           stand-in enemy emitters (default 20, ~1000 live bullets)
+##   --emitters N           LOAD TEST: stand-in enemy emitters (default 0 = none;
+##                          the load test uses 20, ~1000 live bullets)
 ##   --arena TILES          square arena edge in tiles (default 48)
 ##   --expect-clients N     record stats only while >= N players are connected
 ##   --run-seconds S        hard stop after S seconds (default 0 = no limit)
@@ -34,10 +37,8 @@ func _initialize() -> void:
 		return
 	_host = LobbyHost.new(_load_config())
 	_host.port = 8090
-	var env_max := OS.get_environment(ENV_MAX_PLAYERS)
-	if env_max != "":
-		if not _set_max_players(env_max, ENV_MAX_PLAYERS):
-			return
+	var flag_max: String = ""
+	var has_flag_max := false
 	var unsafe_max: String = ""
 	var i: int = 0
 	while i < args.size():
@@ -49,9 +50,7 @@ func _initialize() -> void:
 			"--bind":
 				_host.bind_address = v; i += 1
 			"--max-players":
-				if not _set_max_players(v, "--max-players"):
-					return
-				i += 1
+				flag_max = v; has_flag_max = true; i += 1
 			"--loadtest-unsafe-max-players":
 				unsafe_max = v; i += 1
 			"--seed":
@@ -67,6 +66,14 @@ func _initialize() -> void:
 			"--exit-when-empty":
 				_exit_when_empty = true
 		i += 1
+	# The flag wins over ER_MAX_PLAYERS; only the value actually used is validated.
+	if has_flag_max:
+		if not _set_max_players(flag_max, "--max-players"):
+			return
+	else:
+		var env_max := OS.get_environment(ENV_MAX_PLAYERS)
+		if env_max != "" and not _set_max_players(env_max, ENV_MAX_PLAYERS):
+			return
 	if unsafe_max != "":
 		var n := LobbyHost.parse_loadtest_unsafe_max_players(unsafe_max)
 		if n < 0:
@@ -76,7 +83,7 @@ func _initialize() -> void:
 			quit(2)
 			return
 		printerr("WARNING: --loadtest-unsafe-max-players=%d is for load tests only" % n)
-		_host.max_players = n
+		_host.set_loadtest_unsafe_max_players(n)
 	var err := _host.start()
 	if err != OK:
 		printerr("HOST_ERROR listen %s:%d failed: %s" % [_host.bind_address, _host.port, error_string(err)])
@@ -93,7 +100,14 @@ func _set_max_players(value: String, source: String) -> bool:
 		_host = null
 		quit(2)
 		return false
-	_host.max_players = n
+	# Goes through LobbySettings like any other settings change.
+	var s := _host.settings()
+	s.max_players = n
+	if _host.apply_settings(s) != OK:
+		printerr("HOST_ERROR %s: %s" % [source, ", ".join(s.validate())])
+		_host = null
+		quit(2)
+		return false
 	return true
 
 

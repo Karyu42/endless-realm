@@ -78,8 +78,9 @@ skipped, or tick p99 exceeds 40 ms. Override the fail gates explicitly with
 ## Limits
 
 Real lobbies use `--max-players N` or `ER_MAX_PLAYERS=N`, integer 1–50,
-default 50. Invalid values exit nonzero; they are never clamped. The flag
-wins over the environment. A full lobby replies `Error INSTANCE_FULL` and
+default 50. The flag wins over the environment, even when the environment
+value is invalid; the host exits 2 only if the value it actually uses is
+invalid. Values are never clamped. A full lobby replies `Error INSTANCE_FULL` and
 closes the extra connection. The 100-client run is **test-only**: the script
 passes `--loadtest-unsafe-max-players 100` (which prints a warning). Never use
 this override for real lobbies. The host keeps `max_players + 8` connection

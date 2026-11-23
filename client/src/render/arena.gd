@@ -229,25 +229,33 @@ func _acquire_view(
 	radius_px: float,
 	kind: String
 ) -> Polygon2D:
-	var view: Polygon2D
 	if pool.has(id):
-		view = pool[id]
-	elif not free.is_empty():
-		view = free.pop_back()
-		view.visible = true
-		pool[id] = view
+		return pool[id]
+	# Reuse a recycled view only when radius, kind and color match, so a
+	# brown bag cannot inherit a gold bag's color. Color is also written
+	# on reuse so a mismatch can never show the previous tint.
+	for i in range(free.size() - 1, -1, -1):
+		var cand: Polygon2D = free[i]
+		if float(cand.get_meta("r", -1.0)) == radius_px \
+				and String(cand.get_meta("kind", "")) == kind \
+				and cand.get_meta("color", Color(0, 0, 0, 0)) == color:
+			free.remove_at(i)
+			cand.color = color
+			cand.visible = true
+			pool[id] = cand
+			_ensure_shot_outline(cand, parent, radius_px)
+			return cand
+	var view := Polygon2D.new()
+	view.color = color
+	if kind == "enemy":
+		view.polygon = _enemy_shape(radius_px)
 	else:
-		view = Polygon2D.new()
-		view.color = color
-		parent.add_child(view)
-		pool[id] = view
-	if not view.has_meta("r") or float(view.get_meta("r")) != radius_px:
-		if kind == "enemy":
-			view.polygon = _enemy_shape(radius_px)
-		else:
-			view.polygon = _diamond(radius_px)
-		view.color = color
-		view.set_meta("r", radius_px)
+		view.polygon = _diamond(radius_px)
+	view.set_meta("r", radius_px)
+	view.set_meta("kind", kind)
+	view.set_meta("color", color)
+	parent.add_child(view)
+	pool[id] = view
 	_ensure_shot_outline(view, parent, radius_px)
 	return view
 

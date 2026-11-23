@@ -49,6 +49,56 @@
           }
         ]
       }
+    },
+    {
+      "name": "fixture_gap_ring_highbit_seed_t10",
+      "pattern_id": "fixture_gap_ring",
+      "seed": "0x8000000000000001",
+      "spawn_tick": 0,
+      "origin": [
+        0.0,
+        0.0
+      ],
+      "aim_rad": 0.0,
+      "volley_index": 0,
+      "ticks": [
+        10
+      ],
+      "notes": "High-bit u64 seed. First PCG32 draw % 8 == 2, so ring indices 2 and 3 are skipped.",
+      "expected": {
+        "10": [
+          {
+            "x": 2.0,
+            "y": 0.0,
+            "index": 0
+          },
+          {
+            "x": 1.4142135623730951,
+            "y": 1.4142135623730951,
+            "index": 1
+          },
+          {
+            "x": -2.0,
+            "y": 0.0,
+            "index": 4
+          },
+          {
+            "x": -1.4142135623730951,
+            "y": -1.4142135623730951,
+            "index": 5
+          },
+          {
+            "x": 0.0,
+            "y": -2.0,
+            "index": 6
+          },
+          {
+            "x": 1.4142135623730951,
+            "y": -1.4142135623730951,
+            "index": 7
+          }
+        ]
+      }
     }
   ]
 }
