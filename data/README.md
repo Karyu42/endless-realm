@@ -9,7 +9,7 @@ This pack has the practice-yard enemies `burrmite` (`burr_spit`) and
 Acolyte adds, class bases and the three v0.1 class abilities, vision scaling
 coefficients, client feel (`data/feel.json`), lobby UI copy and touch sizes (`data/lobby_ui.json`), v0.1 loot tables, and a first tiny
 slice of **the Hollowmere Vault** (`data/dungeons/hollowmere_vault.json`,
-validated by `dungeons.schema.json`). Defeating the Warden opens the vault exit. The arena seals on the tick the Warden first takes damage (vision §6.1 rule 6a); the client shows “the doors are sealed.” Official runs set `grants_persistent` true; the practice-yard entrance sets it false, so a practice vault grants nothing that persists outside it.
+validated by `dungeons.schema.json`). Defeating the Warden opens the vault exit. The arena seals on the tick the Warden first takes damage (vision §6.1 rule 6a); the client shows “the doors are sealed.” A placement or position restore into a sealed arena lands at a deterministic safe spot outside the doorway; a returning player never lands inside a live fight. Official runs set `grants_persistent` true; the practice-yard entrance sets it false, so a practice vault grants nothing that persists outside it.
 The `fixture_gap_ring` pattern used only by golden tests (to cover PCG32
 `skip.start = "rng"`) lives in `fixtures/patterns/defs.json`, not in the
 shipped game pack. Names and numbers follow

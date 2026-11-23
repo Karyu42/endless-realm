@@ -2,6 +2,11 @@ extends GutTest
 ## content-v0.1 §2.3: nearest living player in aggro range, re-picked every 1 s.
 
 
+func _issue_through(sim: LocalSim, id: int) -> void:
+	while sim._next_id <= id:
+		sim.alloc_player_id()
+
+
 func _stationary(aggro: float = 8.0) -> EnemyDef:
 	var def := EnemyDef.new()
 	def.aggro_radius = aggro
@@ -19,11 +24,13 @@ func _stationary(aggro: float = 8.0) -> EnemyDef:
 
 func test_picks_nearest_player_and_repicks_after_one_second() -> void:
 	var sim := LocalSim.new(SimConfig.new(), 5.0, 0.0)
+	_issue_through(sim, 2)
 	sim.place_player(2, 6.0, 0.0)
 	var eid: int = sim.spawn_enemy_from_def(_stationary(), 0.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 1, "closer player 1 is picked on aggro")
 	# Player 2 moves closer; the current target is kept until the 1 s re-pick.
+	_issue_through(sim, 2)
 	sim.place_player(2, 2.0, 0.0)
 	for i in range(19):
 		sim.step()
@@ -36,7 +43,9 @@ func test_equal_distance_picks_the_lower_id() -> void:
 	# Tie between two non-authority ids so the result does not depend on
 	# the authority player being checked first. Id 1 is out of range.
 	var sim := LocalSim.new(SimConfig.new(), 20.0, 0.0)
+	_issue_through(sim, 7)
 	sim.place_player(7, 4.0, 0.0)
+	_issue_through(sim, 3)
 	sim.place_player(3, 0.0, 4.0)
 	var eid: int = sim.spawn_enemy_from_def(_stationary(), 0.0, 0.0)
 	sim.step()
@@ -45,11 +54,14 @@ func test_equal_distance_picks_the_lower_id() -> void:
 
 func test_dead_target_is_replaced_on_the_next_tick() -> void:
 	var sim := LocalSim.new(SimConfig.new(), 20.0, 0.0)
+	_issue_through(sim, 3)
 	sim.place_player(3, 2.0, 0.0)
+	_issue_through(sim, 5)
 	sim.place_player(5, 3.0, 0.0)
 	var eid: int = sim.spawn_enemy_from_def(_stationary(), 0.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 3, "nearest living player")
+	_issue_through(sim, 3)
 	sim.place_player(3, 2.0, 0.0, 0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 5, "re-picks the other living player")
@@ -58,6 +70,7 @@ func test_dead_target_is_replaced_on_the_next_tick() -> void:
 func test_no_living_player_in_range_idles_without_host_fallback() -> void:
 	# Authority player is far away and must not become the fallback aim.
 	var sim := LocalSim.new(SimConfig.new(), 20.0, 0.0)
+	_issue_through(sim, 3)
 	sim.place_player(3, 2.0, 0.0)
 	var def := _stationary()
 	def.move_speed = 4.0
@@ -66,6 +79,7 @@ func test_no_living_player_in_range_idles_without_host_fallback() -> void:
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 3)
 	var x_after_aggro: float = sim.snapshot().enemies[0].x
+	_issue_through(sim, 3)
 	sim.place_player(3, 2.0, 0.0, 0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 0, "idle when nobody is alive in range")
@@ -99,9 +113,11 @@ func test_default_deaggro_radius_is_aggro_plus_four() -> void:
 	var eid: int = sim.spawn_enemy_from_def(def, 0.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 1)
+	_issue_through(sim, 1)
 	sim.place_player(1, 10.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 1, "still inside default deaggro (12)")
+	_issue_through(sim, 1)
 	sim.place_player(1, 13.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 0, "drops when no living player is within deaggro_radius")
@@ -114,9 +130,11 @@ func test_explicit_deaggro_radius() -> void:
 	var eid: int = sim.spawn_enemy_from_def(def, 0.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 1)
+	_issue_through(sim, 1)
 	sim.place_player(1, 18.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 1, "inside explicit deaggro 20")
+	_issue_through(sim, 1)
 	sim.place_player(1, 21.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 0)
@@ -134,6 +152,7 @@ func test_leash_triggers_even_if_player_is_inside_deaggro() -> void:
 	var eid: int = sim.spawn_enemy_from_def(def, 0.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 1)
+	_issue_through(sim, 1)
 	sim.place_player(1, 20.0, 0.0)
 	var dropped := false
 	for i in range(80):
@@ -162,12 +181,14 @@ func test_matron_style_no_leash_uses_deaggro_radius_20() -> void:
 	var eid: int = sim.spawn_enemy_from_def(def, 0.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 1)
+	_issue_through(sim, 1)
 	sim.place_player(1, 18.0, 0.0)
 	for i in range(80):
 		sim.step()
 	assert_eq(sim.enemy_target_id(eid), 1, "still aggroed past the 16-tile leash, player within 20")
 	assert_gt(sim.snapshot().enemies[0].x, 16.0)
 	# 21 tiles from the enemy, not from spawn (the enemy has walked out).
+	_issue_through(sim, 1)
 	sim.place_player(1, sim.snapshot().enemies[0].x + 21.0, 0.0)
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 0, "drops when no eligible player is within 20")

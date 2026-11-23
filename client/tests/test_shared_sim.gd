@@ -7,6 +7,12 @@ func _intent(seq: int, mx: float = 0.0, my: float = 0.0, aim: float = 0.0, fire:
 	return InputIntent.from_raw(seq, mx, my, aim, fire, false, 0, target, ability)
 
 
+
+func _issue_through(sim: LocalSim, id: int) -> void:
+	while sim._next_id <= id:
+		sim.alloc_player_id()
+
+
 func test_solo_player_one_exists_before_first_step() -> void:
 	var sim := LocalSim.new(SimConfig.new(), 3.0, 4.0)
 	assert_eq(sim.player_count(), 1)
@@ -19,6 +25,7 @@ func test_solo_player_one_exists_before_first_step() -> void:
 
 func test_add_player_takes_effect_at_start_of_next_step() -> void:
 	var sim := LocalSim.new(SimConfig.new(), 0.0, 0.0)
+	_issue_through(sim, 7)
 	sim.add_player(7, {"class_id": "thornguard", "x": 5.0, "y": 2.0})
 	assert_eq(sim.player_count(), 1, "queued, not in the world yet")
 	assert_null(sim.get_player(7))
@@ -88,6 +95,7 @@ func test_oneshot_interact_clears_and_does_not_fire_twice() -> void:
 
 func test_remove_player_is_delayed_and_drops_in_flight_shots() -> void:
 	var sim := LocalSim.new(SimConfig.new(), 0.0, 0.0)
+	_issue_through(sim, 2)
 	sim.add_player(2, {"x": 1.0, "y": 0.0})
 	sim.step()
 	sim.apply_input(2, _intent(1, 0.0, 0.0, 0.0, true))
@@ -108,6 +116,7 @@ func test_players_are_processed_in_ascending_id_order() -> void:
 	# Two players fire on the same tick; damaged_by / first-hit order follows
 	# ascending id because movement and fire run in id order.
 	var sim := LocalSim.new(SimConfig.new(), 10.0, 0.0)
+	_issue_through(sim, 5)
 	sim.add_player(3, {"x": 0.0, "y": 0.0})
 	sim.add_player(5, {"x": 0.2, "y": 0.0})
 	sim.step()
@@ -142,6 +151,7 @@ func test_world_view_is_per_viewer_for_bags_and_hud() -> void:
 	var sim := LocalSim.new(SimConfig.new(), 0.0, 0.0, catalog)
 	sim.set_world_seed(1)
 	sim.set_player_class("thornguard")
+	_issue_through(sim, 2)
 	sim.add_player(2, {"class_id": "thornguard", "x": 4.0, "y": 0.0})
 	sim.step()
 	var def := EnemyDef.new()
@@ -196,6 +206,7 @@ func test_fifty_player_step_is_cheaper_than_fifty_separate_sims() -> void:
 	shared.set_bounds(0.0, 0.0, 48.0, 48.0)
 	# Player 1 already exists.
 	for id in range(2, 51):
+		assert_eq(shared.alloc_player_id(), id)
 		var ang: float = float(id) * 0.4
 		shared.add_player(id, {"x": 24.0 + cos(ang) * 8.0, "y": 24.0 + sin(ang) * 8.0})
 	shared.step()
@@ -268,6 +279,7 @@ func test_apply_input_keeps_pending_oneshots_until_step() -> void:
 
 func test_pattern_bullet_skips_invulnerable_and_hits_the_next_player() -> void:
 	var sim := LocalSim.new(SimConfig.new(), 2.0, 0.0)
+	_issue_through(sim, 2)
 	sim.add_player(2, {"x": 2.0, "y": 0.0})
 	sim.step()
 	var src_def := EnemyDef.new()
@@ -361,3 +373,22 @@ func test_contact_skips_invulnerable_and_hits_the_next_player() -> void:
 	sim.step()
 	assert_eq(sim.get_player(pid1).hp, hp1, "Slipstep i-frames skip the first overlap")
 	assert_eq(sim.get_player(pid2).hp, hp2 - 8, "contact keeps checking other players")
+
+
+func test_diagonal_walk_slides_along_a_wall() -> void:
+	# Resolving X and Y separately: a diagonal into a vertical wall keeps the
+	# unblocked axis, so the player slides along the wall instead of stopping.
+	var sim := LocalSim.new(SimConfig.new(), 9.9, 8.5)
+	sim.set_bounds(0.0, 0.0, 16.0, 16.0)
+	for ty in range(0, 16):
+		sim.set_blocking_tile(10, ty, true)
+	var p := sim.get_player(1)
+	var start_y: float = p.y
+	sim.apply_input(1, _intent(1, 1.0, 1.0))
+	sim.step()
+	p = sim.get_player(1)
+	assert_lt(p.x, 10.0, "the blocked axis stops at the wall")
+	assert_almost_eq(p.x, 10.0 - SimConstants.MOVE_EPS, 1e-9)
+	assert_gt(p.y, start_y, "the free axis still moves, sliding along the wall")
+	var step: float = sim.config().move_speed_tiles_per_s * SimConstants.TICK_DT
+	assert_almost_eq(p.y, start_y + step / sqrt(2.0), 1e-9)

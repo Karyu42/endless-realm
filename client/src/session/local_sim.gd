@@ -40,13 +40,10 @@ var _world_seed: int = 1
 var _tick: int = 0
 ## Default / solo viewer id (player 1 is spawned in _init).
 var _player_id: int = 1
+## Next id the allocator will issue. The high-water mark is `_next_id - 1`
+## (the last id issued). The allocator never reuses an id and does not
+## store an entry per id ever issued.
 var _next_id: int = 2
-## Ids ever used for players (allocated or reserved). Only these, or ids the
-## allocator has not reached yet, may be passed to add_player / place_player.
-var _player_id_set: Dictionary = {1: true}
-## [lo, hi) ranges the allocator jumped over when a caller reserved a higher
-## id; never issued to entities. One entry per such reservation.
-var _skipped_ids: Array[PackedInt64Array] = []
 var _players: Dictionary = {} # id -> SimPlayerState
 var _sorted_ids: Array[int] = []
 var _pending_adds: Dictionary = {} # id -> {character: Variant, x: float, y: float, ...}
@@ -193,10 +190,16 @@ func player_count() -> int:
 
 ## Queue a player to join at the start of the next step(). character may be
 ## null, a class-id String, or a Dictionary {class_id, x, y, hp?}.
+## The caller guarantees `id` came from this sim's alloc_player_id() (or is
+## the pre-spawned player 1). Accepts an id at or below the high-water mark
+## that is not currently live. Refuses, and logs, an id above the mark or
+## any live player or entity id.
+## Sealed arena placement invariants: a spawn inside a sealed arena is moved
+## to a deterministic safe spot outside the doorway. A returning player never
+## lands inside a live fight.
 func add_player(id: int, character: Variant = null) -> bool:
-	if not _player_id_allowed(id):
+	if not _player_id_accept(id):
 		return false
-	_reserve_id(id)
 	_pending_removes.erase(id)
 	if _players.has(id) or _pending_adds.has(id):
 		if _pending_adds.has(id):
@@ -217,7 +220,7 @@ func remove_player(id: int) -> void:
 
 ## Store the latest intent for this player. Nothing is applied until step().
 ## The host calls this at most once per player per tick.
-func apply_input(id: int, intent: InputIntent) -> void:
+func apply_input(id: int, intent: InputIntent, is_new_frame: bool = true) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p == null or intent == null:
 		return
@@ -230,6 +233,9 @@ func apply_input(id: int, intent: InputIntent) -> void:
 		p.intent.ability_pressed = true
 	if p.intent.interact_target_id == 0 and pending_target != 0:
 		p.intent.interact_target_id = pending_target
+	# rule 7 activity tracks received input frames
+	if is_new_frame:
+		_note_non_idle(p, _tick)
 
 
 ## Solo / existing WorldSource path: apply to the default player (id 1, or
@@ -290,6 +296,9 @@ func _make_player(id: int, x: float, y: float, character: Variant) -> SimPlayerS
 	p.last_interact_seq = 0
 	_ability_of(id)
 	_apply_character(p, character)
+	# Covers add_player({x,y}) and a default spawn; a sealed-arena point is
+	# relocated before the player enters the roster.
+	_set_placed_position(p, p.x, p.y)
 	return p
 
 
@@ -313,43 +322,58 @@ func _apply_character(p: SimPlayerState, character: Variant) -> void:
 			p.prev_y = p.y
 		if d.has("hp"):
 			p.hp = int(d["hp"])
+		if d.has("x") or d.has("y"):
+			_set_placed_position(p, p.x, p.y)
 	_set_player_class_on(p, class_id, not (character is Dictionary and (character as Dictionary).has("hp")))
 
 
 func _alloc_id() -> int:
 	# One id space for players, enemies, projectiles, pattern bullets and
-	# bags. Ids are handed out in increasing order and never reused;
-	# _reserve_id moves the counter past any id a caller picks itself.
+	# bags. Ids are handed out in increasing order and never reused.
 	var id: int = _next_id
 	if _next_id < MAX_ENTITY_ID:
 		_next_id += 1
 	return id
 
 
-## Reserves an externally chosen id (add_player / place_player) so the
-## entity allocator never hands it out again, and remembers it as a player id.
-func _reserve_id(id: int) -> void:
-	if id >= _next_id and id < MAX_ENTITY_ID:
-		if id > _next_id:
-			# The allocator never issues the ids it jumps over.
-			_skipped_ids.append(PackedInt64Array([_next_id, id]))
-		_next_id = id + 1
-	_player_id_set[id] = true
-
-
-## A caller-chosen player id is accepted only if the allocator has never
-## handed it to an entity: at or above the counter, jumped over by an
-## earlier reservation, or already a player id. Ids of entities that are
-## gone are never reused.
-func _player_id_allowed(id: int) -> bool:
-	if id <= 0 or id >= MAX_ENTITY_ID:
-		return false
-	if id >= _next_id or _player_id_set.has(id):
+## True when a player or entity with this id is currently in the sim.
+func _id_is_live(id: int) -> bool:
+	if _players.has(id):
 		return true
-	for r in _skipped_ids:
-		if id >= r[0] and id < r[1]:
+	for e in _enemies:
+		if e.id == id:
+			return true
+	for shot in _projectiles:
+		if shot.id == id:
+			return true
+	for b in _pattern_bullets:
+		if b.id == id:
+			return true
+	for bag in _ground_drops:
+		if bag.id == id:
+			return true
+	for portal in _portals:
+		if portal.id == id:
+			return true
+	for h in _hazards:
+		if h.id == id:
 			return true
 	return false
+
+
+## add_player / new place_player: id must be at or below the high-water
+## mark and not currently live.
+func _player_id_accept(id: int) -> bool:
+	if id <= 0 or id >= MAX_ENTITY_ID:
+		push_warning("LocalSim: id %d is not a valid player id" % id)
+		return false
+	if id >= _next_id:
+		push_warning("LocalSim: id %d is above the high-water mark" % id)
+		return false
+	if _id_is_live(id):
+		push_warning("LocalSim: id %d is already live" % id)
+		return false
+	return true
 
 
 ## Raises the entity allocator to `floor` so a host running several sims
@@ -365,9 +389,7 @@ func set_id_floor(floor: int) -> bool:
 ## A fresh player id from the shared entity allocator. Hosts use this so
 ## player ids can never collide with enemy, projectile or bag ids.
 func alloc_player_id() -> int:
-	var id := _alloc_id()
-	_player_id_set[id] = true
-	return id
+	return _alloc_id()
 
 
 func spawn_enemy(def_id: String, x: float, y: float, content_level: int = 1) -> int:
@@ -429,7 +451,6 @@ func step() -> void:
 		_apply_movement(p)
 		_apply_ability(id, p.intent, sim_tick)
 		_apply_fire(p, sim_tick)
-		_note_non_idle(p, sim_tick)
 	for e in _enemies:
 		if e.flash_ticks > 0:
 			e.flash_ticks -= 1
@@ -634,11 +655,18 @@ func _apply_movement(p: SimPlayerState) -> void:
 		mx = 0.0
 		my = 0.0
 	var step_len: float = _config.move_speed_tiles_per_s * _player_stride_mult(p) * SimConstants.TICK_DT
-	# Walking uses the same wall clip as Slipstep so dungeon walls and the
-	# sealed arena doorway (vision §6.1 rule 6a) actually block movement.
-	var dest: PackedFloat64Array = _blink_destination(p.x, p.y, mx, my, step_len)
-	p.x = dest[0]
-	p.y = dest[1]
+	# Walking uses the same wall clip as Slipstep (_blink_destination) so
+	# dungeon walls and the sealed arena doorway (vision §6.1 rule 6a)
+	# actually block movement. X and Y are resolved separately so a diagonal
+	# into a wall slides along it instead of stopping on both axes. Slipstep
+	# keeps the single-segment clip so a blink cannot slide around a corner
+	# or through a diagonal gap.
+	if abs(mx) > SimConstants.MOVE_EPS:
+		var xdest: PackedFloat64Array = _blink_destination(p.x, p.y, mx, 0.0, step_len)
+		p.x = xdest[0]
+	if abs(my) > SimConstants.MOVE_EPS:
+		var ydest: PackedFloat64Array = _blink_destination(p.x, p.y, 0.0, my, step_len)
+		p.y = ydest[1]
 
 
 func _apply_fire(p: SimPlayerState, sim_tick: int) -> void:
@@ -695,20 +723,25 @@ func _spawn_projectile(p: SimPlayerState, sim_tick: int) -> void:
 
 ## Immediate position / hp write for tests. Creates a player if needed
 ## (does not wait for the next step, unlike add_player).
+## Sealed arena placement invariants: a point inside a sealed arena is moved
+## to a deterministic safe spot outside the doorway. A returning player never
+## lands inside a live fight.
 func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p == null:
-		if not _player_id_allowed(id):
+		if not _player_id_accept(id):
 			return
-		_reserve_id(id)
 		_pending_adds.erase(id)
 		_pending_removes.erase(id)
 		p = _make_player(id, x, y, null)
 		_players[id] = p
 		_rebuild_ids()
 		_recompute_player_stats(p, true)
-	p.x = x
-	p.y = y
+	else:
+		# Keep a live player who was queued to leave (host first-join of
+		# built-in player 1, or a same-tick re-add).
+		_pending_removes.erase(id)
+	_set_placed_position(p, x, y)
 	if hp >= 0:
 		p.hp = hp
 
@@ -1440,6 +1473,9 @@ func configure_dungeon(
 
 
 ## Copy a character into this instance at (x, y) after a portal transfer.
+## Sealed arena placement invariants: a restore into a sealed arena lands at
+## a deterministic safe spot outside the doorway. A returning player never
+## lands inside a live fight.
 func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
 	if carry == null:
 		return
@@ -1453,10 +1489,7 @@ func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
 	p.pending_glint = carry.pending_glint
 	p.pending_riftstone = carry.pending_riftstone
 	p.aim = carry.aim
-	p.x = x
-	p.y = y
-	p.prev_x = x
-	p.prev_y = y
+	_set_placed_position(p, x, y)
 	p.last_interact_seq = carry.last_interact_seq
 	if carry.inventory != null:
 		p.inventory = carry.inventory
@@ -2095,6 +2128,86 @@ func _set_arena_sealed(sealed: bool) -> void:
 	_arena_sealed = sealed
 
 
+## Write a placement or position restore. If the arena is sealed and (x, y)
+## is inside it, the player is relocated to a deterministic safe spot just
+## outside the doorway. A returning player never lands inside a live fight.
+func _set_placed_position(p: SimPlayerState, x: float, y: float) -> void:
+	if p == null:
+		return
+	var dest: PackedFloat64Array = _placement_xy(x, y)
+	p.x = dest[0]
+	p.y = dest[1]
+	p.prev_x = p.x
+	p.prev_y = p.y
+
+
+func _placement_xy(x: float, y: float) -> PackedFloat64Array:
+	if not _should_relocate_sealed_placement(x, y):
+		return PackedFloat64Array([x, y])
+	return _sealed_arena_outside_door_xy()
+
+
+func _should_relocate_sealed_placement(x: float, y: float) -> bool:
+	if not _arena_sealed or _dungeon == null:
+		return false
+	var room: Dictionary = _arena_room()
+	if room.is_empty():
+		return false
+	return _dungeon.room_contains(room, x, y)
+
+
+## Deterministic safe spot just outside the sealed arena door. Prefers the
+## midpoint of the first doorway segment (sorted), stepped outward from the
+## arena center by at least the player radius. Used by place_player,
+## add_player with {x,y}, and apply_carried_player.
+func _sealed_arena_outside_door_xy() -> PackedFloat64Array:
+	var room: Dictionary = _arena_room()
+	var arena := _dict_rect(room)
+	var standoff: float = 0.5
+	if _config != null:
+		standoff = maxf(_config.player_radius_tiles, 0.5)
+	var acx: float = arena.position.x + arena.size.x * 0.5
+	var acy: float = arena.position.y + arena.size.y * 0.5
+	var sx: float = arena.position.x - standoff
+	var sy: float = acy
+	var seg: Dictionary = _primary_seal_segment()
+	if not seg.is_empty():
+		var mx: float = (float(seg["x0"]) + float(seg["x1"])) * 0.5
+		var my: float = (float(seg["y0"]) + float(seg["y1"])) * 0.5
+		var nx: float = 0.0
+		var ny: float = 0.0
+		if is_equal_approx(float(seg["x0"]), float(seg["x1"])):
+			nx = -1.0 if acx > mx else 1.0
+		else:
+			ny = -1.0 if acy > my else 1.0
+		sx = mx + nx * standoff
+		sy = my + ny * standoff
+	# If the first estimate is still inside, keep pushing away from the center.
+	if _dungeon != null and not room.is_empty():
+		var guard: int = 0
+		while _dungeon.room_contains(room, sx, sy) and guard < 8:
+			sx += -standoff if sx <= acx else standoff
+			sy += -standoff if sy <= acy else standoff
+			guard += 1
+	return PackedFloat64Array([sx, sy])
+
+
+func _primary_seal_segment() -> Dictionary:
+	var segs: Array[Dictionary] = _seal_segments()
+	if segs.is_empty():
+		return {}
+	segs.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if float(a["x0"]) != float(b["x0"]):
+			return float(a["x0"]) < float(b["x0"])
+		if float(a["y0"]) != float(b["y0"]):
+			return float(a["y0"]) < float(b["y0"])
+		if float(a["x1"]) != float(b["x1"]):
+			return float(a["x1"]) < float(b["x1"])
+		return float(a["y1"]) < float(b["y1"])
+	)
+	return segs[0]
+
+
 func _apply_interact(p: SimPlayerState, sim_tick: int) -> void:
 	# InputFrame.interact_target_id: 0 means none. A nonzero value is a
 	# press on this seq, applied at most once per seq via Seq.seq_is_next
@@ -2143,6 +2256,8 @@ func _apply_pending_roster() -> void:
 				# Ability state goes with the player; a host that wants it
 				# back on rejoin saves it first (focus / cooldown getters).
 				_ability_by_player.erase(pid)
+				for e in _enemies:
+					e.damaged_by.erase(pid)
 				changed = true
 		_pending_removes.clear()
 		# Drop that player's in-flight shots.
@@ -2347,7 +2462,9 @@ func _refresh_boss_n_peak() -> void:
 		if n <= 0:
 			return
 		_boss_n_peak = n
-	elif n > _boss_n_peak:
+	elif n > _boss_n_peak and not _arena_sealed:
+		# Once the arena is sealed, n_peak cannot grow until the seal lifts
+		# (vision §6.1 rule 6a).
 		_boss_n_peak = n
 	for e in _enemies:
 		if not e.alive or e.def == null:
@@ -2717,6 +2834,8 @@ func _kill_enemy(e: EnemyState, sim_tick: int) -> void:
 	if e.is_boss() and not _boss_defeated:
 		_on_boss_defeated(e, sim_tick)
 	_grant_kill_rewards(e, sim_tick)
+	if e.is_boss():
+		_reset_boss_fight_trackers()
 
 
 func _on_boss_defeated(e: EnemyState, sim_tick: int) -> void:

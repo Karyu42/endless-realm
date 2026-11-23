@@ -168,6 +168,10 @@ class HostPlayer:
 	var progression_entries: Array[Dictionary] = []
 	var restore_progression: Dictionary = {}
 	var seq: int = 0
+	## Last seq handed to LocalSim.apply_input. rule 7 activity tracks
+	## received input frames: is_new_frame is true only when seq advanced
+	## since the last step.
+	var fed_seq: int = 0
 	var move_x: float = 0.0
 	var move_y: float = 0.0
 	var aim: float = 0.0
@@ -816,12 +820,12 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# collides with an enemy, projectile or bag (or a sim-only player such
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
-	if not saved.is_empty() and not _stash_id_issued_here(saved):
+	if not saved.is_empty() and (not _stash_id_issued_here(saved) or _find_player(int(saved["id"])) != null):
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
 		for id in _issued_player_ids.keys():
 			_prune_issued_id(int(id))
-		saved = {}  # not an id this host issued: a fresh id, conservative
+		saved = {}  # no usable saved id: a fresh id, conservative
 	if not saved.is_empty() and _find_player(int(saved["id"])) == null:
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
@@ -847,8 +851,7 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	p.y = float(rec["y"])
 	if sim.get_player(p.id) != null:
 		# Still in the sim (built-in player 1, or a leave not yet stepped):
-		# add_player cancels the pending removal; set it up in place.
-		sim.add_player(p.id)
+		# place_player keeps them and cancels the pending removal.
 		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if rec.has("hp") else -1)
 		sim.set_player_class_for(p.id, p.class_id)
 		_restore_ability(p)
@@ -1016,7 +1019,9 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			ability_presses += 1
 			intent.ability_pressed = true
 			p.ability_pressed = false  # one-shot
-		psim.apply_input(p.sim_id, intent)
+		# rule 7 activity tracks received input frames
+		psim.apply_input(p.sim_id, intent, p.seq != p.fed_seq)
+		p.fed_seq = p.seq
 	var stepped: Array[HostInstance] = instances.duplicate()
 	for inst in stepped:
 		inst.sim.step()
