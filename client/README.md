@@ -65,8 +65,10 @@ timing from `docs/design/content-v0.1.md` §1 (float64 `next_ready` in seconds,
 Driftrunner golden ticks 0/6/12/18/23/29, Thornguard 0/10/20, no tap-burst),
 projectile lifetime and range, tick stepping, the `NetClient` stub, official
 PCG32 known vectors, golden pattern positions, swept hits, Burrmite
-damage / death, packed `res://data` loading, and the burr_spit cadence
-(first spit 30 ticks after aggro).
+damage / death, packed `res://data` loading, the burr_spit cadence
+(first spit 30 ticks after aggro), deterministic personal loot, idempotent
+drop ids, the vision §3.4 XP table (including level 1000), and multi-level-up
+from one grant.
 
 Shared fixtures live in [`fixtures/`](../fixtures/). From the repo root, Go and
 GDScript must agree:
@@ -77,3 +79,16 @@ make fixtures-parity
 ```
 
 `make fixtures-parity` runs `go test -race ./internal/sim` and `make client-test`.
+
+## Loot and XP
+
+Kills in `LocalSim` roll personal loot and credit XP from `data/loot.json` and
+`data/scaling.json` (vision §3.4 and §4.2, content-v0.1 §4). Drops use PCG32
+seeded from the instance seed, the enemy id and the drop index, with the looter
+as the stream. Each drop has an idempotent `drop_id`. Bags expire after 60 s
+(1200 ticks). The HUD shows HP, level and an XP bar; E picks up a bag in range,
+and keys 1–8 equip an inventory slot.
+
+Pickup range is a **placeholder** of 2.0 tiles (the docs do not specify it).
+The practice-yard Burrmite uses content level E = 1, because the yard is not
+the Wilds ring map.

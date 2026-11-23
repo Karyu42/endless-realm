@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://endless-realm.local/schema/scaling.schema.json",
+  "title": "Endless Realm scaling coefficients (vision formulas)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["m_intercept", "m_per_level", "g_intercept", "g_per_tier", "xp", "d", "sync_plus", "group_hp", "riftstone"],
+  "properties": {
+    "m_intercept": { "type": "number" },
+    "m_per_level": { "type": "number" },
+    "g_intercept": { "type": "number" },
+    "g_per_tier": { "type": "number" },
+    "xp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kill_xp_coef", "kills_to_level_base", "kills_to_level_coef", "kills_to_level_exp", "type_mult", "under_level_cap", "over_level_penalty_per_level", "over_level_penalty_min"],
+      "properties": {
+        "kill_xp_coef": { "type": "number" },
+        "kills_to_level_base": { "type": "number" },
+        "kills_to_level_coef": { "type": "number" },
+        "kills_to_level_exp": { "type": "number" },
+        "type_mult": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["normal", "elite", "boss"],
+          "properties": {
+            "normal": { "type": "number" },
+            "elite": { "type": "number" },
+            "boss": { "type": "number" }
+          }
+        },
+        "under_level_cap": { "type": "integer", "minimum": 0 },
+        "over_level_penalty_per_level": { "type": "number" },
+        "over_level_penalty_min": { "type": "number" }
+      }
+    },
+    "d": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["per_level", "min", "max"],
+      "properties": {
+        "per_level": { "type": "number" },
+        "min": { "type": "number" },
+        "max": { "type": "number" }
+      }
+    },
+    "sync_plus": { "type": "integer" },
+    "group_hp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kink", "n_max", "normal", "boss"],
+      "properties": {
+        "kink": { "type": "integer" },
+        "n_max": { "type": "integer" },
+        "normal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["k", "t"],
+          "properties": { "k": { "type": "integer" }, "t": { "type": "integer" } }
+        },
+        "boss": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["k", "t"],
+          "properties": { "k": { "type": "integer" }, "t": { "type": "integer" } }
+        }
+      }
+    },
+    "riftstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["yield_coef", "deposit_coef"],
+      "properties": {
+        "yield_coef": { "type": "number" },
+        "deposit_coef": { "type": "number" }
+      }
+    }
+  }
+}

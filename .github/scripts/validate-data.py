@@ -124,5 +124,31 @@ if enemies_path.exists() and patterns_path.exists():
             if key not in used_keys:
                 print(f"::warning::{eid}: unused damage_key {key!r} in base.damage")
 
+# --- content-v0.1 §5: loot weight sums ---
+loot_path = root / "loot.json"
+if loot_path.exists():
+    loot = json.loads(loot_path.read_text(encoding="utf-8"))
+
+    def sum_ok(name, values, expect=100):
+        total = sum(int(v) for v in values)
+        if total != expect:
+            err(f"{name} weights sum to {total}, expected {expect}")
+
+    for row_name, row in (loot.get("tier_rows") or {}).items():
+        if isinstance(row, list):
+            sum_ok(f"loot.json tier_rows.{row_name}", [e.get("w", 0) for e in row if isinstance(e, dict)])
+    sw = loot.get("slot_weights") or {}
+    if sw:
+        sum_ok("loot.json slot_weights", [sw.get("weapon", 0), sw.get("armor", 0), sw.get("charm", 0)])
+    ww = loot.get("weapon_class_weights") or {}
+    if ww:
+        # own + 2 × other_each (three classes)
+        total = int(ww.get("own", 0)) + 2 * int(ww.get("other_each", 0))
+        if total != 100:
+            err(f"loot.json weapon_class_weights own + 2×other_each = {total}, expected 100")
+    lines = loot.get("charm_lines") or []
+    if lines:
+        sum_ok("loot.json charm_lines", [e.get("w", 0) for e in lines if isinstance(e, dict)])
+
 print(f"data-validate: {len(data_files)} data files, {len(schemas)} schemas, {errors} errors")
 sys.exit(1 if errors else 0)

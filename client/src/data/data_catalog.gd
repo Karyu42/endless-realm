@@ -23,13 +23,20 @@ static func load_from(data_dir: String) -> DataCatalog:
 	var cat := DataCatalog.new()
 	cat.patterns = {}
 	cat.enemies = {}
+	cat.classes = {}
 	cat._load_patterns(data_dir.path_join("patterns.json"))
 	cat._load_enemies(data_dir.path_join("enemies.json"))
+	cat._load_classes(data_dir.path_join("classes.json"))
+	cat.scaling = SimScaling.from_json(DataCatalog._read_json(data_dir.path_join("scaling.json")))
+	cat.loot = LootTables.from_json(DataCatalog._read_json(data_dir.path_join("loot.json")))
 	return cat
 
 
 var patterns: Dictionary = {} # String -> PatternDef
 var enemies: Dictionary = {} # String -> EnemyDef
+var classes: Dictionary = {} # String -> ClassDef
+var scaling: SimScaling = SimScaling.new()
+var loot: LootTables = LootTables.new()
 
 
 func pattern(id: String) -> PatternDef:
@@ -38,6 +45,10 @@ func pattern(id: String) -> PatternDef:
 
 func enemy(id: String) -> EnemyDef:
 	return enemies.get(id, null) as EnemyDef
+
+
+func class_def(id: String) -> ClassDef:
+	return classes.get(id, null) as ClassDef
 
 
 func _load_patterns(path: String) -> void:
@@ -64,6 +75,19 @@ func _load_enemies(path: String) -> void:
 				var e := EnemyDef.from_json(item)
 				if e.id != "":
 					enemies[e.id] = e
+
+
+func _load_classes(path: String) -> void:
+	var d := _read_json(path)
+	if d.is_empty():
+		return
+	var list: Variant = d.get("classes", [])
+	if list is Array:
+		for item in list:
+			if item is Dictionary:
+				var c := ClassDef.from_json(item)
+				if c.id != "":
+					classes[c.id] = c
 
 
 static func _read_json(path: String) -> Dictionary:

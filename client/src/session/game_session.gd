@@ -15,6 +15,8 @@ var move_x: float = 0.0
 var move_y: float = 0.0
 var aim: float = 0.0
 var fire_held: bool = false
+var interact_pressed: bool = false
+var inventory_slot: int = 0
 
 var _accum: float = 0.0
 var _seq: int = 0
@@ -29,7 +31,10 @@ func _ready() -> void:
 	var sim := LocalSim.new(config, 16.0, 16.0, catalog)
 	sim.set_bounds(0.0, 0.0, 32.0, 32.0)
 	sim.set_world_seed(1)
-	sim.spawn_enemy("burrmite", 24.0, 10.0)
+	sim.set_player_class("thornguard")
+	# Practice-yard default E=1: the yard is not the Wilds ring map, so the
+	# Wilds distance formula does not apply. Design can replace this default.
+	sim.spawn_enemy("burrmite", 24.0, 10.0, 1)
 	source = sim
 	curr_snapshot = source.snapshot()
 	prev_snapshot = curr_snapshot.duplicate_snapshot()
@@ -46,7 +51,12 @@ func _process(delta: float) -> void:
 		# Wrap seq as u32 to stay wire-compatible later.
 		if _seq > 0xFFFFFFFF:
 			_seq = 1
-		var intent := InputIntent.from_raw(_seq, move_x, move_y, aim, fire_held)
+		var intent := InputIntent.from_raw(
+			_seq, move_x, move_y, aim, fire_held, interact_pressed, inventory_slot
+		)
+		# Consume one-shot actions so catch-up ticks do not repeat them.
+		interact_pressed = false
+		inventory_slot = 0
 		source.submit_input(intent)
 		source.step()
 		prev_snapshot = curr_snapshot

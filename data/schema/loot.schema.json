@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://endless-realm.local/schema/loot.schema.json",
+  "title": "Endless Realm loot tables",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tier_rows", "slot_weights", "weapon_class_weights", "tables"],
+  "properties": {
+    "tier_rows": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["offset", "w"],
+          "properties": {
+            "offset": { "type": "integer" },
+            "w": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "slot_weights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["weapon", "armor", "charm"],
+      "properties": {
+        "weapon": { "type": "integer", "minimum": 0 },
+        "armor": { "type": "integer", "minimum": 0 },
+        "charm": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "weapon_class_weights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["own", "other_each"],
+      "properties": {
+        "own": { "type": "integer", "minimum": 0 },
+        "other_each": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "charm_lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "w"],
+        "properties": {
+          "id": { "type": "string" },
+          "w": { "type": "integer", "minimum": 0 },
+          "scale": { "type": "string" },
+          "coef": { "type": "number" },
+          "flat": { "type": "number" },
+          "pct_min": { "type": "integer" },
+          "pct_max": { "type": "integer" }
+        }
+      }
+    },
+    "armor": { "type": "object" },
+    "weapons": { "type": "object" },
+    "class_order": { "type": "array", "items": { "type": "string" } },
+    "tables": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["item_chance", "rolls", "row"],
+        "properties": {
+          "item_chance": { "type": "number", "minimum": 0, "maximum": 1 },
+          "rolls": { "type": "integer", "minimum": 0 },
+          "row": { "type": "string" },
+          "found_portal_chance": { "type": "number" },
+          "m_extra_step": { "type": "integer" },
+          "riftstone": { "type": "object" }
+        }
+      }
+    },
+    "rank_tables": { "type": "object", "additionalProperties": { "type": "string" } },
+    "eligibility_range_tiles": { "type": "number", "minimum": 0 },
+    "ground_expiry_ticks": { "type": "integer", "minimum": 1 },
+    "inventory_slots": { "type": "integer", "minimum": 1 },
+    "glint_kill_boss_mult": { "type": "integer", "minimum": 1 }
+  }
+}
