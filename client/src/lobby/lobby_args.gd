@@ -98,13 +98,15 @@ static func plan_host(args: LobbyArgs, headless: bool) -> Dictionary:
 	if args.join_code != "":
 		hs.join_code = args.join_code.to_upper()
 	if args.max_players_raw != "":
-		if not hs.try_set_max_players(args.max_players_raw):
+		var parsed: int = LobbyHost.parse_max_players(args.max_players_raw)
+		if parsed < 0:
 			var source: String = args.max_players_source
 			if source == "":
 				source = "--max-players"
 			var err: String = "HOST_ERROR %s must be an integer in [%d, %d], got %s" % [
 				source, LobbyHost.MIN_MAX_PLAYERS, LobbyHost.MAX_MAX_PLAYERS, args.max_players_raw]
 			return _reject_host(err, headless, cfg)
+		hs.max_players = parsed
 	var reasons: PackedStringArray = hs.validate()
 	if not reasons.is_empty():
 		return _reject_host("HOST_ERROR " + " ".join(reasons), headless, cfg)

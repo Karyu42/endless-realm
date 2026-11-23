@@ -88,6 +88,13 @@
             "type": "number",
             "minimum": 0
           },
+          "deaggro_radius": {
+            "type": "number",
+            "minimum": 0
+          },
+          "no_leash": {
+            "type": "boolean"
+          },
           "hover_radius": {
             "type": "number",
             "minimum": 0

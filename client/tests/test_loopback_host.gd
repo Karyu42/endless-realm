@@ -38,27 +38,32 @@ func test_lobby_client_hello_on_loopback() -> void:
 
 
 func test_max_players_is_rejected_not_clamped() -> void:
-	var hs = preload("res://src/lobby/lobby_settings_stub.gd").new()
-	assert_false(hs.try_set_max_players(""))
-	assert_false(hs.try_set_max_players("0"))
-	assert_false(hs.try_set_max_players("51"))
-	assert_false(hs.try_set_max_players("x"))
-	assert_eq(hs.max_players, LobbyHost.DEFAULT_MAX_PLAYERS)
-	assert_true(hs.try_set_max_players("8"))
-	assert_eq(hs.max_players, 8)
-	assert_true(hs.try_set_max_players("1"))
-	assert_eq(hs.max_players, 1)
-	assert_true(hs.try_set_max_players("50"))
-	assert_eq(hs.max_players, 50)
+	assert_eq(LobbyHost.parse_max_players(""), -1)
+	assert_eq(LobbyHost.parse_max_players("0"), -1)
+	assert_eq(LobbyHost.parse_max_players("51"), -1)
+	assert_eq(LobbyHost.parse_max_players("x"), -1)
+	assert_eq(LobbyHost.parse_max_players("8"), 8)
+	assert_eq(LobbyHost.parse_max_players("1"), 1)
+	assert_eq(LobbyHost.parse_max_players("50"), 50)
 
 
 func test_host_settings_validate_rejects_bad_m_range() -> void:
-	var hs = preload("res://src/lobby/lobby_settings_stub.gd").new()
+	var hs := LobbySettings.new()
 	assert_eq(hs.validate().size(), 0)
 	hs.m100_min = 80
 	hs.m100_max = 90
 	var reasons: PackedStringArray = hs.validate()
 	assert_gt(reasons.size(), 0, "min 80 max 90 does not contain 100")
+	assert_eq(reasons[0], "The multiplier range must include 1.00.")
 	hs.m100_min = 50
 	hs.m100_max = 150
 	assert_eq(hs.validate().size(), 0)
+	hs.lobby_name = "A".repeat(LobbySettings.MAX_LOBBY_NAME_LENGTH + 1)
+	reasons = hs.validate()
+	assert_gt(reasons.size(), 0)
+	assert_string_contains(reasons[0], "at most %d characters" % LobbySettings.MAX_LOBBY_NAME_LENGTH)
+	hs.lobby_name = "Ok"
+	hs.join_code = "AB"  # too short
+	reasons = hs.validate()
+	assert_gt(reasons.size(), 0)
+	assert_string_contains(reasons[0], "Join code must be")

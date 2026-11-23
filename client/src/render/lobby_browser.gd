@@ -1,8 +1,6 @@
 extends Control
 ## Lists LAN beacons and starts solo, host, or a join by code / IP:port.
 
-const HostSettings := preload("res://src/lobby/lobby_settings_stub.gd")
-
 var args: LobbyArgs
 var _client: LobbyClient
 var _pending_code: String = ""
@@ -24,9 +22,9 @@ func _ready() -> void:
 	var max_edit: LineEdit = %MaxPlayersEdit
 	max_edit.text = str(LobbyHost.DEFAULT_MAX_PLAYERS)
 	var m_min: LineEdit = %M100MinEdit
-	m_min.text = str(HostSettings.M100_DEFAULT)
+	m_min.text = str(LobbySettings.BASE_M100)
 	var m_max: LineEdit = %M100MaxEdit
-	m_max.text = str(HostSettings.M100_DEFAULT)
+	m_max.text = str(LobbySettings.BASE_M100)
 	var allow_check: CheckBox = %AllowImportsCheck
 	allow_check.button_pressed = true
 	var offline_imports: CheckBox = %AllowOfflineImportsCheck
@@ -108,16 +106,10 @@ func _on_host() -> void:
 	if hs.lobby_name == "":
 		hs.lobby_name = "Practice Lobby"
 	var host_max: LineEdit = %MaxPlayersEdit
-	if not hs.try_set_max_players(host_max.text):
-		%StatusLabel.text = "Max players must be an integer from 1 to 50."
-		return
-	if not hs.try_set_m100_min(%M100MinEdit.text) or not hs.try_set_m100_max(%M100MaxEdit.text):
-		%StatusLabel.text = "M range must be integers from 50 to 150 in steps of 5."
-		return
-	var reasons: PackedStringArray = hs.validate()
-	if not reasons.is_empty():
-		%StatusLabel.text = " ".join(reasons)
-		return
+	var parsed_max: int = LobbyHost.parse_max_players(host_max.text)
+	hs.max_players = parsed_max if parsed_max >= 0 else 0
+	hs.m100_min = _parse_m100(%M100MinEdit.text)
+	hs.m100_max = _parse_m100(%M100MaxEdit.text)
 	var host_imports: CheckBox = %AllowImportsCheck
 	hs.imports_allowed = host_imports.button_pressed
 	var host_offline: CheckBox = %AllowOfflineImportsCheck
@@ -125,9 +117,12 @@ func _on_host() -> void:
 	var broadcast: CheckBox = %BroadcastJoinCodeCheck
 	cfg.broadcast_join_code = broadcast.button_pressed
 	var host_code_edit: LineEdit = %HostCodeEdit
-	var code: String = host_code_edit.text.strip_edges().to_upper()
-	if code != "":
-		hs.join_code = code
+	hs.join_code = host_code_edit.text.strip_edges().to_upper()
+	# Show LobbySettings.validate() strings as-is, including name and join-code checks.
+	var reasons: PackedStringArray = hs.validate()
+	if not reasons.is_empty():
+		%StatusLabel.text = " ".join(reasons)
+		return
 	cfg.open_portals = [1.0] as Array[float]
 	var err: Error = GameSession.start_host(cfg, "*")
 	if err != OK:
@@ -208,3 +203,11 @@ func _join_info(info: Dictionary) -> void:
 
 func _go_arena() -> void:
 	get_tree().change_scene_to_file("res://src/render/arena.tscn")
+
+
+func _parse_m100(text: String) -> int:
+	var trimmed: String = text.strip_edges()
+	if trimmed.is_empty() or not trimmed.is_valid_int():
+		return 0
+	return trimmed.to_int()
+
