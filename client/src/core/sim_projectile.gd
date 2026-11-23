@@ -12,6 +12,8 @@ var speed: float = 0.0
 var range_tiles: float = 0.0
 var lifetime_ticks: int = 0
 var radius_tiles: float = 0.15
+## Set when the shot hits a target; it is culled at the end of the tick.
+var consumed: bool = false
 
 
 func elapsed_ticks_at(tick: int) -> int:
@@ -26,6 +28,8 @@ func distance_at_time(time_ticks: float) -> float:
 
 
 func is_alive_at(tick: int) -> bool:
+	if consumed:
+		return false
 	var elapsed := elapsed_ticks_at(tick)
 	if elapsed < 0 or elapsed >= lifetime_ticks:
 		return false

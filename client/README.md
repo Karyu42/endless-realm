@@ -2,14 +2,18 @@
 
 Godot **4.7.2-stable** project (typed GDScript) for the offline practice slice.
 It follows [`docs/tech/stack.md`](../docs/tech/stack.md): a `GameSession` autoload
-owns a `WorldSource` (`LocalSim` now, `NetClient` stub for later). Sim math lives
-in plain `RefCounted` classes at **20 Hz** with **float64** values. Render nodes
-interpolate between ticks. `TILE_PX = 16` is defined once, in
-`src/core/sim_constants.gd`. 1.0 sim unit is one tile. Angles use the Godot 2D
-convention (+X = 0, +Y down, clockwise positive).
+owns a `WorldSource` (`LocalSim` now). Every game rule (movement, shooting,
+patterns, damage) lives in plain `RefCounted` classes — no `Node`, `SceneTree`,
+`Input`, or rendering — so the same sim can run in-process for solo play and,
+later, on a headless player-hosted lobby. Math is **20 Hz** with **float64**
+values (use `SimVec2`, not `Vector2`, in the sim). Render nodes interpolate
+between ticks. `TILE_PX = 16` is defined once, in `src/core/sim_constants.gd`.
+1.0 sim unit is one tile. Angles use the Godot 2D convention (+X = 0, +Y down,
+clockwise positive). Deterministic randomness is **PCG32 only**.
 
-There is no Godot MultiplayerAPI here. A future PR will point `GameSession` at
-`NetClient` and talk to the Go server over WebSocket + Protobuf.
+The practice yard loads the shared pack from repo-root [`data/`](../data/)
+(sibling of `client/`). A Burrmite wanders the yard and fires `burr_spit`.
+There is no network code in this project yet, and no Godot MultiplayerAPI.
 
 ## Run the practice yard
 
@@ -54,4 +58,15 @@ godot --headless --path client -s addons/gut/gut_cmdln.gd -gdir=res://tests -gex
 ```
 
 The tests cover 8-dir movement and diagonal normalization, the fire-rate
-cooldown, projectile lifetime and range, tick stepping, and the `NetClient` stub.
+accumulator, projectile lifetime and range, tick stepping, official PCG32
+known vectors, golden pattern positions, swept hits, and Burrmite damage / death.
+
+Shared fixtures live in [`fixtures/`](../fixtures/). From the repo root, Go and
+GDScript must agree:
+
+```bash
+make data-validate
+make fixtures-parity
+```
+
+`make fixtures-parity` runs `go test -race ./internal/sim` and `make client-test`.

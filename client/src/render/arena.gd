@@ -2,47 +2,71 @@ extends Node2D
 ## Practice yard: placeholder primitive-shape art, interpolation, and input.
 
 const ARENA_TILES: float = 32.0
+const PLAYER_COLOR := Color(0.91, 0.76, 0.48)
+const FLASH_COLOR := Color(1.0, 0.55, 0.45)
+const ENEMY_COLOR := Color(0.78, 0.42, 0.38)
+const SHOT_COLOR := Color(0.48, 0.82, 0.78)
+const PATTERN_COLOR := Color(0.92, 0.62, 0.28)
 
 var _sticks: VirtualSticks
 var _player: Polygon2D
 var _shots: Node2D
+var _patterns: Node2D
+var _enemies: Node2D
 var _camera: Camera2D
 var _hint: Label
+var _hp: Label
+var _shot_views: Dictionary = {} # id -> Polygon2D
+var _pattern_views: Dictionary = {}
+var _enemy_views: Dictionary = {}
 
 
 func _ready() -> void:
 	_shots = Node2D.new()
 	_shots.name = "Shots"
 	add_child(_shots)
+	_patterns = Node2D.new()
+	_patterns.name = "PatternShots"
+	add_child(_patterns)
+	_enemies = Node2D.new()
+	_enemies.name = "Enemies"
+	add_child(_enemies)
 	_player = Polygon2D.new()
 	_player.name = "Player"
 	_player.polygon = PackedVector2Array([
 		Vector2(12, 0), Vector2(-8, 8), Vector2(-5, 0), Vector2(-8, -8),
 	])
-	_player.color = Color(0.91, 0.76, 0.48)
+	_player.color = PLAYER_COLOR
 	add_child(_player)
 	_camera = Camera2D.new()
 	_camera.name = "Camera"
-	_camera.make_current()
 	_camera.zoom = Vector2(1.6, 1.6)
 	add_child(_camera)
+	_camera.make_current()
 	_sticks = VirtualSticks.new()
 	_sticks.name = "VirtualSticks"
 	add_child(_sticks)
 	_hint = Label.new()
 	_hint.name = "Hint"
-	_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire"
+	_hint.text = "WASD or arrows to move · mouse to aim · hold left click to fire · a Burrmite wanders the yard"
 	if _sticks.using_touch:
-		_hint.text = "Left stick moves · right stick aims and fires"
+		_hint.text = "Left stick moves · right stick aims and fires · a Burrmite wanders the yard"
 	_hint.add_theme_font_size_override("font_size", 16)
 	_hint.add_theme_color_override("font_color", Color(0.82, 0.9, 0.88))
+	_hp = Label.new()
+	_hp.name = "HP"
+	_hp.add_theme_font_size_override("font_size", 16)
+	_hp.add_theme_color_override("font_color", Color(0.91, 0.76, 0.48))
 	var layer := CanvasLayer.new()
 	layer.layer = 5
 	var margin := MarginContainer.new()
 	margin.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
 	margin.add_theme_constant_override("margin_left", 16)
 	margin.add_theme_constant_override("margin_top", 12)
-	margin.add_child(_hint)
+	var vbox := VBoxContainer.new()
+	vbox.add_child(_hint)
+	vbox.add_child(_hp)
+	margin.add_child(vbox)
 	layer.add_child(margin)
 	add_child(layer)
 	queue_redraw()
@@ -64,7 +88,9 @@ func _draw() -> void:
 func _process(_delta: float) -> void:
 	_sample_input()
 	_update_player_view()
+	_update_enemy_views()
 	_update_shot_views()
+	_update_pattern_views()
 
 
 func _sample_input() -> void:
@@ -95,25 +121,103 @@ func _sample_input() -> void:
 func _update_player_view() -> void:
 	_player.position = GameSession.interpolated_player_pixels()
 	_player.rotation = GameSession.interpolated_aim()
+	var snap := GameSession.curr_snapshot
+	if snap.player_flash_ticks > 0:
+		_player.color = FLASH_COLOR
+	else:
+		_player.color = PLAYER_COLOR
+	_hp.text = "HP %d / %d" % [snap.player_hp, snap.player_max_hp]
 	_camera.position = _player.position
 
 
+func _diamond(radius_px: float) -> PackedVector2Array:
+	return PackedVector2Array([
+		Vector2(radius_px, 0.0), Vector2(0.0, radius_px),
+		Vector2(-radius_px, 0.0), Vector2(0.0, -radius_px),
+	])
+
+
+func _sync_pool(parent: Node2D, pool: Dictionary, live: Dictionary) -> void:
+	for id in pool.keys():
+		if not live.has(id):
+			var node: Node = pool[id]
+			node.queue_free()
+			pool.erase(id)
+	for id in live.keys():
+		if not pool.has(id):
+			var view := Polygon2D.new()
+			parent.add_child(view)
+			pool[id] = view
+
+
 func _update_shot_views() -> void:
-	var snap := GameSession.curr_snapshot
 	var time := GameSession.render_time_ticks()
-	for child in _shots.get_children():
-		child.queue_free()
-	for shot in snap.projectiles:
+	var live: Dictionary = {}
+	for shot in GameSession.curr_snapshot.projectiles:
 		var elapsed: float = time - float(shot.spawn_tick)
 		if elapsed < 0.0 or elapsed >= float(shot.lifetime_ticks):
 			continue
 		if shot.distance_at_time(time) >= shot.range_tiles:
 			continue
-		var view := Polygon2D.new()
+		live[shot.id] = shot
+	_sync_pool(_shots, _shot_views, live)
+	for id in live.keys():
+		var shot: SimProjectile = live[id]
+		var view: Polygon2D = _shot_views[id]
 		var r: float = shot.radius_tiles * SimConstants.TILE_PX
-		view.polygon = PackedVector2Array([
-			Vector2(r, 0.0), Vector2(0.0, r), Vector2(-r, 0.0), Vector2(0.0, -r),
-		])
-		view.color = Color(0.48, 0.82, 0.78)
+		view.polygon = _diamond(r)
+		view.color = SHOT_COLOR
 		view.position = shot.position_at_time(time).to_pixels()
-		_shots.add_child(view)
+
+
+func _update_pattern_views() -> void:
+	var time := GameSession.render_time_ticks()
+	var live: Dictionary = {}
+	for b in GameSession.curr_snapshot.pattern_bullets:
+		if not b.is_alive_at(GameSession.curr_snapshot.tick) and time >= float(b.spawn_tick + b.lifetime_ticks):
+			continue
+		var elapsed: float = time - float(b.spawn_tick)
+		if elapsed < 0.0 or elapsed >= float(b.lifetime_ticks):
+			continue
+		var dist: float = b.speed * elapsed * SimConstants.TICK_DT
+		if dist >= b.range_tiles:
+			continue
+		live[b.id] = b
+	_sync_pool(_patterns, _pattern_views, live)
+	for id in live.keys():
+		var b: PatternBullet = live[id]
+		var view: Polygon2D = _pattern_views[id]
+		var r: float = b.radius_tiles * SimConstants.TILE_PX
+		view.polygon = _diamond(r)
+		view.color = PATTERN_COLOR
+		view.position = b.position_at_time(time).to_pixels()
+
+
+func _update_enemy_views() -> void:
+	var prev := GameSession.prev_snapshot
+	var curr := GameSession.curr_snapshot
+	var alpha := GameSession.alpha
+	var prev_by_id: Dictionary = {}
+	for e in prev.enemies:
+		prev_by_id[e.id] = e
+	var live: Dictionary = {}
+	for e in curr.enemies:
+		live[e.id] = e
+	_sync_pool(_enemies, _enemy_views, live)
+	for id in live.keys():
+		var e: EnemySnapshot = live[id]
+		var view: Polygon2D = _enemy_views[id]
+		var r: float = e.radius * SimConstants.TILE_PX
+		view.polygon = PackedVector2Array([
+			Vector2(r * 1.15, 0.0), Vector2(0.0, r * 0.85),
+			Vector2(-r * 0.7, r * 0.7), Vector2(-r * 0.7, -r * 0.7), Vector2(0.0, -r * 0.85),
+		])
+		view.color = ENEMY_COLOR
+		var x: float = e.x
+		var y: float = e.y
+		if prev_by_id.has(id):
+			var p: EnemySnapshot = prev_by_id[id]
+			x = lerpf(p.x, e.x, alpha)
+			y = lerpf(p.y, e.y, alpha)
+		view.position = Vector2(x * SimConstants.TILE_PX, y * SimConstants.TILE_PX)
+		view.rotation = e.aim
