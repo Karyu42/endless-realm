@@ -626,3 +626,32 @@ func test_rule_7_activity_tracks_received_input_frames() -> void:
 	assert_eq(sim.get_player(pid_a).pending_riftstone, 0)
 	assert_eq(sim.get_player(pid_b).pending_glint, 30)
 	assert_eq(sim.get_player(pid_b).pending_riftstone, 4)
+
+
+func test_boss_credit_survives_a_mid_fight_rejoin() -> void:
+	var sim := _vault()
+	var pid: int = _pid(sim)
+	var w := _warden(sim)
+	assert_not_null(w)
+	_hold_fire(sim, pid, 1)
+	sim.step()
+	sim.hurt_enemy(w.id, 1000, pid)
+	sim.step()
+	assert_gt(int(sim._boss_damage_by.get(pid, 0)), 0)
+	sim.remove_player(pid)
+	sim.step()
+	assert_gt(int(sim._boss_damage_by.get(pid, 0)), 0, "mid-fight leave keeps credit")
+	assert_true(sim.add_player(pid, {"x": 36.0, "y": 6.0}))
+	sim.step()
+	var p := sim.get_player(pid)
+	p.x = 36.0
+	p.y = 6.0
+	p.prev_x = p.x
+	p.prev_y = p.y
+	_hold_fire(sim, pid, 2)
+	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid)
+	sim.step()
+	assert_true(sim.boss_defeated())
+	assert_eq(sim.get_player(pid).pending_glint, 30)
+	assert_eq(sim.get_player(pid).pending_riftstone, 4)
+	assert_eq(sim._boss_damage_by.size(), 0)

@@ -4,6 +4,11 @@ extends GutTest
 ## per-player PCG32 streams.
 
 
+func _issue_through(sim: LocalSim, id: int) -> void:
+	while sim._next_id <= id:
+		sim.alloc_player_id()
+
+
 func _class_sim(class_id: String, x: float = 8.0, y: float = 8.0) -> LocalSim:
 	var catalog := DataCatalog.load_default()
 	var sim := LocalSim.new(SimConfig.new(), x, y, catalog)
@@ -99,6 +104,7 @@ func test_kindle_pulse_heals_self_and_allies_without_overheal() -> void:
 	var pid: int = _pid(sim)
 	# 25% of 140 = 35, half-up. Start at 100 so the heal is visible.
 	sim.place_ally(pid, 8.0, 8.0, 100, 140)
+	_issue_through(sim, 3)
 	sim.place_ally(2, 10.0, 8.0, 80, 140)
 	sim.place_ally(3, 20.0, 8.0, 80, 140)
 	_act(sim, 1, true)

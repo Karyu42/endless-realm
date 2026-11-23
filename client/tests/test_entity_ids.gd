@@ -24,7 +24,6 @@ func test_players_enemies_shots_and_bags_never_share_an_id() -> void:
 	var sim := _new_sim()
 	var a := sim.alloc_player_id()
 	sim.add_player(a, {"x": 6.0, "y": 5.0})
-	sim.add_player(2)  # caller-chosen id is reserved too
 	var e1 := sim.spawn_enemy("burrmite", 8.0, 5.0)
 	var e2 := sim.spawn_enemy("burrmite", 9.0, 5.0)
 	sim.step()
@@ -49,14 +48,15 @@ func test_players_enemies_shots_and_bags_never_share_an_id() -> void:
 	for id in ids:
 		assert_false(seen.has(id), "id %d used twice" % id)
 		seen[id] = true
-	assert_ne(e1, 2, "enemy did not take the reserved player id")
-	assert_ne(e2, 2)
+	assert_ne(e1, a, "enemy did not take the allocated player id")
+	assert_ne(e2, a)
 
 
 func test_add_player_refuses_an_id_held_by_an_entity() -> void:
 	var sim := _new_sim()
 	var e := sim.spawn_enemy("burrmite", 8.0, 5.0)
-	assert_false(sim.add_player(e), "enemy id is not a player id")
+	assert_false(sim.add_player(e), "a live entity id is refused")
+	assert_push_warning("LocalSim: id %d is already live" % e)
 	sim.place_player(e, 1.0, 1.0)
 	sim.step()
 	assert_false(sim.player_ids().has(e))
@@ -73,12 +73,11 @@ func test_remove_player_drops_ability_state() -> void:
 	assert_false(sim._ability_by_player.has(id), "removed with the player")
 
 
-func test_dead_entity_ids_are_never_reused_for_players() -> void:
+func test_allocator_does_not_reuse_dead_entity_ids() -> void:
 	var sim := _new_sim()
 	var e := sim.spawn_enemy("burrmite", 8.0, 5.0)
 	sim._enemies.clear()  # the enemy is gone
 	sim.step()
-	assert_false(sim.add_player(e), "a dead entity's id stays retired")
 	var next := sim.spawn_enemy("burrmite", 8.0, 5.0)
 	assert_gt(next, e, "allocator only moves forward")
 	var p := sim.alloc_player_id()
@@ -86,13 +85,48 @@ func test_dead_entity_ids_are_never_reused_for_players() -> void:
 	assert_true(sim.add_player(p))
 
 
-func test_ids_skipped_by_a_reservation_stay_usable_for_players() -> void:
+func test_rejoin_with_an_old_id_works() -> void:
 	var sim := _new_sim()
-	sim.place_player(7, 1.0, 1.0)
-	sim.place_player(3, 2.0, 2.0)
-	assert_eq(sim.player_ids(), [1, 3, 7] as Array[int])
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, {"x": 5.0, "y": 5.0}))
+	sim.step()
+	assert_true(sim.player_ids().has(pid))
+	sim.remove_player(pid)
+	sim.step()
+	assert_false(sim.player_ids().has(pid))
+	assert_true(sim.add_player(pid, {"x": 6.0, "y": 6.0}))
+	sim.step()
+	assert_true(sim.player_ids().has(pid))
+	assert_almost_eq(sim.get_player(pid).x, 6.0, 1e-6)
+
+
+func test_add_player_refuses_id_above_the_high_water_mark() -> void:
+	var sim := _new_sim()
+	var above: int = sim._next_id
+	assert_false(sim.add_player(above, {"x": 1.0, "y": 1.0}))
+	assert_push_warning("LocalSim: id %d is above the high-water mark" % above)
+	assert_false(sim.add_player(above + 5, {"x": 1.0, "y": 1.0}))
+	sim.step()
+	assert_false(sim.player_ids().has(above))
+	assert_false(sim.player_ids().has(above + 5))
+
+
+func test_add_player_refuses_a_live_player_or_entity_id() -> void:
+	var sim := _new_sim()
+	var live_player: int = sim.player_ids()[0]
+	assert_false(sim.add_player(live_player))
+	assert_push_warning("LocalSim: id %d is already live" % live_player)
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, {"x": 4.0, "y": 4.0}))
+	sim.step()
+	assert_false(sim.add_player(pid))
+	assert_push_warning("LocalSim: id %d is already live" % pid)
 	var e := sim.spawn_enemy("burrmite", 8.0, 5.0)
-	assert_gt(e, 7)
+	assert_false(sim.add_player(e))
+	assert_push_warning("LocalSim: id %d is already live" % e)
+	sim.place_player(e, 1.0, 1.0)
+	sim.step()
+	assert_false(sim.player_ids().has(e))
 
 
 func test_allocator_ids_are_never_reused_across_add_remove_cycles() -> void:
@@ -119,17 +153,22 @@ func test_allocator_ids_are_never_reused_across_add_remove_cycles() -> void:
 	assert_gt(again, prev)
 
 
+func _has_var(obj: Object, name: String) -> bool:
+	for item in obj.get_property_list():
+		if String(item.name) == name:
+			return true
+	return false
+
+
 func test_internal_tracking_stays_bounded_after_many_cycles() -> void:
 	var sim := _new_sim()
-	var reserved_before: int = sim._player_id_set.size()
+	assert_false(_has_var(sim, "_player_id_set"), "no per-id-ever set")
+	assert_false(_has_var(sim, "_skipped_ids"))
 	for _i in range(80):
 		var eid: int = sim.spawn_enemy("burrmite", 8.0, 5.0)
 		assert_gt(eid, 0)
 		sim.hurt_enemy(eid, sim.get_enemy(eid).hp, 1)
 		sim.step()
-	# Entity ids use the high-water mark only; they must not grow the
-	# player-reservation set.
-	assert_eq(sim._player_id_set.size(), reserved_before)
 	for _j in range(80):
 		var pid: int = sim.alloc_player_id()
 		assert_true(sim.add_player(pid, {"x": 6.0, "y": 5.0}))
@@ -140,13 +179,46 @@ func test_internal_tracking_stays_bounded_after_many_cycles() -> void:
 		sim.remove_player(pid)
 		sim.step()
 		assert_false(sim._ability_by_player.has(pid))
-		assert_false(sim._boss_damage_by.has(pid))
-		assert_false(sim._boss_near_ticks.has(pid))
-		assert_false(sim._boss_ally_heals.has(pid))
 		for e in sim._enemies:
 			assert_false(e.damaged_by.has(pid))
-	# Live per-player maps stay on the remaining roster (the built-in player).
 	assert_lte(sim._ability_by_player.size(), sim.player_count())
-	assert_lte(sim._boss_damage_by.size(), sim.player_count())
-	assert_lte(sim._boss_near_ticks.size(), sim.player_count())
-	assert_lte(sim._boss_ally_heals.size(), sim.player_count())
+
+	# Boss maps fill during a fight, stay through a mid-fight leave, and
+	# clear when the fight ends.
+	var catalog := DataCatalog.load_default()
+	var def := catalog.dungeon("hollowmere_vault")
+	var vault := LocalSim.new(SimConfig.new(), 6.0, 6.0, catalog)
+	vault.set_lobby_settings(LobbySettings.new())
+	var vpid: int = vault.player_ids()[0]
+	vault.configure_dungeon(def, 42, 100, 1, 1, vpid, 1, def.grants_persistent)
+	var vp := vault.get_player(vpid)
+	vp.x = 36.0
+	vp.y = 6.0
+	vp.prev_x = vp.x
+	vp.prev_y = vp.y
+	vault.step()
+	var warden: EnemyState = null
+	for e in vault._enemies:
+		if e.def != null and e.def.id == "tallow_warden":
+			warden = e
+			break
+	assert_not_null(warden)
+	vault.hurt_enemy(warden.id, 200, vpid)
+	vault.step()
+	assert_gt(int(vault._boss_damage_by.get(vpid, 0)), 0)
+	assert_gt(int(vault._boss_near_ticks.get(vpid, 0)), 0)
+	vault.remove_player(vpid)
+	vault.step()
+	assert_gt(int(vault._boss_damage_by.get(vpid, 0)), 0, "mid-fight leave keeps credit")
+	assert_gt(int(vault._boss_near_ticks.get(vpid, 0)), 0)
+	assert_true(vault.add_player(vpid, {"x": 36.0, "y": 6.0}))
+	vault.step()
+	vp = vault.get_player(vpid)
+	vp.x = 36.0
+	vp.y = 6.0
+	vault.hurt_enemy(warden.id, vault.get_enemy(warden.id).hp, vpid)
+	vault.step()
+	assert_true(vault.boss_defeated())
+	assert_eq(vault._boss_damage_by.size(), 0, "fight-end clears credit maps")
+	assert_eq(vault._boss_near_ticks.size(), 0)
+	assert_eq(vault._boss_ally_heals.size(), 0)
