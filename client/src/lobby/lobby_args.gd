@@ -20,6 +20,7 @@ var max_players_source: String = ""
 var imports_allowed: bool = true
 var offline_allowed: bool = true
 var broadcast_join_code: bool = false
+var invite_only: bool = false
 var port: int = LobbyConfig.DEFAULT_WS_PORT
 var bind_host: String = "*"
 var played_offline: bool = false
@@ -63,6 +64,8 @@ static func parse(args: PackedStringArray) -> LobbyArgs:
 			out.offline_allowed = true
 		elif a == "--broadcast-code" or a == "--broadcast-code=1":
 			out.broadcast_join_code = true
+		elif a == "--invite-only" or a == "--invite-only=1":
+			out.invite_only = true
 		elif a == "--played-offline" or a == "--played-offline=1":
 			out.played_offline = true
 		elif a.begins_with("--join-code="):
@@ -91,6 +94,7 @@ static func plan_host(args: LobbyArgs, headless: bool) -> Dictionary:
 	cfg.ws_port = args.port
 	cfg.bind_host = args.bind_host
 	cfg.broadcast_join_code = args.broadcast_join_code
+	cfg.invite_only = args.invite_only
 	var hs = cfg.host_settings
 	hs.lobby_name = args.lobby_name
 	hs.imports_allowed = args.imports_allowed

@@ -149,6 +149,12 @@ func _ready() -> void:
 	margin.add_child(vbox)
 	layer.add_child(margin)
 	add_child(layer)
+	var host_panel: Control = preload("res://src/render/host_lobby_panel.tscn").instantiate() as Control
+	host_panel.name = "HostLobbyPanel"
+	var host_layer := CanvasLayer.new()
+	host_layer.layer = 6
+	host_layer.add_child(host_panel)
+	add_child(host_layer)
 	_refresh_hint()
 	queue_redraw()
 

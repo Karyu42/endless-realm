@@ -1,0 +1,47 @@
+{
+  "touch": {
+    "min_target_mm": 14.0,
+    "margin_mm": 8.0,
+    "row_min_mm": 12.0,
+    "font_size": 16,
+    "status_font_size": 14,
+    "stack_narrow_px": 720,
+    "assume_dpi": 96
+  },
+  "strings": {
+    "imports_ok": "Imports OK",
+    "imports_no_offline": "No Offline",
+    "imports_off": "No imports",
+    "invite_only": "Invite-only",
+    "ping_ms": "%d ms",
+    "players": "%d/%d",
+    "m100_range": "×%.2f–×%.2f",
+    "copy_code": "Copy join code",
+    "code_copied": "Join code copied.",
+    "join_code_missing": "No join code yet.",
+    "join_code_label": "Join code: %s",
+    "invite_only_check": "Invite-only (not listed on LAN)",
+    "broadcast_code": "Show join code in the listing",
+    "apply_settings": "Apply settings",
+    "apply_failed": "Those settings couldn't be applied.",
+    "lobby_panel_title": "Lobby",
+    "open_settings": "Settings",
+    "hide_settings": "Hide settings",
+    "select_lobby": "Select a lobby first.",
+    "enter_join_code": "Enter a join code.",
+    "code_not_found": "No LAN lobby with that code yet. Keep the browser open.",
+    "enter_host_port": "Enter host:port.",
+    "import_character": "Import character",
+    "import_pick_title": "Choose a character file"
+  },
+  "import_messages": {
+    "IMPORT_RESULT_OK": "Character imported.",
+    "REJECTED_IMPORTS_OFF": "This lobby doesn't accept imported characters.",
+    "REJECTED_OFFLINE_OFF": "This lobby doesn't accept characters that were played offline.",
+    "REJECTED_BAD_FORMAT": "That file isn't a usable character export.",
+    "REJECTED_UNSUPPORTED_VERSION": "That character file is from a version this lobby can't read.",
+    "REJECTED_BAD_SIGNATURE": "That character file couldn't be verified.",
+    "REJECTED_ALREADY_EXISTS": "You already imported a character in this lobby.",
+    "REJECTED_UNKNOWN_PLAYER": "You're not in this lobby."
+  }
+}

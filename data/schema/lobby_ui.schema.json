@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://endless-realm.local/schema/lobby_ui.schema.json",
+  "title": "Endless Realm lobby UI strings and touch sizes",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["touch", "strings", "import_messages"],
+  "properties": {
+    "touch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_target_mm",
+        "margin_mm",
+        "row_min_mm",
+        "font_size",
+        "status_font_size",
+        "stack_narrow_px",
+        "assume_dpi"
+      ],
+      "properties": {
+        "min_target_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "margin_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "row_min_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "font_size": { "type": "integer", "minimum": 1 },
+        "status_font_size": { "type": "integer", "minimum": 1 },
+        "stack_narrow_px": { "type": "integer", "minimum": 1 },
+        "assume_dpi": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "strings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "imports_ok",
+        "imports_no_offline",
+        "imports_off",
+        "invite_only",
+        "ping_ms",
+        "players",
+        "m100_range",
+        "copy_code",
+        "code_copied",
+        "join_code_missing",
+        "join_code_label",
+        "invite_only_check",
+        "broadcast_code",
+        "apply_settings",
+        "apply_failed",
+        "lobby_panel_title",
+        "open_settings",
+        "hide_settings",
+        "select_lobby",
+        "enter_join_code",
+        "code_not_found",
+        "enter_host_port",
+        "import_character",
+        "import_pick_title"
+      ],
+      "properties": {
+        "imports_ok": { "type": "string", "minLength": 1 },
+        "imports_no_offline": { "type": "string", "minLength": 1 },
+        "imports_off": { "type": "string", "minLength": 1 },
+        "invite_only": { "type": "string", "minLength": 1 },
+        "ping_ms": { "type": "string", "minLength": 1 },
+        "players": { "type": "string", "minLength": 1 },
+        "m100_range": { "type": "string", "minLength": 1 },
+        "copy_code": { "type": "string", "minLength": 1 },
+        "code_copied": { "type": "string", "minLength": 1 },
+        "join_code_missing": { "type": "string", "minLength": 1 },
+        "join_code_label": { "type": "string", "minLength": 1 },
+        "invite_only_check": { "type": "string", "minLength": 1 },
+        "broadcast_code": { "type": "string", "minLength": 1 },
+        "apply_settings": { "type": "string", "minLength": 1 },
+        "apply_failed": { "type": "string", "minLength": 1 },
+        "lobby_panel_title": { "type": "string", "minLength": 1 },
+        "open_settings": { "type": "string", "minLength": 1 },
+        "hide_settings": { "type": "string", "minLength": 1 },
+        "select_lobby": { "type": "string", "minLength": 1 },
+        "enter_join_code": { "type": "string", "minLength": 1 },
+        "code_not_found": { "type": "string", "minLength": 1 },
+        "enter_host_port": { "type": "string", "minLength": 1 },
+        "import_character": { "type": "string", "minLength": 1 },
+        "import_pick_title": { "type": "string", "minLength": 1 }
+      }
+    },
+    "import_messages": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 },
+      "required": [
+        "IMPORT_RESULT_OK",
+        "REJECTED_IMPORTS_OFF",
+        "REJECTED_OFFLINE_OFF",
+        "REJECTED_BAD_FORMAT",
+        "REJECTED_UNSUPPORTED_VERSION",
+        "REJECTED_BAD_SIGNATURE",
+        "REJECTED_ALREADY_EXISTS",
+        "REJECTED_UNKNOWN_PLAYER"
+      ],
+      "properties": {
+        "IMPORT_RESULT_OK": { "type": "string", "minLength": 1 },
+        "REJECTED_IMPORTS_OFF": { "type": "string", "minLength": 1 },
+        "REJECTED_OFFLINE_OFF": { "type": "string", "minLength": 1 },
+        "REJECTED_BAD_FORMAT": { "type": "string", "minLength": 1 },
+        "REJECTED_UNSUPPORTED_VERSION": { "type": "string", "minLength": 1 },
+        "REJECTED_BAD_SIGNATURE": { "type": "string", "minLength": 1 },
+        "REJECTED_ALREADY_EXISTS": { "type": "string", "minLength": 1 },
+        "REJECTED_UNKNOWN_PLAYER": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

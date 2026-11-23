@@ -23,7 +23,7 @@ theme_override_constants/margin_top = 24
 theme_override_constants/margin_right = 24
 theme_override_constants/margin_bottom = 24
 
-[node name="Cols" type="HBoxContainer" parent="Margin"]
+[node name="Cols" type="BoxContainer" parent="Margin"]
 layout_mode = 2
 theme_override_constants/separation = 24
 
@@ -113,6 +113,18 @@ text = "Offline-flagged imports allowed"
 unique_name_in_owner = true
 layout_mode = 2
 text = "Broadcast join code on LAN"
+
+
+[node name="InviteOnlyCheck" type="CheckBox" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Invite-only (not listed on LAN)"
+
+[node name="ValidateLabel" type="Label" parent="Margin/Cols/Right"]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 3
+text = ""
 
 [node name="HostButton" type="Button" parent="Margin/Cols/Right"]
 unique_name_in_owner = true
