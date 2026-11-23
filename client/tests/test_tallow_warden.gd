@@ -603,6 +603,78 @@ func test_non_practice_vault_still_grants_per_rule_7() -> void:
 	assert_eq(out.pending_riftstone, 4)
 	assert_gt(out.xp_tenths, 0)
 
+
+
+func test_rule_7_activity_tracks_received_input_frames() -> void:
+	var sim := _vault()
+	var pid_a: int = _pid(sim)
+	var pid_b: int = _add_at(sim, 36.0, 6.5)
+	sim.step()
+	var w := _warden(sim)
+	assert_not_null(w)
+	# One received frame from A, then silence. B keeps sending frames.
+	_hold_fire(sim, pid_a, 1)
+	_hold_fire(sim, pid_b, 1)
+	sim.step()
+	sim.hurt_enemy(w.id, 200, pid_a)
+	sim.hurt_enemy(w.id, 200, pid_b)
+	var window: int = LocalSim.NON_IDLE_WINDOW_TICKS
+	for i in range(window + 2):
+		_hold_fire(sim, pid_b, i + 2)
+		sim.step()
+		var pa := sim.get_player(pid_a)
+		var pb := sim.get_player(pid_b)
+		if pa != null:
+			pa.hp = maxi(pa.hp, 200)
+		if pb != null:
+			pb.hp = maxi(pb.hp, 200)
+	_hold_fire(sim, pid_b, window + 20)
+	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid_b)
+	sim.step()
+	assert_true(sim.boss_defeated())
+	assert_eq(sim.get_player(pid_a).pending_glint, 0)
+	assert_eq(sim.get_player(pid_a).pending_riftstone, 0)
+	assert_eq(sim.get_player(pid_b).pending_glint, 30)
+	assert_eq(sim.get_player(pid_b).pending_riftstone, 4)
+
+
+func test_boss_credit_survives_a_mid_fight_rejoin() -> void:
+	var sim := _vault()
+	var pid: int = _pid(sim)
+	# A partner stays in the arena so leaving does not reset the fight.
+	var partner: int = _add_at(sim, 36.0, 6.5)
+	sim.step()
+	var w := _warden(sim)
+	assert_not_null(w)
+	_hold_fire(sim, pid, 1)
+	_hold_fire(sim, partner, 1)
+	sim.step()
+	sim.hurt_enemy(w.id, 1000, pid)
+	sim.step()
+	assert_gt(int(sim._boss_damage_by.get(pid, 0)), 0)
+	sim.remove_player(pid)
+	sim.step()
+	var stay := sim.get_player(partner)
+	if stay != null:
+		stay.hp = maxi(stay.hp, 200)
+	assert_gt(int(sim._boss_damage_by.get(pid, 0)), 0, "mid-fight leave keeps credit")
+	assert_true(sim.add_player(pid, {"x": 36.0, "y": 6.0}))
+	sim.step()
+	var p := sim.get_player(pid)
+	p.x = 36.0
+	p.y = 6.0
+	p.prev_x = p.x
+	p.prev_y = p.y
+	_hold_fire(sim, pid, 2)
+	_hold_fire(sim, partner, 2)
+	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid)
+	sim.step()
+	assert_true(sim.boss_defeated())
+	assert_eq(sim.get_player(pid).pending_glint, 30)
+	assert_eq(sim.get_player(pid).pending_riftstone, 4)
+	assert_eq(sim._boss_damage_by.size(), 0)
+
+
 func _walk_east(sim: LocalSim, pid: int, steps: int, seq0: int, keep_alive: int = 0) -> void:
 	for i in range(steps):
 		if keep_alive != 0:
@@ -796,3 +868,32 @@ func test_n_peak_does_not_grow_after_the_arena_is_sealed() -> void:
 	assert_eq(sim.boss_n_peak(), 1, "n_peak is locked once the arena is sealed")
 	assert_eq(_warden(sim).max_hp, 5500)
 	assert_eq(_warden(sim).hp, hp)
+
+
+func test_same_tick_remove_then_readd_into_a_sealed_arena_lands_outside_the_door() -> void:
+	# place_player of a player already queued to leave this tick is a
+	# same-tick re-add. After the seal, that placement lands outside the
+	# doorway, the leave is cancelled, and n_peak and HP stay unchanged.
+	# A partner stays in the arena so leaving the room does not reset the fight.
+	var sim := _vault()
+	var pid: int = _pid(sim)
+	var partner: int = _add_at(sim, 36.0, 6.5)
+	sim.step()
+	sim.hurt_enemy(_warden(sim).id, 1, pid)
+	_keep_alive(sim, pid)
+	_keep_alive(sim, partner)
+	assert_true(sim.arena_sealed())
+	assert_eq(sim.boss_n_peak(), 2)
+	var max_hp: int = _warden(sim).max_hp
+	var hp: int = _warden(sim).hp
+	sim.remove_player(pid)
+	sim.place_player(pid, 40.0, 6.0)
+	assert_true(sim.player_ids().has(pid))
+	assert_true(_in_wick_kennels(sim.get_player(partner)))
+	_assert_sealed_placement_outside(sim, sim.get_player(pid), 2, max_hp, hp)
+	_keep_alive(sim, pid)
+	_keep_alive(sim, partner)
+	sim.step()
+	assert_true(sim.player_ids().has(pid), "the same-tick leave is cancelled")
+	assert_true(_in_wick_kennels(sim.get_player(partner)))
+	_assert_sealed_placement_outside(sim, sim.get_player(pid), 2, max_hp, hp)

@@ -907,7 +907,13 @@ func test_persistent_long_session_stays_bounded() -> void:
 	assert_lt(inst.sim.projectiles().size(), 50, "projectiles expire")
 	assert_lte(rec.admitted.size(), _host.players.size(), "admitted only holds lobby players")
 	assert_lte(rec.sim_ids.size(), _host.players.size())
-	assert_eq(inst.sim._skipped_ids.size(), 0, "no skipped id ranges in the instance")
+	# The allocator is a high-water mark; there is no per-id-ever set.
+	var names := {}
+	for item in inst.sim.get_property_list():
+		names[String(item.name)] = true
+	assert_false(names.has("_skipped_ids"))
+	assert_false(names.has("_player_id_set"), "no per-id-ever set")
+	assert_lte(inst.sim._ability_by_player.size(), inst.sim.player_count())
 	assert_lte(inst.sim.player_ids().size(), 1)
 
 
@@ -1632,3 +1638,45 @@ func test_rejoin_refuses_a_stash_id_the_host_never_issued() -> void:
 	_host.run_tick()
 	var back := _host._add_player(null, "local:real")
 	assert_eq(back.id, b)
+
+
+func test_rule_7_activity_tracks_received_input_frames_through_the_host() -> void:
+	_host = _new_host()
+	# A normal entrance (not the packed practice door) grants persistent rewards
+	# and routes the player into their own instance sim.
+	var portal := _open_portal()
+	var pid: int = _join_near_portal(portal)
+	_enter(pid, portal)
+	var hp := _host._find_player(pid)
+	assert_false(hp.instance.is_overworld())
+	assert_true(hp.instance.grants_persistent)
+	var sim: LocalSim = hp.instance.sim
+	var sid: int = hp.sim_id
+	var sp := sim.get_player(sid)
+	assert_not_null(sp)
+	sp.x = 36.0
+	sp.y = 6.0
+	sp.prev_x = sp.x
+	sp.prev_y = sp.y
+	_host.run_tick()
+	var wid: int = 0
+	for e in sim.snapshot().enemies:
+		if e.def_id == "tallow_warden":
+			wid = e.id
+			break
+	assert_gt(wid, 0, "Warden spawned")
+	# One received frame, then silence. seq 1 was the enter press.
+	_host.submit_local_input(pid, InputIntent.from_raw(2, 0.0, 0.0, 0.0, true))
+	_host.run_tick()
+	sim.hurt_enemy(wid, 200, sid)
+	var window: int = LocalSim.NON_IDLE_WINDOW_TICKS
+	for _i in range(window + 2):
+		_host.run_tick()
+		var p := sim.get_player(sid)
+		if p != null:
+			p.hp = maxi(p.hp, 200)
+	sim.hurt_enemy(wid, sim.get_enemy(wid).hp, sid)
+	_host.run_tick()
+	assert_true(sim.boss_defeated())
+	assert_eq(sim.get_player(sid).pending_glint, 0)
+	assert_eq(sim.get_player(sid).pending_riftstone, 0)

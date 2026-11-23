@@ -151,6 +151,8 @@ func test_sim_only_allies_are_not_host_players() -> void:
 	_host.apply_settings(_settings_with_max(2))
 	var a := _host.add_local_player()
 	_host.run_tick()
+	while _host.sim._next_id <= 2:
+		_host.sim.alloc_player_id()
 	_host.sim.place_ally(2, 1.0, 1.0, 50, 100)
 	var b := _host.add_local_player()
 	assert_ne(b, 2, "ally id is not reused")
@@ -576,3 +578,22 @@ func test_other_local_leave_before_entering_sim_rejoins_conservative() -> void:
 	var back := _host.add_local_player(null, token)
 	_host.run_tick()
 	_assert_conservative(back, "pre-sim rejoin")
+
+
+func test_rejoin_drops_an_unavailable_saved_id() -> void:
+	_host = _new_host()
+	var live := _host.add_local_player()
+	var other := _host.add_local_player()
+	_host.run_tick()
+	var token := _host.remove_local_player(other)
+	_host.run_tick()
+	_host._ability_stash["local:" + token]["id"] = live
+	var fresh := _host.add_local_player(null, token)
+	assert_ne(fresh, live)
+	assert_eq(_host.ability_stash_size(), 0, "unavailable saved entry dropped")
+	assert_false(_host._issued_player_ids.has(other), "unheld issued id pruned")
+	var live_token := _host.remove_local_player(live)
+	_host.run_tick()
+	var retry := _host.add_local_player(null, token)
+	assert_ne(retry, live, "old token cannot take the id after it becomes available")
+	assert_eq(_host.add_local_player(null, live_token), live, "the owner's own token still works")
