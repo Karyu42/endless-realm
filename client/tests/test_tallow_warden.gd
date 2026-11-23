@@ -868,3 +868,32 @@ func test_n_peak_does_not_grow_after_the_arena_is_sealed() -> void:
 	assert_eq(sim.boss_n_peak(), 1, "n_peak is locked once the arena is sealed")
 	assert_eq(_warden(sim).max_hp, 5500)
 	assert_eq(_warden(sim).hp, hp)
+
+
+func test_same_tick_remove_then_readd_into_a_sealed_arena_lands_outside_the_door() -> void:
+	# place_player of a player already queued to leave this tick is a
+	# same-tick re-add. After the seal, that placement lands outside the
+	# doorway, the leave is cancelled, and n_peak and HP stay unchanged.
+	# A partner stays in the arena so leaving the room does not reset the fight.
+	var sim := _vault()
+	var pid: int = _pid(sim)
+	var partner: int = _add_at(sim, 36.0, 6.5)
+	sim.step()
+	sim.hurt_enemy(_warden(sim).id, 1, pid)
+	_keep_alive(sim, pid)
+	_keep_alive(sim, partner)
+	assert_true(sim.arena_sealed())
+	assert_eq(sim.boss_n_peak(), 2)
+	var max_hp: int = _warden(sim).max_hp
+	var hp: int = _warden(sim).hp
+	sim.remove_player(pid)
+	sim.place_player(pid, 40.0, 6.0)
+	assert_true(sim.player_ids().has(pid))
+	assert_true(_in_wick_kennels(sim.get_player(partner)))
+	_assert_sealed_placement_outside(sim, sim.get_player(pid), 2, max_hp, hp)
+	_keep_alive(sim, pid)
+	_keep_alive(sim, partner)
+	sim.step()
+	assert_true(sim.player_ids().has(pid), "the same-tick leave is cancelled")
+	assert_true(_in_wick_kennels(sim.get_player(partner)))
+	_assert_sealed_placement_outside(sim, sim.get_player(pid), 2, max_hp, hp)
