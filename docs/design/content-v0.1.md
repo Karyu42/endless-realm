@@ -330,7 +330,7 @@ There are two ways in.
 - Opening uses one **Vault Sigil** and, when M > 1.00, the Riftstone deposit. They are taken in one transaction with the instance's creation (vision §6).
 - The Sigil's price (`150 × m(Lp)` Glint), tradeability, the `CONSUMED` tombstone and the fault refund are as in vision §5, §6 and §7.3.
 - **Source:** Sigils come only from the Hearth vendor in v0.1 (vision §5). Nothing drops them.
-- **Binding (content-level clarification, consistent with vision's "not tradeable"):** a Sigil is bound to the character who bought it. It can sit in that character's inventory or the buyer's stash, but it can't be traded, given away or moved to another character. Sigils stack to 10 per slot.
+- **Binding (content-level clarification, consistent with vision's "not tradeable"):** a Sigil is bound to the character who bought it. It can sit in that character's inventory or in the stash. A Sigil in the stash keeps `owner_character` = the buyer, and only the buyer can withdraw or use it, even though the stash is shared by the account. It can't be traded, given away or moved to another character. Sigils stack to 10 per slot.
 
 ---
 
