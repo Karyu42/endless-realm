@@ -44,6 +44,10 @@ These fill gaps in `vision.md` and don't change any of its formulas:
 - **Wilds enemies don't scale with n.** The Wilds aren't an instance and have open-world respawns instead.
 - **Scaled HP rounding:** max HP is computed in exact integer math and rounded half-up once, at spawn (or at the seal for the boss):
   `HP = (baseHP × m100(E) × s100(n) + 5000) div 10000`, where `m100(E) = 100 + 5 × (E − 1)` and `s100(n) = 100 + 60 × (n − 1)` for normal enemies, or `100 + 75 × (n − 1)` for the boss. In the Wilds, `s100 = 100`. Phase thresholds compare current HP against `max HP × threshold` in the same integer math. Example: Tallow Warden at E=10, n=8 → `(5500 × 145 × 625 + 5000) div 10000 = 49,844`.
+- **Fire on press (all weapons):** the first shot fires on the tick fire is pressed, if the weapon is off cooldown. The cooldown is `1 / (Tempo × (1 + tempoBonus))` seconds, counted from that shot, and it keeps running after release. Tapping can therefore never beat the fire rate. The exact rule is in §1.
+- **Vault Sigil binding:** a Sigil is bound to the character who bought it (§3.5). This is consistent with vision §5 "not tradeable" and doesn't change it. If the buyer is **Fallen** (hardcore) or **deleted**, every Sigil bound to them, in inventory or in the stash, is tombstoned in the same transaction. The reason is `CONSUMED` with detail `owner_fallen` or `owner_deleted`, so there is no refund and no unusable leftovers. A pointer to this rule goes into vision §5 the next time `vision.md` is edited.
+- **Hazard timing:** a hazard's `duration_ticks` does **not** include its telegraph. The telegraph runs first for `telegraph_ticks`, then the hazard is active for `duration_ticks` (details in §5).
+- **Spiral emits and defaults:** see `spiral` in §5.
 
 ---
 
@@ -51,7 +55,14 @@ These fill gaps in `vision.md` and don't change any of its formulas:
 
 Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vision §2. Stride and Tempo are fixed, with at most +10% from gear (D6). This section adds weapon patterns and the numbers vision leaves open. HP and Ward scale with `m(Le)` (vision §3.2a).
 
-**Fire timing:** each tick while fire is held, add `Tempo × (1 + tempoBonus) / 20` to a per-player accumulator. Fire one volley each time it reaches ≥ 1, then subtract 1. Reset it to `min(acc, 1)` when fire is released, so tapping never banks shots.
+**Fire timing (fire on press, all weapons):** each weapon tracks `next_ready` as a float64 sim time in seconds (tick × 0.05), starting at 0. Let `cd = 1 / (Tempo × (1 + tempoBonus))`. On every tick where `fire_held` is true and `now ≥ next_ready − 1e-9`, one volley fires:
+- If fire has been held on every tick since the previous volley (one continuous hold), set `next_ready = next_ready + cd`. This keeps the long-run rate exact even though `cd` isn't a whole number of ticks.
+- Otherwise (the first volley after a press), set `next_ready = now + cd`.
+- Releasing fire never resets `next_ready`. The cooldown keeps running, so a re-press fires only once `now ≥ next_ready`.
+
+Golden values:
+- **Hold from a press on tick 0:** a Driftrunner (3.5/s, cd ≈ 0.2857 s) fires on ticks 0, 6, 12, 18, 23 and 29 …. A Thornguard (2.0/s) fires on ticks 0, 10, 20 ….
+- **Tap:** if a Thornguard presses on tick 0, releases on tick 1 and presses again on tick 3, the volleys are tick 0 and then tick 10 (held from tick 3). Tapping every other tick fires no faster than holding.
 
 ### 1.1 Thornguard (close-range tank)
 | Stat | Value |
@@ -209,7 +220,7 @@ With vision §6.1 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 
 **Gloomlantern Sentinel** (slow lantern-headed golem)
 - AI: walks toward the target at 1.2 tiles/s and stops at 5 tiles. Aggro radius 10.
-- It alternates two attacks with a 1.25 s gap between them:
+- It alternates two attacks with a 1.25 s gap between them. The alternation and the gap are **`enemies.json` AI steps**, not pattern fields: `fire lantern_ring` → `wait 25` → `fire lantern_fan` → `wait 25` → repeat, with `approach` (stop at 5 tiles) running in parallel. The first `fire` is 25 ticks after aggro.
   - `lantern_ring`: 12 bullets in a ring (30° apart), speed 5, range 10, size M, 18 damage. Each new ring is rotated +15° from the last one.
   - `lantern_fan`: 5 bullets in a fan with 60° total spread, aimed, speed 8, range 8, size M, 20 damage.
 
@@ -262,6 +273,7 @@ These enemies spawn at the instance's level E and use the normal-enemy `n` scali
 - AI: keeps 5 tiles away and side-steps 2 tiles every 3 s.
 - `acolyte_cross`: 4 bullets in a "+" shape (fixed 0°, 90°, 180°, 270°), then 0.5 s later 4 more in an "×" (45°, 135°, 225°, 315°). Speed 5, range 8, size M. Every 2.4 s.
 - Every third cycle it fires `acolyte_aim` instead: 1 aimed bullet, speed 9, range 10, size M.
+- **AI steps (`enemies.json`):** a `sequence` with a cycle counter. Steps: `keep_range 5` (parallel) → `wait 48` → `fire acolyte_cross` → `wait 48` → `fire acolyte_cross` → `wait 48` → `fire acolyte_aim` → repeat. A `sidestep 2 tiles` step runs on its own 60-tick timer (3 s). The first `fire` is 48 ticks (2.4 s) after aggro, and patterns use `trigger: ai_step`, not `timer`.
 
 **Wickhound** (lean candle-hound with a burning wick tail)
 - AI: chases at 6 tiles/s and pounces within 2 tiles: a 0.3 s windup, then a 0.25 s lunge at 12 tiles/s. It pauses 1.0 s after each lunge.
@@ -306,7 +318,7 @@ The thresholds are fractions of the scaled max HP. A transition happens on the f
 
 **Phase 2, "Guttering" (66% to 33%)**: a 6.0 s loop.
 - `warden_spiral` (0–4 s): a 4-arm spiral. Arms are 90° apart and emit 1 bullet each every 0.1 s, rotating +9° per emit. Speed 4, range 12, size S, 20 damage.
-- `warden_pools`: at the start of each loop, one telegraphed wax pool under each of up to 3 random living players in the arena. Each pool has radius 1.5 tiles, a 1.0 s telegraph, and lasts 4.0 s. A player standing in it takes 15 damage every 0.5 s and moves at −30% Stride. This is a debuff, not a stat change, so the D6 cap doesn't apply.
+- `warden_pools`: at the start of each loop, one telegraphed wax pool under each of up to 3 random living players in the arena. Each pool has radius 1.5 tiles and a 1.0 s telegraph, then stays active for 4.0 s (5.0 s in total; the 4.0 s does not include the telegraph). A player standing in it takes 15 damage every 0.5 s and moves at −30% Stride. This is a debuff, not a stat change, so the D6 cap doesn't apply.
 - `warden_lunge_fan` (4–6 s): 2 fans 1.0 s apart. Each fan is 5 bullets with 50° total spread, aimed, speed 9, range 13.5, size L, 30 damage.
 
 **Transition at 33%, "Last Wick"** (3.0 s): the boss can't be damaged. It walks to the arena center and anchors there, and its crown flame turns white.
@@ -330,7 +342,7 @@ There are two ways in.
 - Opening uses one **Vault Sigil** and, when M > 1.00, the Riftstone deposit. They are taken in one transaction with the instance's creation (vision §6).
 - The Sigil's price (`150 × m(Lp)` Glint), tradeability, the `CONSUMED` tombstone and the fault refund are as in vision §5, §6 and §7.3.
 - **Source:** Sigils come only from the Hearth vendor in v0.1 (vision §5). Nothing drops them.
-- **Binding (content-level clarification, consistent with vision's "not tradeable"):** a Sigil is bound to the character who bought it. It can sit in that character's inventory or in the stash. A Sigil in the stash keeps `owner_character` = the buyer, and only the buyer can withdraw or use it, even though the stash is shared by the account. It can't be traded, given away or moved to another character. Sigils stack to 10 per slot.
+- **Binding (content-level clarification, consistent with vision's "not tradeable"):** a Sigil is bound to the character who bought it. It can sit in that character's inventory or in the stash. A Sigil in the stash keeps `owner_character` = the buyer, and only the buyer can withdraw or use it, even though the stash is shared by the account. It can't be traded, given away or moved to another character. Sigils stack to 10 per slot. If the buyer is Fallen or deleted, their bound Sigils are tombstoned `CONSUMED` (§0.3).
 
 ---
 
@@ -430,6 +442,11 @@ data/
   schema/*.schema.json
 ```
 
+**Schemas:** `validate-data.py` looks up `data/schema/<file stem>.schema.json` first, then `data/schema/<parent dir>.schema.json`. So:
+- `data/dungeons/hollowmere_vault.json` is validated by **`data/schema/dungeons.schema.json`**. That one schema covers every future dungeon file in `data/dungeons/`.
+- Every other top-level file uses its own `<stem>.schema.json` (`scaling`, `classes`, `weapons`, `abilities`, `patterns`, `enemies`, `loot`, `wilds`).
+- A data file with no matching schema, or a schema no file uses, fails or warns in `data-validate`.
+
 **patterns.json**
 
 *Pattern types.* Every bullet type flies straight at constant speed, so it stays closed-form (`stack.md`). The server broadcasts one `PatternSpawn` per emission. A `hazard` is broadcast as its own spawn, not as bullets.
@@ -438,10 +455,10 @@ data/
 |---|---|---|
 | `fan` | N bullets spread evenly across a total arc. N = 1 is a single shot. | `count`, `spread_deg` |
 | `ring` | N bullets 360°/N apart | `count`, `skip` (optional: `{consecutive, start: int or "rng"}`) |
-| `spiral` | K arms that each emit one bullet every interval, rotating as they go | `arms`, `emit_interval_ticks`, `rotate_per_emit_deg`, `duration_ticks` (0 = until the phase ends) |
+| `spiral` | K arms that each emit one bullet every interval, rotating as they go. Emits happen at ticks 0, e, 2e … **strictly less than** `duration_ticks` (exclusive), so `wisp_spiral` (e 4, duration 40) gives 10 emits. **Defaults:** `aim: "aimed"` (arm 0 points at the target on emit 0; the other arms are offset by 360°/K) and `start_angle_deg: 0`. `matron_tolling` and `warden_spiral` use these defaults | `arms`, `emit_interval_ticks`, `rotate_per_emit_deg`, `duration_ticks` (0 = until the phase ends) |
 | `burst` | Repeats a child pattern N times | `repeats`, `interval_ticks`, `reaim` (bool), `angle_offset_per_repeat_deg`, `child` (inline pattern) |
 | `line_drop` | While the source moves, emits bullets at angles relative to its heading | `emit_interval_ticks`, `emits`, `angles_rel_heading_deg[]` |
-| `hazard` | A ground area that hurts and/or slows players inside it | `shape` (`circle`), `radius`, `placement` (`under_targets`), `max_targets`, `telegraph_ticks`, `duration_ticks`, `tick_interval_ticks`, `damage_key`, `slow_pct` |
+| `hazard` | A ground area that hurts and/or slows players inside it. Each pool is **placed at the target's position on the spawn tick**, when the telegraph starts, and doesn't move. The telegraph runs `telegraph_ticks` with no effect, then the pool is active for `duration_ticks`. Damage applies on active ticks 0, t, 2t … < duration. `warden_pools`: 20-tick (1.0 s) telegraph, then 80 ticks (4.0 s) active, 5.0 s in total, so a player who stays in it takes at most 8 hits | `shape` (`circle`), `radius`, `placement` (`under_targets`), `max_targets`, `telegraph_ticks`, `duration_ticks`, `tick_interval_ticks`, `damage_key`, `slow_pct` |
 
 *Common fields* (all bullet types):
 - `speed`, `range`, `size`, `damage_key`
@@ -576,12 +593,19 @@ The charges, dives, pounces and the Matron's summon are AI actions with contact 
 }
 ```
 
-**CI checks worth adding:**
-- The schema validates.
-- Every `pattern` reference resolves, and every pattern has a `type` from the table above with its required fields.
-- Every `*_ticks` value is an integer.
-- Each tier row's weights sum to 100.
-- A golden fixture for each pattern (seed plus tick to positions) passes on both Go and GDScript (tech stack).
+**Where each check runs:**
+
+| Check | Where |
+|---|---|
+| Every file parses, each schema passes the metaschema check, and each file validates against its schema | `validate-data.py` (CI `data-validate`, first step) |
+| Every pattern has a `type` from the table, with that type's required fields. Done with `oneOf`/`if-then` on `type` in `patterns.schema.json`; `hazard` doesn't require `speed`, `range` or `size` | JSON Schema (`patterns.schema.json`) |
+| Every `*_ticks` value is a non-negative integer; enums (`aim`, `trigger`, `size`, `rank`) are valid | JSON Schema |
+| Every `pattern` reference (in AI steps, phase loops and `child`) resolves to an id in `patterns.json` | `make data-validate` script |
+| Every pattern's `damage_key` resolves to a key in the `base.damage` map of **every** enemy that uses that pattern (hazards included). An unused `damage_key` on an enemy is a warning | `make data-validate` script |
+| Each tier row's weights, `slot_weights` and `weapon_class_weights` (own + 2 × other_each) sum to 100 | `make data-validate` script |
+| A golden fixture for each pattern (seed plus tick to positions) passes on both Go and GDScript | CI `fixtures-parity` job |
+
+The `make data-validate` target is added by the data PR. Until then, CI skips it with a notice (`ci.yml`).
 
 ---
 
