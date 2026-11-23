@@ -81,6 +81,8 @@ message ListInstances {}
 message InstanceInfo {
   uint64 instance_id = 1;
   uint32 m100 = 2;
+  // Unset (0) in InstanceList. Seeds are only sent on Welcome,
+  // OpenPortalOk, and JoinInstanceOk for the caller's own instance.
   uint64 seed = 3;
   uint32 player_count = 4;
   bool is_default = 5;

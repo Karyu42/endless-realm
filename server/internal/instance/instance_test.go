@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -318,5 +319,18 @@ func waitSnap(t *testing.T, ctx context.Context, snaps <-chan Snapshot, want uin
 		}
 	case <-ctx.Done():
 		t.Fatalf("cancelled waiting for tick %d: %v", want, ctx.Err())
+	}
+}
+
+func TestValidateM100U32Sentinel(t *testing.T) {
+	for _, m := range []uint32{0, 45, 49, 51, 151, 155, 1 << 31, ^uint32(0)} {
+		if err := ValidateM100U32(m); !errors.Is(err, ErrInvalidMultiplier) {
+			t.Fatalf("m100=%d: %v", m, err)
+		}
+	}
+	for _, m := range []uint32{50, 55, 100, 150} {
+		if err := ValidateM100U32(m); err != nil {
+			t.Fatalf("m100=%d: %v", m, err)
+		}
 	}
 }

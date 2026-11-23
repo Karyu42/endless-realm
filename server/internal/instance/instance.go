@@ -4,6 +4,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -31,10 +32,13 @@ const (
 	ProtocolVersion = 1
 
 	// DefaultInstanceID is the process-default instance the bot/smoke path
-	// and a new session start in. Portal instances use later ids.
+	// and a new session start in.
 	DefaultInstanceID = uint64(1)
-	// MaxParty is the vision §6.1 cap for a portal instance (not the default).
-	MaxParty = 8
+	// DefaultMaxPlayers is the lobby max-player default (GD spec: 1–50, default 50).
+	// Portal instances cap at the lobby's configured max. Tests use a smaller value.
+	DefaultMaxPlayers = 50
+	MinMaxPlayers     = 1
+	MaxMaxPlayers     = 50
 
 	// MaxCatchUpTicks is the most Steps Run will take after falling behind.
 	// Further overdue ticks are skipped so a long stall does not replay
@@ -98,13 +102,24 @@ func New(seed uint64, m100 int, clk clock.Clock) (*Instance, error) {
 	}, nil
 }
 
+// ErrInvalidMultiplier is the sentinel wrapped by multiplier validators.
+var ErrInvalidMultiplier = errors.New("invalid multiplier")
+
+// ValidateMaxPlayers accepts a lobby max-player count.
+func ValidateMaxPlayers(n int) error {
+	if n < MinMaxPlayers || n > MaxMaxPlayers {
+		return fmt.Errorf("max players %d is outside [%d, %d]", n, MinMaxPlayers, MaxMaxPlayers)
+	}
+	return nil
+}
+
 // ValidateM100 accepts a multiplier in hundredths on the v0.1 grid.
 func ValidateM100(m100 int) error {
 	if m100 < MinM100 || m100 > MaxM100 {
-		return fmt.Errorf("level multiplier %d hundredths is outside [%d, %d]", m100, MinM100, MaxM100)
+		return fmt.Errorf("%w: level multiplier %d hundredths is outside [%d, %d]", ErrInvalidMultiplier, m100, MinM100, MaxM100)
 	}
 	if m100%M100Step != 0 {
-		return fmt.Errorf("level multiplier %d hundredths is not a multiple of %d (0.05 steps)", m100, M100Step)
+		return fmt.Errorf("%w: level multiplier %d hundredths is not a multiple of %d (0.05 steps)", ErrInvalidMultiplier, m100, M100Step)
 	}
 	return nil
 }
@@ -113,7 +128,7 @@ func ValidateM100(m100 int) error {
 // (or above MaxM100) are rejected without overflowing a 32-bit int.
 func ValidateM100U32(m100 uint32) error {
 	if m100 > uint32(MaxM100) {
-		return fmt.Errorf("level multiplier %d hundredths is outside [%d, %d]", m100, MinM100, MaxM100)
+		return fmt.Errorf("%w: level multiplier %d hundredths is outside [%d, %d]", ErrInvalidMultiplier, m100, MinM100, MaxM100)
 	}
 	return ValidateM100(int(m100))
 }
@@ -124,12 +139,12 @@ func ValidateM100U32(m100 uint32) error {
 // rounded. NaN and ±Inf are rejected.
 func MultiplierFromFloat(m float64) (int, error) {
 	if math.IsNaN(m) || math.IsInf(m, 0) {
-		return 0, fmt.Errorf("level multiplier %v is not a finite number", m)
+		return 0, fmt.Errorf("%w: level multiplier %v is not a finite number", ErrInvalidMultiplier, m)
 	}
 	scaled := m * 100
 	rounded := math.Round(scaled)
 	if math.Abs(scaled-rounded) > hundredthsEps {
-		return 0, fmt.Errorf("level multiplier %g is not a whole number of hundredths", m)
+		return 0, fmt.Errorf("%w: level multiplier %g is not a whole number of hundredths", ErrInvalidMultiplier, m)
 	}
 	m100 := int(rounded)
 	if err := ValidateM100(m100); err != nil {
@@ -197,19 +212,6 @@ func (i *Instance) MultiplierHundredths() int {
 // Multiplier is M100 / 100, for display and the Welcome float field.
 func (i *Instance) Multiplier() float64 {
 	return float64(i.m100) / 100.0
-}
-
-// Clock is the clock this instance ticks on. The hub uses it for new rooms.
-func (i *Instance) Clock() clock.Clock {
-	return i.clk
-}
-
-// RemovePlayer drops queued input and applied seq for a player who left.
-func (i *Instance) RemovePlayer(id uint32) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	delete(i.inputs, id)
-	delete(i.applied, id)
 }
 
 func (i *Instance) Tick() uint32 {

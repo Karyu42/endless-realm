@@ -15,16 +15,19 @@ const (
 	DefaultListenAddr           = ":8080"
 	DefaultSeed                 = uint64(1)
 	DefaultMultiplierHundredths = 100
+	DefaultMaxPlayers           = instance.DefaultMaxPlayers
 
 	EnvListenAddr = "ER_LISTEN_ADDR"
 	EnvSeed       = "ER_SEED"
 	EnvMultiplier = "ER_MULTIPLIER"
+	EnvMaxPlayers = "ER_MAX_PLAYERS"
 )
 
 type Config struct {
 	ListenAddr           string
 	Seed                 uint64
 	MultiplierHundredths int
+	MaxPlayers           int
 	Healthcheck          bool
 }
 
@@ -33,6 +36,7 @@ func Default() Config {
 		ListenAddr:           DefaultListenAddr,
 		Seed:                 DefaultSeed,
 		MultiplierHundredths: DefaultMultiplierHundredths,
+		MaxPlayers:           DefaultMaxPlayers,
 	}
 }
 
@@ -57,6 +61,16 @@ func FromEnv() (Config, error) {
 		}
 		cfg.MultiplierHundredths = m100
 	}
+	if v := os.Getenv(EnvMaxPlayers); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", EnvMaxPlayers, err)
+		}
+		if err := instance.ValidateMaxPlayers(n); err != nil {
+			return Config{}, fmt.Errorf("%s: %w", EnvMaxPlayers, err)
+		}
+		cfg.MaxPlayers = n
+	}
 	return cfg, nil
 }
 
@@ -71,6 +85,8 @@ func Parse(args []string) (Config, error) {
 	seed := fs.Uint64("seed", cfg.Seed, "instance seed (env "+EnvSeed+")")
 	mult := fs.String("multiplier", instance.FormatMultiplier(cfg.MultiplierHundredths),
 		"instance level multiplier as a decimal (1.05) or hundredths (105); v0.1 is [0.5, 1.5] on 0.05 steps (env "+EnvMultiplier+")")
+	maxPlayers := fs.Int("max-players", cfg.MaxPlayers,
+		"lobby max players, 1–50, default 50 (env "+EnvMaxPlayers+"); the Godot host enforces the cap")
 	healthcheck := fs.Bool("healthcheck", false, "probe /healthz on the listen address and exit (for compose/distroless HEALTHCHECK)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -79,9 +95,13 @@ func Parse(args []string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if err := instance.ValidateMaxPlayers(*maxPlayers); err != nil {
+		return Config{}, fmt.Errorf("-max-players: %w", err)
+	}
 	cfg.ListenAddr = *listen
 	cfg.Seed = *seed
 	cfg.MultiplierHundredths = m100
+	cfg.MaxPlayers = *maxPlayers
 	cfg.Healthcheck = *healthcheck
 	return cfg, nil
 }

@@ -629,12 +629,14 @@ func (*ListInstances) Descriptor() ([]byte, []int) {
 }
 
 type InstanceInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId    uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	M100          uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
-	Seed          uint64                 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
-	PlayerCount   uint32                 `protobuf:"varint,4,opt,name=player_count,json=playerCount,proto3" json:"player_count,omitempty"`
-	IsDefault     bool                   `protobuf:"varint,5,opt,name=is_default,json=isDefault,proto3" json:"is_default,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId uint64                 `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	M100       uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
+	// Unset (0) in InstanceList. Seeds are only sent on Welcome,
+	// OpenPortalOk, and JoinInstanceOk for the caller's own instance.
+	Seed          uint64 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
+	PlayerCount   uint32 `protobuf:"varint,4,opt,name=player_count,json=playerCount,proto3" json:"player_count,omitempty"`
+	IsDefault     bool   `protobuf:"varint,5,opt,name=is_default,json=isDefault,proto3" json:"is_default,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

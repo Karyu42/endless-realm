@@ -16,8 +16,8 @@ Authoritative Go game server (protocol v1). Stack: [`docs/tech/stack.md`](../doc
     ├── cmd/bot/                # standalone smoke/soak WebSocket client
     ├── internal/bot/           # bot client + CI flag contract
     ├── internal/clock/         # injectable clock (real + fake)
-    ├── internal/config/        # --listen, --seed, --multiplier / ER_* env
-    ├── internal/instance/      # one in-process room, locked multiplier, 20 Hz tick
+    ├── internal/config/        # --listen, --seed, --multiplier, --max-players / ER_* env
+    ├── internal/instance/      # default test-harness room, locked multiplier, 20 Hz tick
     ├── internal/net/           # /healthz, /metrics, and /ws
     └── internal/protocol/v1/   # generated Go (committed)
 ```
@@ -54,6 +54,7 @@ Flags and env (env is the default; flags override):
 - `--listen` / `ER_LISTEN_ADDR` (default `:8080`)
 - `--seed` / `ER_SEED` (default `1`)
 - `--multiplier` / `ER_MULTIPLIER` — a decimal (`1.05`, `1.0`) or an integer. Integers **under 10** are decimals (`1` means 1.00); integers **≥ 10** are hundredths (`105` means 1.05). Decimals must already be whole hundredths (within float tolerance); `1.053` is rejected, not rounded. Then `50 ≤ M100 ≤ 150` and `M100 % 5 == 0` (0.05 steps in `[0.5, 1.5]`, per the design doc). The instance stores `M100`. Locked at process start.
+- `--max-players` / `ER_MAX_PLAYERS` — lobby max players (default `50`, accepted range `1–50`). Recorded for the contract; the Godot host enforces the cap.
 - `--healthcheck` — probe `/healthz` on the listen address and exit (compose HEALTHCHECK)
 
 Compose binds Postgres to `127.0.0.1:5432` and the game server to `127.0.0.1:8080`. The Postgres volume is mounted at `/var/lib/postgresql` (required for Postgres 18+ images). If you already ran compose when the volume was mounted at `/var/lib/postgresql/data`, delete the stale volume once with `docker compose down -v` before `make dev` or `make smoke`. The server does not connect to Postgres yet.
@@ -93,15 +94,11 @@ The bot exits non-zero on dial failure, handshake failure (`Reject` or missing `
 
 ## Portal API (protocol v1, additive)
 
-After the Hello/Welcome handshake, a client may open, list and join instances over the same WebSocket. The handshake version stays **1**; new oneof members are ignored by the existing bot, which remains on the process-default instance (`instance_id = 1`).
+The handshake version stays **1**. New Welcome fields (`instance_id`, `m100`) and new oneof members (`OpenPortal`, `JoinInstance`, `LeaveInstance`, `ListInstances`, and the matching server replies plus `Error` / `ErrorCode`) are additive so the existing bot keeps working.
 
-- `OpenPortal { uint32 m100 }` — m100 is whole hundredths on the wire (never a float). The server accepts `50 ≤ m100 ≤ 150` and `m100 % 5 == 0`, otherwise it replies with `Error { code = INVALID_MULTIPLIER }` and creates nothing. On success it returns `OpenPortalOk { instance_id, m100, seed }`, locks M, and moves the opener into the new instance.
-- `JoinInstance { instance_id }` / `LeaveInstance` — join a listed instance, or return to the default instance. A session is in at most one instance; opening or joining a second portal is `ALREADY_IN_INSTANCE`. A player may only have one open portal (`OPEN_PORTAL_LIMIT`). There is no API to change a locked multiplier.
-- `ListInstances` — default instance plus open portals (`is_default`, `m100`, `seed`, `player_count`). Portal instances cap at 8 players (`INSTANCE_FULL`).
+The Go process is a **test harness** (smoke, soak, `/metrics`). It keeps the process-default instance (`instance_id = 1`) for that path. It validates `OpenPortal { uint32 m100 }` (`50 ≤ m100 ≤ 150` and `m100 % 5 == 0`) and rejects anything else with `Error { code = INVALID_MULTIPLIER }` without creating a portal. Mapping uses a sentinel (`errors.Is(ErrInvalidMultiplier)`), not substring matching. Valid portal commands are not executed here: portal runtime (open/join/leave/list, party cap, instance lifetime) will be implemented in the Godot host.
 
-Welcome also carries `instance_id` and `m100` (the display `float multiplier` remains for older clients).
-
-See the PR description for design gaps (auth, Vault Sigil, deposit, join floor, lifetimes, cooldown) that are specified in `docs/design/vision.md` §6 but not implemented here.
+`ListInstances` (when implemented by the host) must not include instance seeds. Seeds are only sent on `Welcome` / `OpenPortalOk` / `JoinInstanceOk` for the caller's own instance. The lobby cap is `1–50` players, default `50` (`--max-players` / `ER_MAX_PLAYERS`).
 
 ## Client connection (including Android)
 
