@@ -4,10 +4,10 @@ Status: early spike for stack decision 2b (player-hosted lobbies run by the
 Godot game itself, one GDScript sim shared with solo, Go kept as a test
 harness). Question: can a GDScript host hold 50 players at 20 Hz?
 
-**Answer on this box: yes.** At 50 clients the host tick is 10.0 ms p50 and
+**Answer on this box: yes.** At 50 clients the host tick is 10.2 ms p50 and
 16.5 ms p99 against a 50 ms budget, with 0 skipped ticks over 60 s and about
-21% of one core. That is roughly 3x headroom at p99. 100 clients still hold
-20 Hz (27.6 ms p99).
+22% of one core. That is roughly 3x headroom at p99. 100 clients (test-only
+override) still hold 20 Hz (28.1 ms p99).
 
 ## What runs
 
@@ -24,10 +24,10 @@ harness). Question: can a GDScript host hold 50 players at 20 Hz?
   - Each player is driven by the real `LocalSim` (movement, bounds, the
     Tempo fire rule and player shots), stepped through `InputIntent` like
     solo. Player shots are tested against the enemies.
-  - Enemies are a **stand-in** (`HostStandinBulletField`), because main has
-    no enemies or patterns yet (PR #16 adds the real ones). It has 20
+  - Enemies are a **stand-in** (`HostStandinBulletField`) with 20
     emitters, each firing a 12-bullet ring every 12 ticks at 6 tiles/s with a
-    2.5 s life.
+    2.5 s life. The real enemy/pattern rules are in `client/src/core`;
+    switching the host to run them is a follow-up.
   - Bullets are closed-form: each ring is rebuilt from (seed, emitter,
     spawn_tick) with seeded PCG32 (Godot's `RandomNumberGenerator`).
   - There are about 800–940 live bullets, each hit-checked every tick with
@@ -62,11 +62,33 @@ Run it:
 
 ```
 make loadtest-godot                                   # 8, 25, 50 clients, 60 s each
-make loadtest-godot LOADTEST_CLIENTS=100 LOADTEST_DURATION=30
+# 100 is test-only: the script supplies --loadtest-unsafe-max-players 100.
+make loadtest-godot LOADTEST_CLIENTS=100 LOADTEST_DURATION=60
 python3 tools/loadtest/godot_host_loadtest.py --clients 50 --emitters 40 --duration 30
 ```
 
 Results land in `loadtest-results/results.{json,md}` (git-ignored).
+The script exits nonzero if the bot fails, any ticks are skipped, or tick
+p99 exceeds 40 ms. Override the fail gates explicitly with
+`--max-skipped-ticks` / `--max-p99-ms` (Make: `LOADTEST_MAX_SKIPPED_TICKS` /
+`LOADTEST_MAX_P99_MS`).
+
+## Limits
+
+Real lobbies use `--max-players N` or `ER_MAX_PLAYERS=N`, integer 1–50,
+default 50. Invalid values exit nonzero; they are never clamped. The flag
+wins over the environment. A full lobby replies `Error INSTANCE_FULL` and
+closes the extra connection. The 100-client run is **test-only**: the script
+passes `--loadtest-unsafe-max-players 100` (which prints a warning). Never use
+this override for real lobbies. The host keeps `max_players + 8` connection
+slots (handshakes / spectator slack).
+
+Connection limits are named constants in `LobbyHost`: a per-tick incoming
+message budget, dropping excess and closing sustained excess, a rate limit
+on Error replies, a five-second Hello timeout, and a total connection cap.
+GUT tests cover each, including keeping observer snapshots flowing. Tests
+inject a fake clock into the host for deadlines and timeouts; no wall clock
+is read by the sim.
 
 ## Box
 
@@ -79,19 +101,19 @@ core.
 
 ## Results (2026-11-23)
 
-Main curve: 60 s per point, 20 emitters.
+Main curve: 60 s per point, 20 emitters. The 50 and 100 rows were re-run with the player cap and connection limits in place; the 8 and 25 rows are from the previous head (same sim and codec).
 
 | clients | live bullets (avg) | tick p50 / p95 / p99 / max (ms) | net-in / sim / encode / send p50 (ms) | achieved Hz | skipped ticks | snapshot B/client/s (wire stub) | projected full-state B/client/s | host CPU % (of one core) | host RSS MiB (max) | bot ok |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 8 | 942 | 3.11 / 4.79 / 5.34 / 11.90 | 0.84 / 1.33 / 0.85 / 0.09 | 20.02 | 0 | 1,202 | 4,708 | 7.1 | 130.1 | yes |
 | 25 | 890 | 5.87 / 8.89 / 9.95 / 30.49 | 2.19 / 1.56 / 1.89 / 0.23 | 20.02 | 0 | 3,571 | 12,842 | 13.1 | 130.3 | yes |
-| 50 | 806 | 10.02 / 14.08 / 16.45 / 44.46 | 4.30 / 1.90 / 3.33 / 0.50 | 20.01 | 0 | 7,041 | 24,818 | 21.3 | 130.2 | yes |
+| 50 | 821 | 10.22 / 14.69 / 16.48 / 20.94 | 4.39 / 2.12 / 3.20 / 0.48 | 20.01 | 0 | 7,034 | 24,812 | 22.2 | 131.7 | yes |
+| 100 (test-only override) | 704 | 18.01 / 25.71 / 28.11 / 47.60 | 7.63 / 3.13 / 6.11 / 1.03 | 20.01 | 0 | 13,955 | 48,738 | 37.6 | 132.0 | yes |
 
-Headroom points: 30 s each.
+Headroom point: 30 s, from the previous head.
 
 | clients | emitters | live bullets (avg) | tick p50 / p95 / p99 / max (ms) | net-in / sim / encode / send p50 (ms) | achieved Hz | skipped ticks | projected full-state B/client/s | host CPU % | host RSS MiB |
 |---|---|---|---|---|---|---|---|---|---|
-| 100 | 20 | 674 | 18.00 / 23.07 / 27.57 / 46.51 | 7.77 / 2.65 / 6.36 / 1.05 | 20.03 | 0 | 48,654 | 34.8 | 130.4 |
 | 50 | 40 | 1598 | 11.42 / 15.57 / 17.84 / 44.18 | 4.37 / 3.13 / 3.35 / 0.49 | 20.03 | 0 | 25,574 | 23.5 | 130.1 |
 
 Notes:
@@ -128,8 +150,8 @@ weaker host (a phone) needs room, the first levers are in this order:
 - **Phone and listen-server hosting:** a host on a phone, and a listen
   server rendering at the same time. The stack proposal caps phone hosts at
   8 and needs its own APK test.
-- **Real enemies and rules:** the real enemy/pattern rules (PR #16), group
-  HP scaling, and lag-compensation rewind.
+- **Real enemies and rules:** the host still uses the stand-in field, not
+  the shared enemy/pattern rules. No group HP scaling or rewind yet.
 - **Real networks:** real network latency, loss, and TCP head-of-line
   blocking. Everything here ran on loopback.
 - **godobuf names:** godobuf v0.7.0 output does not compile on Godot 4.7.2
@@ -140,5 +162,5 @@ weaker host (a phone) needs room, the first levers are in this order:
   names in `proto/v1`, which is wire-compatible.
 - **Codegen check:** `make proto` / proto-codegen-check does not regenerate
   the GDScript codecs yet. Regenerate them with
-  `tools/loadtest/gen-gdscript-proto.sh` (pinned godobuf v0.7.0,
+  `tools/proto/gen-gdscript-proto.sh` (pinned godobuf v0.7.0,
   sha256-checked).

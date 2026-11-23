@@ -76,6 +76,9 @@ def run_one(args, clients):
                 "--host", "--port", str(port), "--expect-clients", str(clients),
                 "--emitters", str(args.emitters), "--exit-when-empty",
                 "--run-seconds", str(args.duration + 60)]
+    # This override is only used by this load-test driver, never normal lobbies.
+    if clients > 50:
+        host_cmd.extend(["--loadtest-unsafe-max-players", str(clients)])
     host = subprocess.Popen(host_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     lines = []
     ready = threading.Event()
@@ -158,6 +161,8 @@ def main():
     ap.add_argument("--clients", default="8,25,50")
     ap.add_argument("--duration", type=int, default=60, help="bot -duration in seconds per run")
     ap.add_argument("--emitters", type=int, default=20)
+    ap.add_argument("--max-p99-ms", type=float, default=40, help="fail if host tick p99 exceeds this many ms")
+    ap.add_argument("--max-skipped-ticks", type=int, default=0, help="fail if host skips more ticks than this")
     ap.add_argument("--godot", default=os.environ.get("GODOT", "godot"))
     ap.add_argument("--bot", default=os.path.join(ROOT, ".tools", "bin", "er-bot-loadtest"))
     ap.add_argument("--out", default=os.path.join(ROOT, "loadtest-results"))
@@ -187,7 +192,16 @@ def main():
         f.write(md + "\n")
     print(json.dumps(info))
     print(md)
-    if any(r["bot_exit"] != 0 for r in results):
+    failures = []
+    for r in results:
+        if r["bot_exit"] != 0:
+            failures.append(f"{r['clients']} clients: bot exit {r['bot_exit']}")
+        if r["skipped_ticks_total"] > args.max_skipped_ticks:
+            failures.append(f"{r['clients']} clients: skipped {r['skipped_ticks_total']} ticks (limit {args.max_skipped_ticks})")
+        if r["tick_us"]["p99"] / 1000 > args.max_p99_ms:
+            failures.append(f"{r['clients']} clients: tick p99 {ms(r['tick_us']['p99'])} ms (limit {args.max_p99_ms} ms)")
+    if failures:
+        print("LOADTEST FAILED: " + "; ".join(failures), file=sys.stderr)
         sys.exit(1)
 
 

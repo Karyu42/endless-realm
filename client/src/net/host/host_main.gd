@@ -6,12 +6,19 @@ extends SceneTree
 ##   --port N               listen port (default 8090; 0 = any free port)
 ##   --bind ADDR            bind address (default 127.0.0.1)
 ##   --seed N               instance seed sent in Welcome (default 1, matches the bot's -seed)
+##   --max-players N        lobby player cap, 1-50, default 50 (env ER_MAX_PLAYERS; the flag wins).
+##                          Out-of-range or non-integer values exit with code 2; never clamped.
+##   --loadtest-unsafe-max-players N
+##                          TEST ONLY: overrides the cap above 50 (up to 1000) for load tests.
+##                          Not for real lobbies; prints a warning.
 ##   --emitters N           stand-in enemy emitters (default 20, ~1000 live bullets)
 ##   --arena TILES          square arena edge in tiles (default 48)
 ##   --expect-clients N     record stats only while >= N players are connected
 ##   --run-seconds S        hard stop after S seconds (default 0 = no limit)
 ##   --exit-when-empty      exit (and print stats) once every player has left
 ## Prints "HOST_READY port=N" when listening and "HOST_STATS {json}" on exit.
+
+const ENV_MAX_PLAYERS := "ER_MAX_PLAYERS"
 
 var _host: LobbyHost
 var _run_until_usec: int = 0
@@ -27,6 +34,11 @@ func _initialize() -> void:
 		return
 	_host = LobbyHost.new(_load_config())
 	_host.port = 8090
+	var env_max := OS.get_environment(ENV_MAX_PLAYERS)
+	if env_max != "":
+		if not _set_max_players(env_max, ENV_MAX_PLAYERS):
+			return
+	var unsafe_max: String = ""
 	var i: int = 0
 	while i < args.size():
 		var a: String = args[i]
@@ -36,6 +48,12 @@ func _initialize() -> void:
 				_host.port = int(v); i += 1
 			"--bind":
 				_host.bind_address = v; i += 1
+			"--max-players":
+				if not _set_max_players(v, "--max-players"):
+					return
+				i += 1
+			"--loadtest-unsafe-max-players":
+				unsafe_max = v; i += 1
 			"--seed":
 				_host.instance_seed = int(v); i += 1
 			"--emitters":
@@ -49,12 +67,34 @@ func _initialize() -> void:
 			"--exit-when-empty":
 				_exit_when_empty = true
 		i += 1
+	if unsafe_max != "":
+		var n := LobbyHost.parse_loadtest_unsafe_max_players(unsafe_max)
+		if n < 0:
+			printerr("HOST_ERROR --loadtest-unsafe-max-players must be an integer in [%d, %d], got %s" % [
+				LobbyHost.MIN_MAX_PLAYERS, LobbyHost.LOADTEST_UNSAFE_MAX_PLAYERS_LIMIT, unsafe_max])
+			_host = null
+			quit(2)
+			return
+		printerr("WARNING: --loadtest-unsafe-max-players=%d is for load tests only" % n)
+		_host.max_players = n
 	var err := _host.start()
 	if err != OK:
 		printerr("HOST_ERROR listen %s:%d failed: %s" % [_host.bind_address, _host.port, error_string(err)])
 		quit(1)
 		return
-	print("HOST_READY port=%d bind=%s seed=%d emitters=%d" % [_host.port, _host.bind_address, _host.instance_seed, _host.emitter_count])
+	print("HOST_READY port=%d bind=%s seed=%d emitters=%d max_players=%d" % [_host.port, _host.bind_address, _host.instance_seed, _host.emitter_count, _host.max_players])
+
+
+func _set_max_players(value: String, source: String) -> bool:
+	var n := LobbyHost.parse_max_players(value)
+	if n < 0:
+		printerr("HOST_ERROR %s must be an integer in [%d, %d], got %s" % [
+			source, LobbyHost.MIN_MAX_PLAYERS, LobbyHost.MAX_MAX_PLAYERS, value])
+		_host = null
+		quit(2)
+		return false
+	_host.max_players = n
+	return true
 
 
 func _load_config() -> SimConfig:

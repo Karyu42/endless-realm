@@ -1,8 +1,9 @@
 class_name HostStandinBulletField
 extends RefCounted
 ## STAND-IN enemy bullets for the Godot host load test. Not gameplay code.
-## main has no enemies or patterns yet (PR #16 adds the real PCG32 patterns and
-## swept combat). Replace this with the real pattern/rules classes once they land.
+## It exists so the host can be measured with a realistic bullet load before it
+## runs the shared enemy/pattern rules (client/src/core). Switching the host to
+## those rules is a follow-up; delete this file then.
 ##
 ## Closed-form PatternSpawn: each emitter fires a ring every `period` ticks.
 ## Every bullet in a ring is rebuilt from (seed, emitter, spawn_tick) with a

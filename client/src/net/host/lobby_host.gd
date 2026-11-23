@@ -10,7 +10,13 @@ extends RefCounted
 ##
 ## Tick is deadline-based: tick n is due at start + n * period. At most
 ## MAX_CATCH_UP overdue ticks run back to back; the rest are dropped and
-## counted in skipped_ticks.
+## counted in skipped_ticks. Deadlines and connection timeouts read `clock`
+## (a Callable returning microseconds), which tests replace with a fake.
+## The sim never reads it.
+##
+## Connection limits (each a named constant below): a per-connection budget of
+## incoming messages per tick, disconnect on sustained excess, a rate limit on
+## Error replies, a pre-handshake timeout, and a cap on open connections.
 
 const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
 const LT := preload("res://src/net/host/loadtest_state_pb.gd")
@@ -22,6 +28,27 @@ const EMITTER_RADIUS: float = 0.6
 ## Matches the Go server's instance.DefaultInstanceID (the smoke instance).
 const DEFAULT_INSTANCE_ID: int = 1
 
+## Lobby player cap, same range and default as the Go harness (ER_MAX_PLAYERS).
+const MIN_MAX_PLAYERS: int = 1
+const MAX_MAX_PLAYERS: int = 50
+const DEFAULT_MAX_PLAYERS: int = 50
+## Upper bound for the load-test-only override (--loadtest-unsafe-max-players).
+const LOADTEST_UNSAFE_MAX_PLAYERS_LIMIT: int = 1000
+## Extra connection slots above max_players for handshakes and spectators.
+const CONNECTION_SLACK: int = 8
+## Incoming messages decoded per connection per tick; the rest are dropped
+## without decoding. A well-behaved client sends one InputFrame per tick.
+const MAX_MESSAGES_PER_TICK: int = 4
+## Close a connection that exceeds the budget this many ticks in a row.
+const MAX_OVER_BUDGET_TICKS: int = 20
+## Close a connection that has this many messages queued at once.
+const MAX_QUEUED_MESSAGES: int = 256
+## Error replies per connection per ERROR_WINDOW_TICKS (one second).
+const MAX_ERROR_REPLIES_PER_WINDOW: int = 3
+const ERROR_WINDOW_TICKS: int = 20
+## A connection that has not sent Hello within this long is closed.
+const HANDSHAKE_TIMEOUT_USEC: int = 5_000_000
+
 
 class HostConn:
 	extends RefCounted
@@ -29,6 +56,9 @@ class HostConn:
 	var player: HostPlayer = null
 	var opened_at_usec: int = 0
 	var close_pending: bool = false
+	var over_budget_ticks: int = 0
+	var error_window_start: int = 0
+	var errors_in_window: int = 0
 
 
 class HostPlayer:
@@ -56,6 +86,10 @@ var arena_size: float = 48.0
 var emitter_count: int = 20
 ## Record stats only while at least this many players are connected (0 = any).
 var expect_clients: int = 0
+## Players allowed at once. Validate with parse_max_players() before setting.
+var max_players: int = DEFAULT_MAX_PLAYERS
+## Microsecond clock for deadlines and timeouts. Tests inject a fake.
+var clock: Callable = Time.get_ticks_usec
 
 # State
 var tick: int = 0
@@ -68,6 +102,12 @@ var player_deaths: int = 0
 var peak_players: int = 0
 var last_snapshot_bytes: int = 0
 var last_full_bytes: int = 0
+# Connection-limit counters
+var refused_connections: int = 0
+var dropped_messages: int = 0
+var budget_disconnects: int = 0
+var handshake_timeouts: int = 0
+var suppressed_errors: int = 0
 
 var _tcp := TCPServer.new()
 var _conns: Array[HostConn] = []
@@ -104,7 +144,7 @@ func start() -> Error:
 	if err != OK:
 		return err
 	port = _tcp.get_local_port()
-	_start_usec = Time.get_ticks_usec()
+	_start_usec = clock.call()
 	_n = 1
 	return OK
 
@@ -121,13 +161,40 @@ func connection_count() -> int:
 	return _conns.size()
 
 
+func max_connections() -> int:
+	return max_players + CONNECTION_SLACK
+
+
+## Parses a --max-players / ER_MAX_PLAYERS value. Returns the value, or -1 if
+## it is not an integer in [MIN_MAX_PLAYERS, MAX_MAX_PLAYERS]. Never clamps.
+static func parse_max_players(value: String) -> int:
+	var v := value.strip_edges()
+	if not v.is_valid_int():
+		return -1
+	var n := v.to_int()
+	if n < MIN_MAX_PLAYERS or n > MAX_MAX_PLAYERS:
+		return -1
+	return n
+
+
+## Parses the load-test-only override. Returns -1 if invalid.
+static func parse_loadtest_unsafe_max_players(value: String) -> int:
+	var v := value.strip_edges()
+	if not v.is_valid_int():
+		return -1
+	var n := v.to_int()
+	if n < MIN_MAX_PLAYERS or n > LOADTEST_UNSAFE_MAX_PLAYERS_LIMIT:
+		return -1
+	return n
+
+
 func next_deadline_usec() -> int:
 	return _start_usec + _n * PERIOD_USEC
 
 
 ## Runs every due tick (bounded catch-up). Call this from the main loop.
 func service() -> void:
-	var now := Time.get_ticks_usec()
+	var now: int = clock.call()
 	var steps: int = 0
 	while now >= next_deadline_usec() and steps < MAX_CATCH_UP:
 		var due := next_deadline_usec()
@@ -136,7 +203,7 @@ func service() -> void:
 			late_ticks += 1
 		_n += 1
 		steps += 1
-		now = Time.get_ticks_usec()
+		now = clock.call()
 	if now >= next_deadline_usec():
 		var overdue: int = int((now - next_deadline_usec()) / PERIOD_USEC) + 1
 		skipped_ticks += overdue
@@ -180,37 +247,93 @@ func run_tick() -> void:
 
 
 func _net_in() -> void:
+	var now: int = clock.call()
 	while _tcp.is_connection_available():
 		var stream := _tcp.take_connection()
 		if stream == null:
 			break
+		if _conns.size() >= max_connections():
+			refused_connections += 1
+			stream.disconnect_from_host()
+			continue
 		var c := HostConn.new()
 		c.ws = WebSocketPeer.new()
 		c.ws.outbound_buffer_size = 1 << 18
-		c.opened_at_usec = Time.get_ticks_usec()
+		c.opened_at_usec = now
 		if c.ws.accept_stream(stream) == OK:
 			_conns.append(c)
 	var keep: Array[HostConn] = []
 	for c in _conns:
 		if c.close_pending:
 			c.close_pending = false
-			c.ws.close(1000, "rejected")
+			c.ws.close(1000, "closed by host")
 		c.ws.poll()
 		var state := c.ws.get_ready_state()
-		if state == WebSocketPeer.STATE_OPEN:
-			while c.ws.get_available_packet_count() > 0:
-				_on_packet(c, c.ws.get_packet())
 		if state == WebSocketPeer.STATE_CLOSED:
 			_drop_player(c)
 			continue
+		if c.player == null and not c.close_pending and state != WebSocketPeer.STATE_CLOSING \
+				and now - c.opened_at_usec > HANDSHAKE_TIMEOUT_USEC:
+			handshake_timeouts += 1
+			c.ws.close(1008, "handshake timeout")
+		elif state == WebSocketPeer.STATE_OPEN:
+			_read_budgeted(c)
 		keep.append(c)
 	_conns = keep
+
+
+## Decodes at most MAX_MESSAGES_PER_TICK messages; drops the rest undecoded.
+func _read_budgeted(c: HostConn) -> void:
+	var queued: int = c.ws.get_available_packet_count()
+	if queued > MAX_QUEUED_MESSAGES:
+		_close_for_budget(c)
+		return
+	var handled: int = 0
+	while c.ws.get_available_packet_count() > 0 and c.ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
+		var data := c.ws.get_packet()
+		if handled >= MAX_MESSAGES_PER_TICK:
+			dropped_messages += 1
+			continue
+		handled += 1
+		_on_packet(c, data)
+	if queued > MAX_MESSAGES_PER_TICK:
+		c.over_budget_ticks += 1
+		if c.over_budget_ticks >= MAX_OVER_BUDGET_TICKS:
+			_close_for_budget(c)
+	else:
+		c.over_budget_ticks = 0
+
+
+func _close_for_budget(c: HostConn) -> void:
+	budget_disconnects += 1
+	c.ws.close(1008, "message rate limit")
+	_drop_player(c)
+
+
+## Sends an Error unless this connection used up its Error replies for the
+## current window. Returns true if it was sent.
+func _send_error(c: HostConn, code: int, reason: String) -> bool:
+	# The window opens at the first Error and lasts ERROR_WINDOW_TICKS.
+	if c.errors_in_window == 0 or tick - c.error_window_start >= ERROR_WINDOW_TICKS:
+		c.error_window_start = tick
+		c.errors_in_window = 0
+	if c.errors_in_window >= MAX_ERROR_REPLIES_PER_WINDOW:
+		suppressed_errors += 1
+		return false
+	c.errors_in_window += 1
+	var out = PB.ServerMessage.new()
+	var e = out.new_error()
+	e.set_code(code)
+	e.set_reason(reason)
+	c.ws.put_packet(out.to_bytes())
+	return true
 
 
 func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 	var msg = PB.ClientMessage.new()
 	if msg.from_bytes(data) != PB.PB_ERR.NO_ERRORS:
 		c.ws.close(1003, "bad message")
+		_drop_player(c)
 		return
 	if c.close_pending:
 		return
@@ -226,6 +349,12 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 			r.set_reason("unsupported protocol_version")
 			c.ws.put_packet(rej.to_bytes())
 			# Close a tick later: closing right away can drop the queued Reject.
+			c.close_pending = true
+			return
+		if players.size() >= max_players:
+			# The Error always goes out: this connection closes right after.
+			c.errors_in_window = 0
+			_send_error(c, PB.ErrorCode.INSTANCE_FULL, "lobby is full")
 			c.close_pending = true
 			return
 		c.player = _add_player()
@@ -256,11 +385,7 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 	elif c.player != null and (msg.has_open_portal() or msg.has_join_instance() \
 			or msg.has_list_instances() or msg.has_leave_instance()):
 		# Portals are not part of this load-test host yet.
-		var out = PB.ServerMessage.new()
-		var e = out.new_error()
-		e.set_code(PB.ErrorCode.ERROR_CODE_UNSPECIFIED)
-		e.set_reason("portals are not supported by the Godot host yet")
-		c.ws.put_packet(out.to_bytes())
+		_send_error(c, PB.ErrorCode.ERROR_CODE_UNSPECIFIED, "portals are not supported by the Godot host yet")
 
 
 static func _finite_or_zero(v: float) -> float:
@@ -425,6 +550,12 @@ func stats() -> Dictionary:
 		"bullet_hits": bullets.hits_total,
 		"enemy_hits": enemy_hits,
 		"player_deaths": player_deaths,
+		"max_players": max_players,
+		"refused_connections": refused_connections,
+		"dropped_messages": dropped_messages,
+		"budget_disconnects": budget_disconnects,
+		"handshake_timeouts": handshake_timeouts,
+		"suppressed_errors": suppressed_errors,
 	}
 
 
