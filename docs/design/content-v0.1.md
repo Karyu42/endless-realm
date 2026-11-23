@@ -58,6 +58,20 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 
 **Focus timing:** Focus regen is applied at the **end of the tick**, after any spend on that tick. Same-tick regen therefore can't pay for a cast. A cast on tick t needs `Focus ≥ cost` from the Focus left at the end of tick t−1.
 
+**Join state on a hosted game:** solo play is unchanged. On a hosted game, the host stores ability state only under a **host-verified identity**. A character id the client merely claims is never a key.
+- **Snapshot:** when a verified player disconnects, the host takes a snapshot of their current Focus and the ability cooldown remaining.
+  - It is keyed by that player's verified identity.
+  - It lives only as long as the host process; a host restart clears every snapshot.
+- **Join with a snapshot:** the host restores the snapshot, adjusted for the host time elapsed since the disconnect.
+  - The cooldown is reduced by the elapsed time, down to a floor of 0.
+  - Focus regenerates at the normal rate (5/s plus gear) for the elapsed time, capped at max Focus.
+- **Join with no snapshot:** the player starts **ready**, with 100 Focus and the ability cooldown at 0. This is the first join in this host session for that verified identity, including the listen-host player's own first join.
+- **Phase 1 (now):** the rules above apply to players the host verifies itself: the listen-host player and local players. Their key is the host-issued token or character.
+  - **Remote joins start conservative:** 0 Focus and the ability on full cooldown, every time.
+- **Phase 2 (after the handshake identity PR, #50):** remote joins switch to the same rules, keyed by the character id that the handshake has verified.
+- **Why the gate:** before #50, a remote client's character id is whatever it claims. Keying on it would let the client claim a fresh id to start ready, which would bring back the disconnect/reconnect cooldown reset. It could also claim another player's id and take their saved state.
+- **Replaces #46:** the host code from #46 starts every hosted join at 0 Focus with full cooldown, including the listen-host's own first join. This spec replaces that for verified players; for remote joins that behavior stays until #50.
+
 **Fire timing (fire on press, all weapons):** each weapon tracks `next_ready` as a float64 sim time in seconds (tick × 0.05), starting at 0. Let `cd = 1 / (Tempo × (1 + tempoBonus))`. On every tick where `fire_held` is true and `now ≥ next_ready − 1e-9`, one volley fires:
 - If fire has been held on every tick since the previous volley (one continuous hold), set `next_ready = next_ready + cd`. This keeps the long-run rate exact even though `cd` isn't a whole number of ticks.
 - Otherwise (the first volley after a press), set `next_ready = now + cd`.
@@ -204,7 +218,7 @@ With vision §3.5 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 - **Contact damage** is applied at most once per 0.5 s per enemy–player pair.
 
 ### 2.3 Behaviors and patterns
-For **timer-triggered patterns** (`trigger: timer`), "every X s" is measured from the end of the previous attack, and the first attack comes X s after aggro. For example, `wisp_spiral` pauses 2.0 s after its 2.0 s spiral ends. AI-step enemies follow only the `fire`/`wait` rule below, so each enemy has exactly one timing rule. **AI `fire` steps don't block.** A `fire` step starts the pattern and the AI goes straight to its next step, while multi-emit patterns (bursts, spirals) keep emitting on their own. Any wait after an attack is an explicit `wait` step measured from the `fire` step. For the AI-step enemies below, the listed waits already include this, so an Acolyte cross (emits on ticks 0 and 10) starts every 48 ticks, which is 38 ticks after its last emit. Aggro radius is 8 tiles unless stated otherwise. **De-aggro:** each enemy has a `deaggro_radius` data field, by default `aggro_radius + 4` tiles. An enemy drops aggro when no living player is within `deaggro_radius` of it, or when its 16-tile leash (§2.1) triggers, whichever comes first. The Mirebell Matron keeps her own rule: she doesn't leash while any eligible player is within 20 tiles, so her `deaggro_radius` is 20, not the default 16. The target is the nearest player in aggro range, re-picked every 1 s.
+For **timer-triggered patterns** (`trigger: timer`), "every X s" is measured from the end of the previous attack, and the first attack comes X s after aggro. For example, `wisp_spiral` pauses 2.0 s after its 2.0 s spiral ends. AI-step enemies follow only the `fire`/`wait` rule below, so each enemy has exactly one timing rule. **AI `fire` steps don't block.** A `fire` step starts the pattern and the AI goes straight to its next step, while multi-emit patterns (bursts, spirals) keep emitting on their own. Any wait after an attack is an explicit `wait` step measured from the `fire` step. For the AI-step enemies below, the listed waits already include this, so an Acolyte cross (emits on ticks 0 and 10) starts every 48 ticks, which is 38 ticks after its last emit. Aggro radius is 8 tiles unless stated otherwise. **De-aggro:** each enemy has a `deaggro_radius` data field, by default `aggro_radius + 4` tiles. An enemy drops aggro when no living player is within `deaggro_radius` of it, or when its leash triggers (§2.1: pulled more than 16 tiles from its spawn point, or into another ring), whichever comes first. The Mirebell Matron keeps her own rule: she doesn't leash while any eligible player is within 20 tiles, so her `deaggro_radius` is 20, not the default 16. The target is the nearest player in aggro range, re-picked every 1 s.
 
 **Burrmite** (skittering beetle, packs of 3)
 - AI: wanders at 1.5 tiles/s. On aggro it closes to 3 tiles, then strafes around the target at 3 tiles, switching direction every 2 s.
