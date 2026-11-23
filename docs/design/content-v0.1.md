@@ -56,6 +56,8 @@ These fill gaps in `vision.md` and don't change any of its formulas:
 
 Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vision §2. Stride and Tempo are fixed, with at most +10% from gear (D6). This section adds weapon patterns and the numbers vision leaves open. HP and Ward scale with `m(Le)` (vision §3.2a).
 
+**Focus timing:** Focus regen is applied at the **end of the tick**, after any spend on that tick. Same-tick regen therefore can't pay for a cast. A cast on tick t needs `Focus ≥ cost` from the Focus left at the end of tick t−1.
+
 **Fire timing (fire on press, all weapons):** each weapon tracks `next_ready` as a float64 sim time in seconds (tick × 0.05), starting at 0. Let `cd = 1 / (Tempo × (1 + tempoBonus))`. On every tick where `fire_held` is true and `now ≥ next_ready − 1e-9`, one volley fires:
 - If fire has been held on every tick since the previous volley (one continuous hold), set `next_ready = next_ready + cd`. This keeps the long-run rate exact even though `cd` isn't a whole number of ticks.
 - Otherwise (the first volley after a press), set `next_ready = now + cd`.
@@ -117,8 +119,8 @@ Golden values:
 - Speed 18 tiles/s, range 9 tiles (10 ticks), size S, no pierce.
 
 **Ability: Slipstep** · 30 Focus · 3 s cooldown (vision §2)
-- Blink 4 tiles in your move direction, or your aim direction when you are standing still.
-- Wall handling is as in vision §2 (it stops at the last free tile). Closed doors and the sealed arena wall count as blocking tiles.
+- Blink 4 tiles in your move direction, or your aim direction when you are standing still. The blink starts from the player's position **after that tick's movement**.
+- Wall handling is as in vision §2 (it stops at the last free tile). **Closed doors** and the sealed arena wall count as blocking tiles, the same as walls.
 - 0.30 s (6 ticks) of no damage, starting on the blink tick.
 
 ### 1.4 DPS reference (T0, every shot hitting, before Ward)
@@ -202,7 +204,7 @@ With vision §3.5 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 - **Contact damage** is applied at most once per 0.5 s per enemy–player pair.
 
 ### 2.3 Behaviors and patterns
-For **timer-triggered patterns** (`trigger: timer`), "every X s" is measured from the end of the previous attack, and the first attack comes X s after aggro. For example, `wisp_spiral` pauses 2.0 s after its 2.0 s spiral ends. AI-step enemies follow only the `fire`/`wait` rule below, so each enemy has exactly one timing rule. **AI `fire` steps don't block.** A `fire` step starts the pattern and the AI goes straight to its next step, while multi-emit patterns (bursts, spirals) keep emitting on their own. Any wait after an attack is an explicit `wait` step measured from the `fire` step. For the AI-step enemies below, the listed waits already include this, so an Acolyte cross (emits on ticks 0 and 10) starts every 48 ticks, which is 38 ticks after its last emit. Aggro radius is 8 tiles unless stated otherwise. The target is the nearest player in aggro range, re-picked every 1 s.
+For **timer-triggered patterns** (`trigger: timer`), "every X s" is measured from the end of the previous attack, and the first attack comes X s after aggro. For example, `wisp_spiral` pauses 2.0 s after its 2.0 s spiral ends. AI-step enemies follow only the `fire`/`wait` rule below, so each enemy has exactly one timing rule. **AI `fire` steps don't block.** A `fire` step starts the pattern and the AI goes straight to its next step, while multi-emit patterns (bursts, spirals) keep emitting on their own. Any wait after an attack is an explicit `wait` step measured from the `fire` step. For the AI-step enemies below, the listed waits already include this, so an Acolyte cross (emits on ticks 0 and 10) starts every 48 ticks, which is 38 ticks after its last emit. Aggro radius is 8 tiles unless stated otherwise. **De-aggro:** each enemy has a `deaggro_radius` data field, by default `aggro_radius + 4` tiles. An enemy drops aggro when no living player is within `deaggro_radius` of it, or when its 16-tile leash (§2.1) triggers, whichever comes first. The Mirebell Matron keeps her own rule: she doesn't leash while any eligible player is within 20 tiles, so her `deaggro_radius` is 20, not the default 16. The target is the nearest player in aggro range, re-picked every 1 s.
 
 **Burrmite** (skittering beetle, packs of 3)
 - AI: wanders at 1.5 tiles/s. On aggro it closes to 3 tiles, then strafes around the target at 3 tiles, switching direction every 2 s.
@@ -239,7 +241,7 @@ For **timer-triggered patterns** (`trigger: timer`), "every X s" is measured fro
 - Cycle: circle for 2.5 s, dive, repeat.
 
 **Mirebell Matron** (elite: a swamp hag who carries a ring of bells)
-- AI: slow chase at 1.5 tiles/s, stays 4–6 tiles away. Aggro radius 12. She doesn't leash while any eligible player is within 20 tiles.
+- AI: slow chase at 1.5 tiles/s, stays 4–6 tiles away. Aggro radius 12, `deaggro_radius` 20. She doesn't leash while any eligible player is within 20 tiles.
 - She runs a fixed sequence on repeat:
   1. `matron_tolling` (3.0 s): a 3-arm spiral. Arms are 120° apart and emit 1 bullet each every 0.15 s, rotating +12° per emit. Speed 4.5, range 9, size M, 16 damage.
   2. `matron_peal` (1.0 s): two volleys 0.5 s apart. Each volley is 7 bullets in a fan with 70° total spread, aimed, speed 7, range 10.5, size M, 22 damage.
@@ -251,7 +253,7 @@ For **timer-triggered patterns** (`trigger: timer`), "every X s" is measured fro
 ### 2.4 Practice yard
 A small tutorial space, separate from the Wilds. Its layout belongs to the client build.
 - **Enemy level:** every enemy in the yard has a **fixed `E = 1`**. The Wilds distance formula (§2.1) doesn't apply there.
-- **Rewards:** each kill gives `killXP(1)`, `ceil(m(1))` = **1 Glint**, and loot rolled at `T* = 0` with the normal enemy rules (§4.2–4.3, vision §4.2).
+- **Rewards:** each kill gives base `killXP(1)`, credited per vision §3.4 (the over-level penalty still applies), `ceil(m(1))` = **1 Glint**, and loot rolled at `T* = 0` with the normal enemy rules (§4.2–4.3, vision §4.2).
 - Every other rule (enemy stats at E = 1, patterns, banking, death) is the same as in the Wilds.
 
 ---
@@ -559,6 +561,7 @@ The charges, dives, pounces and the Matron's summon are AI actions with contact 
   "move_speed": 2.5,
   "radius": 0.55,
   "aggro_radius": 8,
+  "deaggro_radius": 12,
   "leash": 16,
   "ai": {
     "type": "sequence",

@@ -24,9 +24,11 @@ static func load_from(data_dir: String) -> DataCatalog:
 	cat.patterns = {}
 	cat.enemies = {}
 	cat.classes = {}
+	cat.abilities = {}
 	cat._load_patterns(data_dir.path_join("patterns.json"))
 	cat._load_enemies(data_dir.path_join("enemies.json"))
 	cat._load_classes(data_dir.path_join("classes.json"))
+	cat._load_abilities(data_dir.path_join("abilities.json"))
 	cat.scaling = SimScaling.from_json(DataCatalog._read_json(data_dir.path_join("scaling.json")))
 	cat.loot = LootTables.from_json(DataCatalog._read_json(data_dir.path_join("loot.json")))
 	cat.report_unknown_ids()
@@ -36,6 +38,7 @@ static func load_from(data_dir: String) -> DataCatalog:
 var patterns: Dictionary = {} # String -> PatternDef
 var enemies: Dictionary = {} # String -> EnemyDef
 var classes: Dictionary = {} # String -> ClassDef
+var abilities: Dictionary = {} # String -> AbilityDef
 var scaling: SimScaling = SimScaling.new()
 var loot: LootTables = LootTables.new()
 
@@ -55,6 +58,10 @@ func enemy(id: String) -> EnemyDef:
 
 func class_def(id: String) -> ClassDef:
 	return classes.get(id, null) as ClassDef
+
+
+func ability(id: String) -> AbilityDef:
+	return abilities.get(id, null) as AbilityDef
 
 
 func _load_patterns(path: String) -> void:
@@ -94,6 +101,19 @@ func _load_classes(path: String) -> void:
 				var c := ClassDef.from_json(item)
 				if c.id != "":
 					classes[c.id] = c
+
+
+func _load_abilities(path: String) -> void:
+	var d := _read_json(path)
+	if d.is_empty():
+		return
+	var list: Variant = d.get("abilities", [])
+	if list is Array:
+		for item in list:
+			if item is Dictionary:
+				var a := AbilityDef.from_json(item)
+				if a.id != "":
+					abilities[a.id] = a
 
 
 static func _read_json(path: String) -> Dictionary:
@@ -155,6 +175,18 @@ func unknown_reference_ids() -> PackedStringArray:
 			if not seen.has(def.weapon_id):
 				ids.append(def.weapon_id)
 				seen[def.weapon_id] = true
+		if def.ability_id != "" and not abilities.has(def.ability_id):
+			if not seen.has(def.ability_id):
+				ids.append(def.ability_id)
+				seen[def.ability_id] = true
+	for aid in abilities.keys():
+		var adef: AbilityDef = abilities[aid] as AbilityDef
+		if adef == null:
+			continue
+		for mid in adef.missing_effect_ids():
+			if not seen.has(mid):
+				ids.append(mid)
+				seen[mid] = true
 	return ids
 
 
