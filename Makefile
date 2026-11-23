@@ -47,9 +47,12 @@ client-test:
 	fi
 	@mkdir -p client/test_results
 	$(GODOT) --headless --path client --import
-	$(GODOT) --headless --path client -s addons/gut/gut_cmdln.gd \
+	@# GUT exits 0 when a test script fails to parse (it just skips it). The post-run
+	@# hook in client/.gutconfig.json fails that run; check-gut-log.sh is the backstop.
+	set -o pipefail; $(GODOT) --headless --path client -s addons/gut/gut_cmdln.gd \
 		-gdir=res://tests -ginclude_subdirs -gexit \
-		-gjunit_xml_file=res://test_results/junit.xml
+		-gjunit_xml_file=res://test_results/junit.xml 2>&1 | tee client/test_results/gut.log
+	.github/scripts/check-gut-log.sh client/test_results/gut.log client/tests
 	python3 .github/scripts/check-junit.py client/test_results/junit.xml
 
 # Keep a packed copy of the shared data pack under client/data (res://data)
