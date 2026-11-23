@@ -455,26 +455,29 @@ func _step_one_enemy(e: EnemyState, sim_tick: int) -> void:
 		e.contact_cooldown -= 1
 	var mx: float = 0.0
 	var my: float = 0.0
-	var speed: float = e.def.wander_speed
+	var rooted: bool = e.def.is_rooted()
+	var speed: float = 0.0 if rooted else e.def.wander_speed
 	if e.aggro:
-		speed = e.def.move_speed
+		if not rooted:
+			speed = e.def.move_speed
+			if dist > e.def.hover_radius and dist > SimConstants.MOVE_EPS:
+				mx = dx / dist
+				my = dy / dist
+			else:
+				e.strafe_ticks -= 1
+				if e.strafe_ticks <= 0:
+					e.strafe_sign *= -1.0
+					e.strafe_ticks = e.def.strafe_switch_ticks
+				if dist > SimConstants.MOVE_EPS:
+					mx = (-dy / dist) * e.strafe_sign
+					my = (dx / dist) * e.strafe_sign
 		if dist > SimConstants.MOVE_EPS:
 			e.aim = atan2(dy, dx)
-		if dist > e.def.hover_radius and dist > SimConstants.MOVE_EPS:
-			mx = dx / dist
-			my = dy / dist
-		else:
-			e.strafe_ticks -= 1
-			if e.strafe_ticks <= 0:
-				e.strafe_sign *= -1.0
-				e.strafe_ticks = e.def.strafe_switch_ticks
-			if dist > SimConstants.MOVE_EPS:
-				mx = (-dy / dist) * e.strafe_sign
-				my = (dx / dist) * e.strafe_sign
-		if e.fire_cooldown <= 0:
+		# No packed interval means no fallback rate: do not fire.
+		if e.def.fire_interval_ticks > 0 and e.fire_cooldown <= 0:
 			_emit_enemy_pattern(e, sim_tick)
 			e.fire_cooldown = e.def.fire_interval_ticks
-	else:
+	elif not rooted:
 		e.wander_ticks -= 1
 		if e.wander_ticks <= 0:
 			var rng := PCG32.new(_mix_seed(_world_seed, e.id, sim_tick), 1)

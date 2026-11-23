@@ -192,5 +192,83 @@ if loot_path.exists():
                     f"(not in loot.json weapons.*.id)"
                 )
 
+# Timer patterns: interval_ticks must match the enemy's fire_interval_ticks.
+if enemies_path.exists() and patterns_path.exists():
+    for i, enemy in enumerate(enemies_doc.get("enemies") or []):
+        if not isinstance(enemy, dict):
+            continue
+        ai = enemy.get("ai") or {}
+        pid = ai.get("pattern")
+        if not pid or pid not in patterns_by_id:
+            continue
+        pat = patterns_by_id[pid]
+        if pat.get("trigger") != "timer":
+            continue
+        if "interval_ticks" in pat and "fire_interval_ticks" in ai:
+            if int(pat["interval_ticks"]) != int(ai["fire_interval_ticks"]):
+                err(
+                    f"enemies.json {enemy.get('id', i)}: fire_interval_ticks "
+                    f"{ai['fire_interval_ticks']} != {pid}.interval_ticks {pat['interval_ticks']}"
+                )
+
+# Negative checks: packed Driftcap / spore_ring effect fields are required.
+_DRIFTCAP_REQUIRED = {
+    "spore_ring": ("count", "aim", "angle_offset_cycle_deg", "interval_ticks"),
+    "driftcap_spore.ai": ("type", "pattern", "fire_interval_ticks"),
+}
+
+
+def _schema_rejects_missing(schema_path, pack_path, kind, key, field, drop):
+    import copy
+    import tempfile
+
+    doc = json.loads(pack_path.read_text(encoding="utf-8"))
+    found = False
+    for item in doc.get(kind) or []:
+        if not isinstance(item, dict) or item.get("id") != key:
+            continue
+        found = True
+        drop(item)
+        break
+    if not found:
+        err(f"{pack_path.name}: missing packed {key!r}")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / pack_path.name
+        path.write_text(json.dumps(doc), encoding="utf-8")
+        r = subprocess.run(
+            ["check-jsonschema", "--schemafile", str(schema_path), str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if r.returncode == 0:
+            err(f"{schema_path.name}: missing {key}.{field} should fail validation")
+
+
+if (schema_dir / "patterns.schema.json").exists() and patterns_path.exists():
+    for field in _DRIFTCAP_REQUIRED["spore_ring"]:
+        _schema_rejects_missing(
+            schema_dir / "patterns.schema.json",
+            patterns_path,
+            "patterns",
+            "spore_ring",
+            field,
+            lambda item, f=field: item.pop(f, None),
+        )
+
+if (schema_dir / "enemies.schema.json").exists() and enemies_path.exists():
+    for field in _DRIFTCAP_REQUIRED["driftcap_spore.ai"]:
+        def _drop(item, f=field):
+            if isinstance(item.get("ai"), dict):
+                item["ai"].pop(f, None)
+        _schema_rejects_missing(
+            schema_dir / "enemies.schema.json",
+            enemies_path,
+            "enemies",
+            "driftcap_spore",
+            f"ai.{field}",
+            _drop,
+        )
+
 print(f"data-validate: {len(data_files)} data files, {len(schemas)} schemas, {errors} errors")
 sys.exit(1 if errors else 0)

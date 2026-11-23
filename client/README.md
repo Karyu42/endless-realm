@@ -13,9 +13,9 @@ clockwise positive). Deterministic randomness is **PCG32 only**.
 
 The practice yard loads the shared pack from [`res://data/`](data/), a packed
 copy of repo-root [`data/`](../data/) (`make sync-client-data` keeps them
-equal). Editor and export both use that `res://` path, so the Burrmite ships
-in the desktop and Android builds. A Burrmite wanders the yard and fires
-`burr_spit`.
+equal). Editor and export both use that `res://` path, so the Burrmite and Driftcap Spore ship in the desktop and Android builds.
+A Burrmite wanders the yard and fires `burr_spit`. A rooted Driftcap Spore
+sits nearby and fires `spore_ring`.
 
 There is no Godot MultiplayerAPI here and no RPCs for game state. Transport is
 `WebSocketPeer` / `TCPServer` only. Protocol v1 frames use the godobuf codec
@@ -114,7 +114,7 @@ timing from `docs/design/content-v0.1.md` §1 (float64 `next_ready` in seconds,
 Driftrunner golden ticks 0/6/12/18/23/29, Thornguard 0/10/20, no tap-burst,
 Gleamwright cast-lock 0/8/19/27/35, mid-hold rate change), projectile
 lifetime and range, tick stepping, the `NetClient` stub, official
-PCG32 known vectors, golden pattern positions, swept hits, Burrmite
+PCG32 known vectors, golden pattern positions, swept hits, Burrmite and Driftcap Spore
 damage / death, packed `res://data` loading, the burr_spit cadence
 (first spit 30 ticks after aggro), protocol v1 handshake and import refusal,
 portal-multiplier selection, beacon encode/decode, a headless loopback
