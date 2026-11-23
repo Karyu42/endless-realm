@@ -12,6 +12,9 @@ var _catalog: DataCatalog
 var _world_seed: int = 1
 var _tick: int = 0
 var _player_id: int = 1
+## Entity ids are uint64 on the wire; GDScript int is signed, so they stay
+## strictly below 2^63.
+const MAX_ENTITY_ID: int = 0x7FFFFFFFFFFFFFFF
 var _next_id: int = 2
 var _px: float = 0.0
 var _py: float = 0.0
@@ -101,6 +104,13 @@ func submit_input(intent: InputIntent) -> void:
 	_intent = intent
 
 
+func _alloc_id() -> int:
+	var id: int = _next_id
+	if _next_id < MAX_ENTITY_ID:
+		_next_id += 1
+	return id
+
+
 func spawn_enemy(def_id: String, x: float, y: float, content_level: int = 1) -> int:
 	if _catalog == null:
 		push_warning("LocalSim.spawn_enemy: no DataCatalog")
@@ -116,8 +126,7 @@ func spawn_enemy_from_def(def: EnemyDef, x: float, y: float, content_level: int 
 	if def == null:
 		return 0
 	var e := EnemyState.new()
-	e.id = _next_id
-	_next_id += 1
+	e.id = _alloc_id()
 	e.def = def
 	e.x = x
 	e.y = y
@@ -297,8 +306,7 @@ func _spawn_projectile(sim_tick: int) -> void:
 	else:
 		dir = dir.normalized()
 	var shot := SimProjectile.new()
-	shot.id = _next_id
-	_next_id += 1
+	shot.id = _alloc_id()
 	shot.spawn_tick = sim_tick
 	shot.origin_x = _px
 	shot.origin_y = _py
@@ -387,8 +395,7 @@ func _emit_enemy_pattern(e: EnemyState, sim_tick: int) -> void:
 	var seed: int = _mix_seed(_world_seed, e.id, sim_tick + e.volley_index)
 	var bullets := def.emit(seed, e.x, e.y, e.aim, e.volley_index)
 	for b in bullets:
-		b.id = _next_id
-		_next_id += 1
+		b.id = _alloc_id()
 		b.spawn_tick = sim_tick
 		b.source_id = e.id
 		_pattern_bullets.append(b)
@@ -701,8 +708,7 @@ func _try_grant_roll(e: EnemyState, looter_id: int, drop_index: int, looter_clas
 		return null
 	item.drop_id = did
 	var bag := GroundDrop.new()
-	bag.id = _next_id
-	_next_id += 1
+	bag.id = _alloc_id()
 	bag.item = item
 	bag.x = e.x
 	bag.y = e.y

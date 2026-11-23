@@ -102,6 +102,6 @@ sim applies a nonzero id as a press, at most once per seq, and silently drops
 an unknown id, a bag the player may not use, or a target farther than the
 accept range. The Server Engineer's protocol PR will add
 `uint64 interact_target_id = 6` to `InputFrame`; until then the field lives
-in `InputIntent` and `LocalSim`. Entity ids are `int` from one counter.
+in `InputIntent` and `LocalSim`. Entity ids are `int` from one counter and stay below 2^63 so they fit the uint64 wire field.
 Every practice-yard enemy is fixed at the data E: kills give normal
 `killXP(1)`, Glint `ceil(m(1))` = 1, and loot rolls at T* = 0.
