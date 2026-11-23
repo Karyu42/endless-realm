@@ -21,6 +21,9 @@ var strafe_ticks: int = 0
 var wander_angle: float = 0.0
 var wander_ticks: int = 0
 var contact_cooldown: int = 0
+var content_level: int = 1
+var damaged_by: Dictionary = {} # player_id -> true
+var rewards_granted: bool = false
 
 
 func radius() -> float:

@@ -69,6 +69,13 @@ def box_info():
     }
 
 
+def write_log(args, name, lines):
+    """Keeps the raw host / bot output next to the results (uploaded by CI)."""
+    os.makedirs(args.out, exist_ok=True)
+    with open(os.path.join(args.out, name), "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def run_one(args, clients):
     port = free_port()
     host_cmd = [args.godot, "--headless", "--path", os.path.join(ROOT, "client"),
@@ -89,9 +96,21 @@ def run_one(args, clients):
             if line.startswith("HOST_READY"):
                 ready.set()
     threading.Thread(target=pump, daemon=True).start()
-    if not ready.wait(30):
+    # Wait for HOST_READY, but stop early if the host process exits first.
+    deadline = time.monotonic() + args.ready_timeout
+    while not ready.is_set() and host.poll() is None and time.monotonic() < deadline:
+        ready.wait(0.2)
+    if not ready.is_set():
+        exited = host.poll()
         host.kill()
-        raise SystemExit("host did not print HOST_READY:\n" + "\n".join(lines))
+        try:
+            host.wait(5)
+        except subprocess.TimeoutExpired:
+            pass
+        write_log(args, f"host-{clients}.log", lines)
+        why = f"exited with code {exited}" if exited is not None else f"timed out after {args.ready_timeout:g} s"
+        raise SystemExit(f"LOADTEST FAILED: {clients} clients: host never printed HOST_READY ({why}):\n"
+                         + "\n".join(lines[-40:]))
 
     url = f"ws://127.0.0.1:{port}/ws"
     bot_cmd = [args.bot, "-url", url, "-clients", str(clients), "-duration", f"{args.duration}s",
@@ -119,6 +138,8 @@ def run_one(args, clients):
         host.wait(30)
     except subprocess.TimeoutExpired:
         host.kill()
+    write_log(args, f"host-{clients}.log", lines)
+    write_log(args, f"bot-{clients}.log", bot_out.splitlines())
     stats_line = next((l for l in lines if l.startswith("HOST_STATS ")), None)
     if stats_line is None:
         raise SystemExit("host printed no HOST_STATS:\n" + "\n".join(lines[-40:]))
@@ -166,7 +187,10 @@ def main():
     ap.add_argument("--godot", default=os.environ.get("GODOT", "godot"))
     ap.add_argument("--bot", default=os.path.join(ROOT, ".tools", "bin", "er-bot-loadtest"))
     ap.add_argument("--out", default=os.path.join(ROOT, "loadtest-results"))
+    ap.add_argument("--ready-timeout", type=float, default=60,
+                    help="fail if the host has not printed HOST_READY within this many seconds")
     args = ap.parse_args()
+    os.makedirs(args.out, exist_ok=True)
 
     os.makedirs(os.path.dirname(args.bot), exist_ok=True)
     subprocess.run(["go", "build", "-o", args.bot, "./cmd/bot"], cwd=os.path.join(ROOT, "server"), check=True)
