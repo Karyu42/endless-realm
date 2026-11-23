@@ -35,10 +35,8 @@ The lobby UI uses the host API in `src/net/host/`: `LobbySettings` with
 `apply_settings()` / `settings()`, `add_local_player` /
 `submit_local_input`, and the host arena renders from `world_view()` once
 the first tick has a snapshot. Import refusals use `ImportResult`
-constants and `name_of()`. The world is not one shared multi-player
-`LocalSim` on the host yet, so remotes still do not see shared enemies;
-`LocalSim` itself now supports several players in one world (see below)
-for the host to switch to. The beacon player count is `players.size()`
+constants and `name_of()`. The host runs every player in one shared
+multi-player `LocalSim` (see below). The beacon player count is `players.size()`
 after the listen host is added, capped at max.
 
 ## Host or join a lobby
@@ -198,26 +196,19 @@ a moving enemy returns toward spawn.
 
 `proto/v1.InputFrame.interact_target_id` is a uint64 entity id, not a boolean.
 Zero means none; a nonzero target is a press on that seq. `LobbyHost` queues
-presses from accepted inputs and evaluates them after movement using the
-host's position. Unknown / disallowed targets and targets beyond the accept range in
-`data/scaling.json` (`interact_accept_range_tiles`) are silently dropped;
-the same seq cannot interact twice, including across the uint32 wrap.
+presses from accepted inputs and evaluates them at the start of the next tick,
+before the sim step, using the player's position in the shared `LocalSim`.
+Unknown targets, bags owned by another player, and targets beyond the accept
+range in `data/scaling.json` (`interact_accept_range_tiles`, through
+`SimScaling`) are silently dropped; the same seq cannot interact twice,
+including across the uint32 wrap.
 
-The listen-host `GameSession` now calls `apply_settings()`,
-`add_local_player`, `submit_local_input`, and renders from `world_view()`
-when it is available. It does not set `resolver` / `on_interact` yet:
-the host still runs one `LocalSim` per player, so wiring those hooks
-would check range against the wrong positions. Interact waits on the host
-switching to one shared `LocalSim` (with loot) instead of a per-player sim
-plus the stand-in field.
-
-The host has not wired the shared sim's interactables yet. For the loot work,
-set `host.interact_validator.resolver` to
-`func(target_id: int, player_id: int) -> Dictionary`, returning
-`{"x": float, "y": float}` in tiles only for an existing target the player
-may use, or `{}` otherwise. Set `host.on_interact` to
-`func(player_id: int, target_id: int) -> void` to apply accepted presses.
-The resolver defaults to unknown, so no interaction is accepted until wired.
+Both hooks are wired by default. `host.interact_validator.resolver` returns
+`{"x", "y"}` only for a live bag in the shared sim owned by that player.
+`host.on_interact` (`func(player_id, target_id)`) hands an accepted target to
+that tick's `InputIntent.interact_target_id`, and the sim picks the bag up
+into the player's inventory in the same step (with its own owner and range
+checks). Replacing `on_interact` replaces the pickup.
 
 ## Host API (lobby UI)
 
@@ -254,16 +245,33 @@ lobby UI drives it through these calls.
 
 **Local player** (listen host): `add_local_player(character = null) -> int`
 returns the id, or -1 when full; it counts toward `max_players`.
+The character goes to the shared sim: `null` means `LobbyHost.DEFAULT_CLASS_ID`
+(the v0.1 default, `thornguard`), a String is a class id, and a Dictionary
+`{class_id, x?, y?, hp?}` also sets the spawn. Remote players get the default
+class until the host-lobby protocol carries one. Player ids come from the
+sim's single entity allocator (`LocalSim.alloc_player_id()`), so they never
+collide with enemy, projectile or bag ids; `add_player` / `place_player`
+reserve a caller-chosen id and refuse one already held by an entity.
+Leaving removes the player's ability state from the sim. A join that matches
+a host-verified identity gets back the exact cooldown and Focus it left with;
+every other join starts conservative (ability on full cooldown, 0 Focus), so
+a rejoin can't reset ability state. Local players: `remove_local_player()`
+returns a single-use host-issued token for `add_local_player(character,
+rejoin_token)`. Remote joins have no verified identity until the handshake PR,
+so they always start conservative. Saved states are bounded and cleared by
+`stop()`; one that is no longer stored rejoins conservative.
 `submit_local_input(player_id, intent: InputIntent)` uses the same per-tick
 queue and rules as a remote InputFrame (applied once per seq, interact presses
 go through the interact validator), with no socket and no message budget.
-`remove_local_player(player_id)`.
+`remove_local_player(player_id) -> String` (rejoin token, see above).
 
 **View**: `signal ticked(tick: int)` fires at the end of every host tick.
-`world_view(player_id) -> WorldSnapshot` (null before the player's first
-tick) is a read-only `HostWorldSnapshot`: that player's sim snapshot, with
-`host_tick` and `others` (`{"id","x","y","aim","hp","local"}`) added.
-`tick` and spawn ticks inside use that player's sim clock.
+`world_view(player_id) -> WorldSnapshot` (null until the player is in the sim,
+i.e. before the first tick after joining) is a copy of the shared sim's
+`world_view(player_id)`, every field copied generically: all players in
+`players`, but only that viewer's own bags, inventory and HUD state. `tick`
+and spawn ticks inside use the sim clock, which matches the host tick.
+`Snapshot.bags` on the wire carries the same per-viewer bags.
 
 **Imports**: `import_character(blob, player_id) -> int` returns an
 `ImportResult` constant (`import_result.gd`). Checked only at import, never at
@@ -276,7 +284,7 @@ Hello, so a lobby with imports off can still be joined.
 | `REJECTED_OFFLINE_OFF` (2) | character was played offline, lobby has `offline_allowed = false` |
 | `REJECTED_BAD_FORMAT` (3) | not a character file |
 | `REJECTED_UNSUPPORTED_VERSION` (4) | character file version this host can't read |
-| `REJECTED_BAD_SIGNATURE` (5) | signature not verified (every blob for now) |
+| `REJECTED_BAD_SIGNATURE` (5) | signature missing or not verified (import fails closed) |
 | `REJECTED_ALREADY_EXISTS` (6) | this player already imported a character here |
 | `REJECTED_UNKNOWN_PLAYER` (7) | no such player |
 
@@ -288,12 +296,13 @@ so nothing imports until the host-lobby protocol PR adds it.
 
 **Ability press**: `InputFrame.ability_pressed` (and `InputIntent.ability_pressed`
 for the local player) is a one-shot press on that frame's seq. The host applies
-it at most once per seq (seq 0 is rejected), hands it to the player's sim intent
-on the next tick, and clears it after that tick. A later frame in the same tick
+it at most once per seq (seq 0 is rejected), hands it to that player's
+`apply_input` intent on the next tick, and clears it after that tick. A later frame in the same tick
 that doesn't repeat it keeps the press. Focus and cooldown checks are the sim's.
 
-**Sim**: each player is simulated by the shared `LocalSim` rules (movement,
-shots). The world is not one shared multi-player `LocalSim` yet, so players
-don't see shared enemies. The stand-in bullet field only runs for the load
-test (`--emitters N`, default 0).
+**Sim**: one shared multi-player `LocalSim` (`host.sim`) runs every player.
+Each tick the host calls `sim.apply_input(id, intent)` once per player with
+the newest accepted seq, then `sim.step()` once; joins and leaves apply at the
+next step. The stand-in bullet field only runs for the load test
+(`--emitters N`, default 0).
 

@@ -1130,6 +1130,13 @@ class Snapshot:
 		service.func_ref = Callable(self, "add_players")
 		data[__players.tag] = service
 		
+		var __bags_default: Array[LootBag] = []
+		__bags = PBField.new("bags", PB_DATA_TYPE.MESSAGE, PB_RULE.REPEATED, 3, true, __bags_default)
+		service = PBServiceField.new()
+		service.field = __bags
+		service.func_ref = Callable(self, "add_bags")
+		data[__bags.tag] = service
+		
 	var data = {}
 	
 	var __tick: PBField
@@ -1155,6 +1162,152 @@ class Snapshot:
 		var element = PlayerStub.new()
 		__players.value.append(element)
 		return element
+	
+	var __bags: PBField
+	func get_bags() -> Array[LootBag]:
+		return __bags.value
+	func clear_bags() -> void:
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__bags.value.clear()
+	func add_bags() -> LootBag:
+		var element = LootBag.new()
+		__bags.value.append(element)
+		return element
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+class LootBag:
+	func _init():
+		var service
+		
+		__id = PBField.new("id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __id
+		data[__id.tag] = service
+		
+		__x = PBField.new("x", PB_DATA_TYPE.FLOAT, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT])
+		service = PBServiceField.new()
+		service.field = __x
+		data[__x.tag] = service
+		
+		__y = PBField.new("y", PB_DATA_TYPE.FLOAT, PB_RULE.OPTIONAL, 3, true, DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT])
+		service = PBServiceField.new()
+		service.field = __y
+		data[__y.tag] = service
+		
+		__owner_player_id = PBField.new("owner_player_id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 4, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __owner_player_id
+		data[__owner_player_id.tag] = service
+		
+		__t_star = PBField.new("t_star", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 5, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __t_star
+		data[__t_star.tag] = service
+		
+		__spawn_tick = PBField.new("spawn_tick", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __spawn_tick
+		data[__spawn_tick.tag] = service
+		
+	var data = {}
+	
+	var __id: PBField
+	func has_id() -> bool:
+		if __id.value != null:
+			return true
+		return false
+	func get_id() -> int:
+		return __id.value
+	func clear_id() -> void:
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_id(value : int) -> void:
+		__id.value = value
+	
+	var __x: PBField
+	func has_x() -> bool:
+		if __x.value != null:
+			return true
+		return false
+	func get_x() -> float:
+		return __x.value
+	func clear_x() -> void:
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__x.value = DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT]
+	func set_x(value : float) -> void:
+		__x.value = value
+	
+	var __y: PBField
+	func has_y() -> bool:
+		if __y.value != null:
+			return true
+		return false
+	func get_y() -> float:
+		return __y.value
+	func clear_y() -> void:
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__y.value = DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT]
+	func set_y(value : float) -> void:
+		__y.value = value
+	
+	var __owner_player_id: PBField
+	func has_owner_player_id() -> bool:
+		if __owner_player_id.value != null:
+			return true
+		return false
+	func get_owner_player_id() -> int:
+		return __owner_player_id.value
+	func clear_owner_player_id() -> void:
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__owner_player_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_owner_player_id(value : int) -> void:
+		__owner_player_id.value = value
+	
+	var __t_star: PBField
+	func has_t_star() -> bool:
+		if __t_star.value != null:
+			return true
+		return false
+	func get_t_star() -> int:
+		return __t_star.value
+	func clear_t_star() -> void:
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__t_star.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_t_star(value : int) -> void:
+		__t_star.value = value
+	
+	var __spawn_tick: PBField
+	func has_spawn_tick() -> bool:
+		if __spawn_tick.value != null:
+			return true
+		return false
+	func get_spawn_tick() -> int:
+		return __spawn_tick.value
+	func clear_spawn_tick() -> void:
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__spawn_tick.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_spawn_tick(value : int) -> void:
+		__spawn_tick.value = value
 	
 	func _to_string() -> String:
 		return PBPacker.message_to_string(data)

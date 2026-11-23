@@ -8,11 +8,12 @@ extends RefCounted
 ## the accept range in data/scaling.json (`interact_accept_range_tiles`),
 ## center to center, from the player's host position.
 ##
-## HOOK for the loot/interact work (#30): set `resolver` to a Callable
+## `resolver` is a Callable
 ##   func(target_id: int, player_id: int) -> Dictionary
 ## that returns {"x": float, "y": float} (tile units) for a target that exists
-## and that this player may use, or {} otherwise. Then set LobbyHost.on_interact
-## to receive accepted presses. Until then every target is unknown and dropped.
+## and that this player may use, or {} otherwise. LobbyHost sets it to the
+## player's own live bags in its shared LocalSim; on its own the validator
+## treats every target as unknown.
 
 ## Accept range, loaded through DataCatalog / SimScaling (same as #30).
 var scaling: SimScaling = DataCatalog.load_default().scaling

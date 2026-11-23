@@ -73,6 +73,22 @@ message InputFrame {
 message Snapshot {
   uint32 tick = 1;
   repeated PlayerStub players = 2;
+  // Loot bags visible to the receiving player: only that player's own bags.
+  // Each recipient gets its own list; it is empty for most players.
+  repeated LootBag bags = 3;
+}
+
+// A personal loot bag on the ground (tile units). Item details stay
+// server-side until pickup.
+message LootBag {
+  uint64 id = 1;
+  float x = 2;
+  float y = 3;
+  uint64 owner_player_id = 4;
+  // Tier reference (T*); the client derives the bag color from it.
+  uint32 t_star = 5;
+  // Server tick the bag dropped on.
+  uint32 spawn_tick = 6;
 }
 
 message PlayerStub {

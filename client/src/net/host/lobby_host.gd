@@ -4,10 +4,13 @@ extends RefCounted
 ## load test. TCPServer + WebSocketPeer speaking proto/v1 through the
 ## godobuf codec. No MultiplayerAPI / RPCs.
 ##
-## Each player is driven by the real LocalSim (movement + player shots).
-## Enemy bullets come from HostStandinBulletField, a labeled stand-in used
-## only by the load test (emitter_count > 0, set by --emitters). A normal
-## lobby runs with emitter_count = 0.
+## All players share ONE LocalSim (`sim`). Each tick the host feeds every
+## player's newest accepted input with sim.apply_input(id, intent), at most
+## once per player, then calls sim.step() once. Joins and leaves go through
+## sim.add_player / sim.remove_player and take effect at the next step.
+## Enemy bullets in the load test come from HostStandinBulletField, a
+## labeled stand-in used only when emitter_count > 0 (set by --emitters). A
+## normal lobby runs with emitter_count = 0.
 ##
 ## Lobby API for the UI (see client/README.md): apply_settings()/settings()
 ## with LobbySettings, a local player on the same input path as remote ones
@@ -29,7 +32,20 @@ const LT := preload("res://src/net/host/loadtest_state_pb.gd")
 
 const MAX_CATCH_UP: int = 5
 const PERIOD_USEC: int = 50000  # 1e6 / SimConstants.TICK_HZ
+## Stand-in hp pool for HostStandinBulletField hits (load test only).
 const START_HP: int = 100
+## Class for remote players until the host-lobby protocol carries one.
+## TODO(host-lobby protocol PR): take the class from the joining client.
+const DEFAULT_CLASS_ID := "thornguard"
+## Ability state across leave/rejoin: a join that matches a host-verified
+## identity gets back the exact cooldown and Focus it left with. Every other
+## join (new, unknown, or no longer stored) starts conservative: the ability
+## on its full cooldown and 0 Focus, so no join gets a free full bar.
+## Saved states are kept for the life of the lobby, at most this many
+## (oldest dropped; a dropped one rejoins conservative), cleared by stop().
+const MAX_ABILITY_STASH: int = 256
+const CONSERVATIVE := {"conservative": true}
+const _LOCAL_KEY_PREFIX := "local:"
 const EMITTER_RADIUS: float = 0.6
 ## Matches the Go server's instance.DefaultInstanceID (the smoke instance).
 const DEFAULT_INSTANCE_ID: int = 1
@@ -80,7 +96,6 @@ class HostConn:
 class HostPlayer:
 	extends RefCounted
 	var id: int = 0
-	var sim: LocalSim
 	var seq: int = 0
 	var move_x: float = 0.0
 	var move_y: float = 0.0
@@ -92,6 +107,10 @@ class HostPlayer:
 	## One-shot ability press from an accepted frame since the last tick.
 	## Cleared after the tick it is applied in.
 	var ability_pressed: bool = false
+	## Interact target accepted by the validator this tick, handed to the
+	## shared sim as InputIntent.interact_target_id (0 = none).
+	var interact_forward: int = 0
+	## Stand-in hp (HostStandinBulletField hits only; the sim keeps real hp).
 	var hp: int = START_HP
 	var join_tick: int = 0
 	var x: float = 0.0
@@ -100,9 +119,15 @@ class HostPlayer:
 	## Hosted on this machine, no socket (add_local_player).
 	var is_local: bool = false
 	var character: Variant = null
+	## Class handed to the shared sim at join.
+	var class_id: String = ""
+	## True once a sim step has run with this player in it.
+	var in_sim: bool = false
+	## Ability state to apply right after the step that adds this player:
+	## {"cooldown": int, "focus": float} for a matched identity, CONSERVATIVE
+	## otherwise; {} once applied.
+	var restore_ability: Dictionary = {}
 	var imported_character := PackedByteArray()
-	## That player's sim snapshot after the last tick (for world_view).
-	var last_snap: WorldSnapshot = null
 
 
 # Config
@@ -131,9 +156,18 @@ var max_players: int:
 var clock: Callable = Time.get_ticks_usec
 ## Validates interact presses (range, once per seq, known/allowed target).
 var interact_validator := HostInteractValidator.new()
-## HOOK (#30): called as on_interact.call(player_id, target_id) for each
-## accepted interact press, after that player's movement for the tick.
+## Called as on_interact.call(player_id, target_id) for each accepted
+## interact press, before the sim step. The default hands the target to the
+## shared sim, which picks the bag up into that player's inventory.
 var on_interact: Callable = Callable()
+## The shared world: every player, enemy, projectile and loot bag.
+var sim: LocalSim
+var catalog: DataCatalog
+## identity key -> {"id", "cooldown", "focus"} for players who left (bounded
+## FIFO). Keys are host-verified identities, never raw player ids.
+var _ability_stash: Dictionary = {}
+var _ability_stash_order: Array[String] = []
+var _builtin_taken: bool = false
 
 # State
 var tick: int = 0
@@ -159,7 +193,6 @@ var _settings := LobbySettings.new()
 var _unsafe_max_players: int = 0
 var _tcp := TCPServer.new()
 var _conns: Array[HostConn] = []
-var _next_player_id: int = 1
 var _config: SimConfig
 var _start_usec: int = 0
 var _n: int = 0  # index of the next due tick
@@ -184,14 +217,28 @@ var _inputs_this_tick: int = 0
 
 func _init(config: SimConfig = null) -> void:
 	_config = config if config != null else SimConfig.new()
+	catalog = DataCatalog.load_default()
+	sim = LocalSim.new(_config, 0.0, 0.0, catalog)
+	# LocalSim starts with a solo player 1; the host owns the roster, so
+	# drop it at the first step unless a host player 1 joins first.
+	sim.remove_player(1)
+	_configure_sim()
+	interact_validator.resolver = _resolve_bag
+	on_interact = _forward_interact
 	# Replaced in start(); lets a not-yet-listening host tick local players.
 	bullets = HostStandinBulletField.new(instance_seed, 0, arena_size, arena_size)
+
+
+func _configure_sim() -> void:
+	sim.set_bounds(0.0, 0.0, arena_size, arena_size)
+	sim.set_world_seed(instance_seed)
 
 
 func start() -> Error:
 	if _settings.join_code == "":
 		_settings.join_code = LobbySettings.generate_join_code()
 	bullets = HostStandinBulletField.new(instance_seed, emitter_count, arena_size, arena_size)
+	_configure_sim()
 	var err := _tcp.listen(port, bind_address)
 	if err != OK:
 		return err
@@ -205,7 +252,12 @@ func stop() -> void:
 	for c in _conns:
 		c.ws.close()
 	_conns.clear()
+	for p in players:
+		sim.remove_player(p.id)
 	players.clear()
+	# The lobby is closing: saved ability states do not outlive it.
+	_ability_stash.clear()
+	_ability_stash_order.clear()
 	_tcp.stop()
 
 
@@ -245,12 +297,17 @@ func is_m100_allowed(m100: int) -> bool:
 
 ## Adds a player hosted on this machine (listen server). Counts toward
 ## max_players. Returns the player id, or -1 if the lobby is full.
-func add_local_player(character: Variant = null) -> int:
+## `character` is passed to the shared sim: null (DEFAULT_CLASS_ID), a class
+## id String, or a Dictionary {class_id, x?, y?, hp?}.
+## `rejoin_token` is the token remove_local_player() returned when this
+## player left: the player gets their id back with the exact cooldown and
+## Focus they left with. Any other value (empty, unknown, already used, or
+## no longer stored) is a new join and starts conservative.
+func add_local_player(character: Variant = null, rejoin_token: String = "") -> int:
 	if players.size() >= max_players:
 		return -1
-	var p := _add_player()
+	var p := _add_player(character, _LOCAL_KEY_PREFIX + rejoin_token if rejoin_token != "" else "")
 	p.is_local = true
-	p.character = character
 	return p.id
 
 
@@ -265,42 +322,33 @@ func submit_local_input(player_id: int, intent: InputIntent) -> void:
 			intent.interact_target_id, intent.ability_pressed)
 
 
-func remove_local_player(player_id: int) -> void:
+## Removes a local player. Returns a host-issued rejoin token (random, single
+## use) for add_local_player(), or "" if the player is unknown.
+func remove_local_player(player_id: int) -> String:
 	var p := _find_player(player_id)
 	if p == null or not p.is_local:
-		return
-	interact_validator.forget_player(p.id)
-	players.erase(p)
+		return ""
+	var token := Crypto.new().generate_random_bytes(16).hex_encode()
+	_leave(p, _LOCAL_KEY_PREFIX + token)
+	return token
 
 
-## Read-only view for one player after the last tick: that player's sim
-## snapshot plus the other players and any stand-in bullets. Null if the
-## player is unknown or has not been simulated yet.
+## Read-only view for one player after the last tick: the shared sim's
+## world_view(player_id), copied field by field, so it carries everyone in
+## `players` but only this player's own bags, inventory and HUD state. Adds
+## the stand-in bullets when the load test runs them. Null if the player is
+## unknown or not in the sim yet (joins apply at the next step).
 func world_view(player_id: int) -> WorldSnapshot:
 	var p := _find_player(player_id)
-	if p == null or p.last_snap == null:
+	if p == null or not p.in_sim or sim.get_player(player_id) == null:
 		return null
-	var src := p.last_snap
-	var v := HostWorldSnapshot.new()
-	v.tick = src.tick
-	v.host_tick = tick
-	v.player_id = p.id
-	v.player_x = src.player_x
-	v.player_y = src.player_y
-	v.player_aim = src.player_aim
-	v.player_hp = src.player_hp
-	v.player_max_hp = src.player_max_hp
-	v.player_flash_ticks = src.player_flash_ticks
-	v.applied_seq = src.applied_seq
-	v.projectiles = src.projectiles.duplicate()
-	v.enemies = src.enemies.duplicate()
-	v.pattern_bullets = src.pattern_bullets.duplicate()
+	var v := copy_snapshot(sim.world_view(player_id))
 	if bullets != null and bullets.b_count > 0:
 		# Stand-in hits are host-side; show host hp and the stand-in bullets
-		# in this player's sim time base.
+		# in the sim's time base.
 		v.player_hp = p.hp
 		v.player_max_hp = START_HP
-		var offset: int = tick - src.tick
+		var offset: int = tick - v.tick
 		for i in range(bullets.b_count):
 			var b := PatternBullet.new()
 			b.id = -(i + 1)
@@ -312,11 +360,22 @@ func world_view(player_id: int) -> WorldSnapshot:
 			b.lifetime_ticks = bullets.lifetime_ticks
 			b.radius_tiles = bullets.bullet_radius
 			v.pattern_bullets.append(b)
-	for o in players:
-		if o == p:
-			continue
-		v.others.append({"id": o.id, "x": o.x, "y": o.y, "aim": o.aim_applied, "hp": o.hp, "local": o.is_local})
 	return v
+
+
+## Copies every script variable of a WorldSnapshot. Arrays are duplicated
+## (shallow), so fields added to WorldSnapshot later come along unchanged.
+static func copy_snapshot(src: WorldSnapshot) -> WorldSnapshot:
+	var dst := WorldSnapshot.new()
+	for prop in src.get_property_list():
+		if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE == 0:
+			continue
+		var name: StringName = prop["name"]
+		var val: Variant = src.get(name)
+		if val is Array:
+			val = (val as Array).duplicate()
+		dst.set(name, val)
+	return dst
 
 
 ## Checks an imported character against the lobby's import flags. Called only
@@ -620,64 +679,169 @@ static func _finite_or_zero(v: float) -> float:
 	return v if is_finite(v) else 0.0
 
 
-func _add_player() -> HostPlayer:
+## `identity` is a host-verified key ("" = none). Only a stored key gets its
+## saved ability state back; everything else starts conservative.
+## TODO(handshake PR): Hello carries no verifiable identity yet, so remote
+## joins pass "" and always start conservative.
+func _add_player(character: Variant = null, identity: String = "") -> HostPlayer:
 	var p := HostPlayer.new()
-	p.id = _next_player_id
-	_next_player_id += 1
+	p.restore_ability = CONSERVATIVE
+	# Ids come from the sim's one entity allocator, so a player id never
+	# collides with an enemy, projectile or bag (or a sim-only player such
+	# as LocalSim.place_ally, which never counts toward max_players).
+	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
+	if not saved.is_empty() and _find_player(int(saved["id"])) == null:
+		_ability_stash.erase(identity)
+		_ability_stash_order.erase(identity)
+		p.id = int(saved["id"])
+		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"])}
+	elif _sim_has_builtin_player():
+		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
+		_builtin_taken = true
+	else:
+		p.id = sim.alloc_player_id()
 	# Spread spawns over the arena deterministically by id.
 	var a: float = float(p.id) * 2.399963
 	var r: float = arena_size * 0.35 * sqrt(float(p.id % 50) / 50.0)
-	p.sim = LocalSim.new(_config, arena_size * 0.5 + cos(a) * r, arena_size * 0.5 + sin(a) * r)
-	p.sim.set_bounds(0.0, 0.0, arena_size, arena_size)
+	var rec := _sim_character(character, arena_size * 0.5 + cos(a) * r, arena_size * 0.5 + sin(a) * r)
+	p.character = character
+	p.class_id = String(rec["class_id"])
+	p.x = float(rec["x"])
+	p.y = float(rec["y"])
+	if sim.get_player(p.id) != null:
+		# Still in the sim (built-in player 1, or a leave not yet stepped):
+		# add_player cancels the pending removal; set it up in place.
+		sim.add_player(p.id)
+		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if rec.has("hp") else -1)
+		sim.set_player_class_for(p.id, p.class_id)
+		_restore_ability(p)
+	else:
+		sim.add_player(p.id, rec)
 	p.join_tick = tick
 	players.append(p)
 	return p
 
 
+## LocalSim spawns a solo player 1; it stays in the sim (pending removal)
+## until the first step unless a host player takes it over.
+func _sim_has_builtin_player() -> bool:
+	return not _builtin_taken and sim.tick() == 0 and sim.get_player(1) != null
+
+
+## Removes a host player from the lobby and the sim. With a host-verified
+## identity, saves their ability state under it for a later rejoin.
+func _leave(p: HostPlayer, identity: String = "") -> void:
+	interact_validator.forget_player(p.id)
+	if identity != "":
+		var saved: Dictionary = p.restore_ability
+		if saved.is_empty() and sim.get_player(p.id) != null:
+			saved = {"cooldown": sim.ability_cooldown_ticks(p.id), "focus": sim.focus(p.id)}
+		if saved.has("cooldown"):
+			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"]})
+	sim.remove_player(p.id)
+	players.erase(p)
+
+
+func _stash_ability(key: String, saved: Dictionary) -> void:
+	if _ability_stash.has(key):
+		_ability_stash_order.erase(key)
+	_ability_stash[key] = saved
+	_ability_stash_order.append(key)
+	while _ability_stash_order.size() > MAX_ABILITY_STASH:
+		_ability_stash.erase(_ability_stash_order.pop_front())
+
+
+## Applies p.restore_ability: the saved values, or CONSERVATIVE (full
+## cooldown for the player's ability, 0 Focus).
+func _restore_ability(p: HostPlayer) -> void:
+	var saved := p.restore_ability
+	p.restore_ability = {}
+	if saved.has("cooldown"):
+		sim.set_ability_cooldown_ticks(p.id, int(saved["cooldown"]))
+		sim.set_focus(p.id, float(saved["focus"]))
+	elif saved.has("conservative"):
+		sim.set_ability_cooldown_ticks(p.id, sim.world_view(p.id).ability_cooldown_max)
+		sim.set_focus(p.id, 0.0)
+
+
+## Number of saved ability states (bounded by MAX_ABILITY_STASH).
+func ability_stash_size() -> int:
+	return _ability_stash.size()
+
+
+## Character record for LocalSim.add_player: class (default for remote and
+## null), spawn position unless the caller gave one, optional hp.
+static func _sim_character(character: Variant, spawn_x: float, spawn_y: float) -> Dictionary:
+	var rec := {"class_id": DEFAULT_CLASS_ID, "x": spawn_x, "y": spawn_y}
+	if character is String and String(character) != "":
+		rec["class_id"] = String(character)
+	elif character is Dictionary:
+		var d: Dictionary = character
+		for k in d:
+			rec[k] = d[k]
+		if d.has("class") and not d.has("class_id"):
+			rec["class_id"] = String(d["class"])
+		rec.erase("class")
+	return rec
+
+
 func _drop_player(c: HostConn) -> void:
 	if c.player == null:
 		return
-	interact_validator.forget_player(c.player.id)
-	players.erase(c.player)
+	# No verified identity on remote joins yet (see _add_player).
+	_leave(c.player)
 	c.player = null
 
 
-## Steps every player's LocalSim and the stand-in bullets. Returns new player
+## Feeds every player's newest accepted input to the shared sim (once per
+## player), steps it once, then the stand-in bullets. Returns new player
 ## shots as [owner, host_spawn_tick, x, y, angle].
 func _step_sim() -> Array[PackedFloat64Array]:
 	var n: int = players.size()
+	for p in players:
+		var sp := sim.get_player(p.id)
+		if sp == null:
+			continue  # joins next step; keep one-shots for then
+		if not p.interacts.is_empty():
+			_apply_interacts(p, sp)
+		var intent := InputIntent.from_raw(p.seq, p.move_x, p.move_y, p.aim, p.fire_held)
+		intent.interact_target_id = p.interact_forward
+		p.interact_forward = 0
+		if p.ability_pressed:
+			ability_presses += 1
+			intent.ability_pressed = true
+			p.ability_pressed = false  # one-shot
+		sim.apply_input(p.id, intent)
+	sim.step()
 	var px := PackedFloat64Array()
 	var py := PackedFloat64Array()
 	var hp := PackedInt32Array()
 	px.resize(n)
 	py.resize(n)
 	hp.resize(n)
-	var shots: Array[PackedFloat64Array] = []
 	for i in range(n):
 		var p := players[i]
-		var intent := InputIntent.from_raw(p.seq, p.move_x, p.move_y, p.aim, p.fire_held)
-		if p.ability_pressed:
-			ability_presses += 1
-			# Field name matches InputIntent.ability_pressed (class abilities).
-			intent.ability_pressed = true
-			p.ability_pressed = false  # one-shot
-		p.sim.submit_input(intent)
-		p.sim.step()
-		var snap := p.sim.snapshot()
-		p.last_snap = snap
-		p.x = snap.player_x
-		p.y = snap.player_y
-		p.aim_applied = snap.player_aim
+		var sp := sim.get_player(p.id)
+		if sp != null:
+			p.in_sim = true
+			if not p.restore_ability.is_empty():
+				# Before any input of theirs is applied (see above).
+				_restore_ability(p)
+			p.x = sp.x
+			p.y = sp.y
+			p.aim_applied = sp.aim
 		px[i] = p.x
 		py[i] = p.y
-		if not p.interacts.is_empty():
-			_apply_interacts(p)
 		hp[i] = p.hp
-		var local_tick: int = p.sim.tick()
-		for shot in snap.projectiles:
-			if shot.spawn_tick == local_tick:
-				shots.append(PackedFloat64Array([float(p.id), float(tick), shot.origin_x, shot.origin_y, atan2(shot.dir_y, shot.dir_x)]))
-			_shot_vs_emitters(shot, local_tick)
+	var shots: Array[PackedFloat64Array] = []
+	var done: int = sim.tick()
+	# Read-only walk of the sim's live shots (load-test projection and
+	# stand-in emitter hits); avoids building a full world_view per tick.
+	for shot in sim.projectiles():
+		if shot.spawn_tick == done - 1:
+			shots.append(PackedFloat64Array([float(shot.owner_id), float(tick), shot.origin_x, shot.origin_y, atan2(shot.dir_y, shot.dir_x)]))
+		if bullets.emitters_x.size() > 0:
+			_shot_vs_emitters(shot, done)
 	bullets.step(tick, px, py, _config.player_radius_tiles, hp)
 	for i in range(n):
 		if hp[i] <= 0:
@@ -687,12 +851,31 @@ func _step_sim() -> Array[PackedFloat64Array]:
 	return shots
 
 
-func _apply_interacts(p: HostPlayer) -> void:
+## Runs this tick's interact presses through the validator, using the shared
+## sim's position for the player. Accepted presses go to on_interact.
+func _apply_interacts(p: HostPlayer, sp: SimPlayerState) -> void:
 	var pending := p.interacts
 	p.interacts = []
 	for press in pending:
-		if interact_validator.validate(p.id, press[0], press[1], p.x, p.y) and on_interact.is_valid():
+		if interact_validator.validate(p.id, press[0], press[1], sp.x, sp.y) and on_interact.is_valid():
 			on_interact.call(p.id, press[1])
+
+
+## interact_validator.resolver: a live bag in the shared sim owned by this
+## player, as {"x", "y"}; {} for anything else (dropped silently).
+func _resolve_bag(target_id: int, player_id: int) -> Dictionary:
+	var bag: GroundDrop = sim.bag_by_id(target_id)
+	if bag == null or bag.item == null or bag.item.state != ItemState.STATE_LIVE \
+			or bag.item.owner_player_id != player_id:
+		return {}
+	return {"x": bag.x, "y": bag.y}
+
+
+## Default on_interact: the sim applies the pickup in this tick's step.
+func _forward_interact(player_id: int, target_id: int) -> void:
+	var p := _find_player(player_id)
+	if p != null:
+		p.interact_forward = target_id
 
 
 func _shot_vs_emitters(shot: SimProjectile, local_tick: int) -> void:
@@ -708,6 +891,12 @@ func _shot_vs_emitters(shot: SimProjectile, local_tick: int) -> void:
 
 
 func _encode_snapshot() -> PackedByteArray:
+	return _encode_snapshot_for([])
+
+
+## Snapshot with the given bags (one viewer's own). Every viewer without
+## bags gets the same bytes.
+func _encode_snapshot_for(bags: Array) -> PackedByteArray:
 	var msg = PB.ServerMessage.new()
 	var s = msg.new_snapshot()
 	s.set_tick(tick)
@@ -715,7 +904,28 @@ func _encode_snapshot() -> PackedByteArray:
 		var stub = s.add_players()
 		stub.set_id(p.id)
 		stub.set_applied_seq(p.seq)
+	for bag in bags:
+		var b = s.add_bags()
+		b.set_id((bag as GroundDrop).id)
+		b.set_x(bag.x)
+		b.set_y(bag.y)
+		b.set_owner_player_id(bag.item.owner_player_id)
+		b.set_t_star(maxi(bag.t_star, 0))
+		b.set_spawn_tick(maxi(bag.spawn_tick, 0))
 	return msg.to_bytes()
+
+
+## Live bags in the shared sim, grouped by owner: owner_id -> Array[GroundDrop].
+func _bags_by_owner() -> Dictionary:
+	var out := {}
+	for bag in sim.ground_drops():
+		if bag.item == null or bag.item.state != ItemState.STATE_LIVE:
+			continue
+		var owner: int = bag.item.owner_player_id
+		if not out.has(owner):
+			out[owner] = []
+		out[owner].append(bag)
+	return out
 
 
 ## Load-test-only projection of a full snapshot (see loadtest_state.proto).
@@ -748,12 +958,18 @@ func _encode_full(new_shots: Array[PackedFloat64Array]) -> PackedByteArray:
 	return full.to_bytes()
 
 
+## Sends the shared Snapshot, or a per-viewer one carrying only that
+## viewer's own bags.
 func _send(bytes: PackedByteArray) -> int:
 	var sent: int = 0
+	var bags := _bags_by_owner()
 	for c in _conns:
 		if c.player == null or c.ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
 			continue
-		if c.ws.put_packet(bytes) == OK:
+		var out := bytes
+		if bags.has(c.player.id):
+			out = _encode_snapshot_for(bags[c.player.id])
+		if c.ws.put_packet(out) == OK:
 			sent += 1
 		c.ws.poll()  # flush now instead of 50 ms later
 	return sent
