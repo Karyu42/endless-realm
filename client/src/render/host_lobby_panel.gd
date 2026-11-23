@@ -109,17 +109,17 @@ func _build() -> void:
 	_settings_box.visible = false
 	_settings_box.add_theme_constant_override("separation", 6)
 	_name_edit = LineEdit.new()
-	_name_edit.placeholder_text = "Lobby name"
+	_name_edit.placeholder_text = _ui.text("name_placeholder")
 	_max_edit = LineEdit.new()
-	_max_edit.placeholder_text = "Max players (1–50)"
+	_max_edit.placeholder_text = _ui.text("max_players_placeholder")
 	_mmin_edit = LineEdit.new()
-	_mmin_edit.placeholder_text = "Min M (m100)"
+	_mmin_edit.placeholder_text = _ui.text("m100_min_placeholder")
 	_mmax_edit = LineEdit.new()
-	_mmax_edit.placeholder_text = "Max M (m100)"
+	_mmax_edit.placeholder_text = _ui.text("m100_max_placeholder")
 	_imports_check = CheckBox.new()
-	_imports_check.text = "Imports allowed"
+	_imports_check.text = _ui.text("imports_allowed_check")
 	_offline_check = CheckBox.new()
-	_offline_check.text = "Offline-flagged imports allowed"
+	_offline_check.text = _ui.text("offline_imports_check")
 	_apply_btn = Button.new()
 	_apply_btn.text = _ui.text("apply_settings")
 	_apply_btn.pressed.connect(_on_apply)

@@ -32,7 +32,13 @@
     "code_not_found": "No LAN lobby with that code yet. Keep the browser open.",
     "enter_host_port": "Enter host:port.",
     "import_character": "Import character",
-    "import_pick_title": "Choose a character file"
+    "import_pick_title": "Choose a character file",
+    "name_placeholder": "Lobby name",
+    "max_players_placeholder": "Max players (1–50)",
+    "m100_min_placeholder": "Min M (m100)",
+    "m100_max_placeholder": "Max M (m100)",
+    "imports_allowed_check": "Imports allowed",
+    "offline_imports_check": "Offline-flagged imports allowed"
   },
   "import_messages": {
     "IMPORT_RESULT_OK": "Character imported.",

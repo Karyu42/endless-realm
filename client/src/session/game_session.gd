@@ -158,7 +158,7 @@ func drop_local_player() -> String:
 func restore_local_player(character: Variant = null) -> int:
 	if lobby_host == null:
 		return -1
-	var pid: int = local_join.add(lobby_host, character)
+	var pid: int = local_join.restore(lobby_host, character)
 	if pid >= 0:
 		local_player_id = pid
 		source = HostWorldSource.new(lobby_host, pid)

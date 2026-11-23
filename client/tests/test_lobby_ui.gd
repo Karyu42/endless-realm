@@ -22,6 +22,8 @@ func test_pack_loads_without_fallbacks() -> void:
 	assert_gt(_ui.min_target_mm, 0.0)
 	assert_gt(_ui.assume_dpi, 0)
 	assert_false(_ui.text("imports_ok").is_empty())
+	assert_false(_ui.text("name_placeholder").is_empty())
+	assert_false(_ui.text("imports_allowed_check").is_empty())
 
 
 func test_missing_pack_is_invalid() -> void:
@@ -34,15 +36,29 @@ func test_import_messages_cover_every_import_result() -> void:
 	var codes: PackedInt32Array = ImportResult.all()
 	assert_gt(codes.size(), 0)
 	for code in codes:
-		var name: String = ImportResult.name_of(code)
-		assert_ne(name, "UNKNOWN", "all() must not contain an unnamed code")
-		assert_true(
-			_ui.maps_import(code),
-			"data/lobby_ui.json import_messages is missing %s" % name
-		)
-		var msg: String = _ui.import_message(code)
-		assert_false(msg.is_empty(), "empty player-facing message for %s" % name)
-		assert_ne(msg, name, "message for %s should be player-facing" % name)
+		_assert_import_mapped(code, "all()")
+	var script: Script = load("res://src/net/host/import_result.gd")
+	var constants: Dictionary = script.get_script_constant_map()
+	var seen := 0
+	for key in constants.keys():
+		var val: Variant = constants[key]
+		if typeof(val) != TYPE_INT:
+			continue
+		seen += 1
+		_assert_import_mapped(int(val), "constant map %s" % key)
+	assert_gte(seen, codes.size(), "constant map must include every all() code")
+
+
+func _assert_import_mapped(code: int, source: String) -> void:
+	var name: String = ImportResult.name_of(code)
+	assert_ne(name, "UNKNOWN", "%s: unnamed code %d" % [source, code])
+	assert_true(
+		_ui.maps_import(code),
+		"data/lobby_ui.json import_messages is missing %s (%s)" % [name, source]
+	)
+	var msg: String = _ui.import_message(code)
+	assert_false(msg.is_empty(), "empty player-facing message for %s (%s)" % [name, source])
+	assert_ne(msg, name, "message for %s should be player-facing" % name)
 
 
 func test_unknown_import_result_is_unmapped() -> void:
@@ -172,21 +188,124 @@ func test_validate_reasons_join_for_inline_display() -> void:
 	assert_true(text.contains("Level multipliers must be 0.50 to 1.50 in steps of 0.05."))
 
 
-func test_local_join_wrapper_spends_the_rejoin_token_once() -> void:
+func _start_host() -> void:
 	_host = LobbyHost.new(SimConfig.new())
 	_host.port = 0
 	assert_eq(_host.start(), OK)
+
+
+func _wait_ability_ready(id: int) -> void:
+	for i in range(2000):
+		if _host.sim.ability_cooldown_ticks(id) == 0 				and _host.sim.focus(id) >= float(_host.sim.focus_max(id)):
+			return
+		_host.run_tick()
+	fail_test("ability never became ready")
+
+
+func _assert_conservative(id: int) -> void:
+	var cd_max: int = _host.sim.world_view(id).ability_cooldown_max
+	assert_gt(cd_max, 0)
+	assert_eq(_host.sim.ability_cooldown_ticks(id), cd_max)
+	assert_almost_eq(_host.sim.focus(id), 0.0, 1e-6)
+
+
+func _cast(id: int, seq: int) -> void:
+	var it := InputIntent.from_raw(seq, 0.0, 0.0, 0.0, false)
+	it.ability_pressed = true
+	_host.submit_local_input(id, it)
+
+
+func test_local_join_wrapper_spends_the_rejoin_token_once() -> void:
+	_start_host()
 	var join := LobbyLocalJoin.new()
 	var id: int = join.add(_host, null)
 	assert_gt(id, 0)
 	assert_eq(join.token, "")
+	assert_true(join.joined)
 	var token: String = join.remove(_host, id)
 	assert_ne(token, "")
 	assert_eq(join.token, token)
-	var back: int = join.add(_host, null)
+	assert_true(join.left)
+	assert_false(join.joined)
+	var back: int = join.restore(_host, null)
 	assert_eq(back, id, "token must be passed to add_local_player")
 	assert_eq(join.token, "", "token is single use")
-	# A later add without a stored token is a first join, not a replay.
-	var other: int = join.add(_host, null)
-	assert_gt(other, 0)
-	assert_ne(other, id)
+	assert_true(join.joined)
+
+
+func test_add_while_joined_is_refused() -> void:
+	_start_host()
+	var join := LobbyLocalJoin.new()
+	var id: int = join.add(_host, null)
+	assert_gt(id, 0)
+	assert_eq(join.add(_host, null), -1)
+	assert_eq(_host.players.size(), 1)
+
+
+func test_restore_without_a_prior_drop_is_refused() -> void:
+	_start_host()
+	var join := LobbyLocalJoin.new()
+	assert_eq(join.restore(_host, null), -1)
+	var id: int = join.add(_host, null)
+	assert_gt(id, 0)
+	assert_eq(join.restore(_host, null), -1)
+	assert_eq(_host.players.size(), 1)
+	assert_true(join.joined)
+
+
+func test_second_leave_is_a_noop_and_keeps_the_token() -> void:
+	_start_host()
+	var join := LobbyLocalJoin.new()
+	var id: int = join.add(_host, null)
+	var token: String = join.remove(_host, id)
+	assert_ne(token, "")
+	assert_eq(join.remove(_host, id), token)
+	assert_eq(join.token, token)
+	assert_true(join.left)
+	assert_false(join.joined)
+
+
+func test_later_tokenless_add_is_conservative() -> void:
+	_start_host()
+	var join := LobbyLocalJoin.new()
+	var first: int = join.add(_host, null)
+	_host.run_tick()
+	_assert_ready_or_first(first)
+	join.remove(_host, first)
+	join.token = ""
+	var later: int = join.add(_host, null)
+	assert_gt(later, 0)
+	assert_ne(later, first)
+	_host.run_tick()
+	_assert_conservative(later)
+
+
+func _assert_ready_or_first(id: int) -> void:
+	assert_eq(_host.sim.ability_cooldown_ticks(id), 0)
+	assert_almost_eq(_host.sim.focus(id), float(_host.sim.focus_max(id)), 1e-6)
+
+
+func test_drop_restore_drop_drop_restore_keeps_ability_state() -> void:
+	_start_host()
+	var join := LobbyLocalJoin.new()
+	var id: int = join.add(_host, null)
+	_host.run_tick()
+	_wait_ability_ready(id)
+	_cast(id, 1)
+	_host.run_tick()
+	var cd: int = _host.sim.ability_cooldown_ticks(id)
+	var focus: float = _host.sim.focus(id)
+	assert_gt(cd, 0)
+	assert_lt(focus, float(_host.sim.focus_max(id)))
+	var token: String = join.remove(_host, id)
+	assert_ne(token, "")
+	assert_eq(join.restore(_host, null), id)
+	assert_eq(_host.sim.ability_cooldown_ticks(id), cd)
+	assert_almost_eq(_host.sim.focus(id), focus, 1e-6)
+	var kept: String = join.remove(_host, id)
+	assert_ne(kept, "")
+	assert_eq(join.remove(_host, id), kept)
+	assert_eq(join.token, kept)
+	assert_eq(join.restore(_host, null), id)
+	assert_eq(_host.sim.ability_cooldown_ticks(id), cd)
+	assert_almost_eq(_host.sim.focus(id), focus, 1e-6)
