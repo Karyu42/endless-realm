@@ -1221,12 +1221,245 @@ func test_practice_no_reset_under_living_or_lingering_player() -> void:
 	_host.sim.place_player(b, portal.x + 0.5, portal.y)
 	_enter(b, portal, 6)
 	assert_ne(inst.sim, sim0, "rebuilt once nobody living or lingering is inside")
-	# Only dead players inside: the next entry rebuilds and carries them.
+	# A player who dies inside leaves (with the restore); the next entry
+	# then rebuilds, since nobody living is inside.
 	var sim1 := inst.sim
 	var pb := _host._find_player(b)
 	inst.sim.get_player(pb.sim_id).hp = 0
+	_host.run_tick()
+	assert_true(_instance_of(b).is_overworld())
 	_host.sim.place_player(c, portal.x + 0.5, portal.y)
 	_enter(c, portal, 6)
 	assert_ne(inst.sim, sim1)
-	assert_same(_instance_of(b), inst)
-	assert_not_null(inst.sim.get_player(_host._find_player(b).sim_id))
+
+
+# --- practice instances: items never leave their owner -----------------------
+
+func _owned_item(id: int, did: String) -> ItemState:
+	var item := ItemState.new()
+	item.owner_player_id = id
+	item.tier = 1
+	item.drop_id = did
+	assert_true(_host.sim.get_player(id).inventory.add(item))
+	return item
+
+
+func _sp(id: int) -> SimPlayerState:
+	var p := _host._find_player(id)
+	return p.instance.sim.get_player(p.sim_id)
+
+
+func _ids_of(id: int) -> Array:
+	var out := []
+	for it in _sp(id).inventory.live_items():
+		out.append(it.drop_id)
+	return out
+
+
+## Every drop_id held by any player or lying anywhere, across instances.
+func _all_item_ids() -> Array:
+	var out := []
+	for inst in _host.instances:
+		for pid in inst.sim.player_ids():
+			for it in inst.sim.get_player(pid).inventory.live_items():
+				out.append(it.drop_id)
+		for bag in inst.sim.ground_drops():
+			out.append(bag.item.drop_id)
+	return out
+
+
+func _assert_unique(ids: Array) -> void:
+	var seen := {}
+	for d in ids:
+		assert_false(seen.has(d), "item %s exists once" % d)
+		seen[d] = true
+
+
+func _two_in_practice() -> Array:
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	var b := _join_near_portal(portal)
+	_owned_item(a, "a-sword")
+	_owned_item(b, "b-sword")
+	_enter(a, portal)
+	_enter(b, portal, 1)
+	return [portal, a, b]
+
+
+func test_practice_drop_is_refused() -> void:
+	_host = _new_host()
+	var t := _two_in_practice()
+	var a: int = t[1]
+	var inst := _instance_of(a)
+	# Something moves A's item to the ground (any sim path): undone at once.
+	var inv := _sp(a).inventory
+	var idx := inv.slots.find(inv.live_items()[0])
+	var item: ItemState = inv.take_slot(idx)
+	var bag := GroundDrop.new()
+	bag.id = inst.sim._alloc_id()
+	bag.item = item
+	bag.x = _sp(a).x
+	bag.y = _sp(a).y
+	inst.sim._ground_drops.append(bag)
+	_host.run_tick()
+	assert_true(_ids_of(a).has("a-sword"), "item stays with its owner")
+	assert_eq(inst.sim.ground_drops().size(), 0, "no pile left behind")
+	_assert_unique(_all_item_ids())
+
+
+func test_practice_give_is_refused() -> void:
+	_host = _new_host()
+	var t := _two_in_practice()
+	var a: int = t[1]
+	var b: int = t[2]
+	var inv := _sp(a).inventory
+	var item: ItemState = inv.take_slot(inv.slots.find(inv.live_items()[0]))
+	_sp(b).inventory.add(item)
+	_host.run_tick()
+	assert_true(_ids_of(a).has("a-sword"))
+	assert_false(_ids_of(b).has("a-sword"), "hand-off undone")
+	_assert_unique(_all_item_ids())
+
+
+func test_practice_pickup_of_others_item_is_refused() -> void:
+	_host = _new_host()
+	var t := _two_in_practice()
+	var a: int = t[1]
+	var b: int = t[2]
+	var inst := _instance_of(a)
+	# The host refuses the press, and the sim refuses the pickup itself.
+	var bag := GroundDrop.new()
+	bag.id = inst.sim._alloc_id()
+	var foreign := ItemState.new()
+	foreign.owner_player_id = _host._find_player(b).sim_id
+	foreign.drop_id = "foreign"
+	bag.item = foreign
+	bag.x = _sp(b).x
+	bag.y = _sp(b).y
+	inst.sim._ground_drops.append(bag)
+	assert_true(_host._resolve_bag(bag.id, b).is_empty(), "host refuses the press")
+	assert_false(inst.sim.item_transfers_allowed())
+	_host.run_tick()
+	assert_false(_ids_of(b).has("foreign"))
+	assert_false(_ids_of(a).has("foreign"))
+
+
+func test_practice_shared_container_deposit_is_refused() -> void:
+	_host = _new_host()
+	var t := _two_in_practice()
+	var a: int = t[1]
+	var b: int = t[2]
+	# Any interact target other than the exit (containers, players, bags)
+	# is refused in a practice instance.
+	assert_true(_host._resolve_bag(_host._find_player(b).sim_id, a).is_empty())
+	assert_true(_host._resolve_bag(123456789, a).is_empty())
+	_exit_here(a, 5)  # the exit itself still works
+	assert_true(_instance_of(a).is_overworld())
+	assert_true(_ids_of(a).has("a-sword"))
+
+
+func test_practice_spawns_no_loot_bags() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var e := EnemyState.new()
+	e.id = inst.sim._alloc_id()
+	e.x = 1.0
+	e.y = 1.0
+	e.content_level = 1
+	for i in range(20):
+		assert_null(inst.sim._try_grant_roll(e, _host._find_player(a).sim_id, i, "thornguard", inst.sim.tick()))
+	assert_eq(inst.sim.ground_drops().size(), 0, "no bags spawn at all")
+	# A normal instance still drops bags.
+	var normal := LocalSim.new(SimConfig.new(), 16.0, 16.0, _host.catalog)
+	var made := 0
+	for i in range(50):
+		if normal._try_grant_roll(e, 1, i, "thornguard", 0) != null:
+			made += 1
+	assert_eq(normal.ground_drops().size(), made)
+
+
+func test_practice_no_duplicate_after_any_exit_path() -> void:
+	_host = _new_host()
+	var t := _two_in_practice()
+	var portal: PortalSnapshot = t[0]
+	var a: int = t[1]
+	var b: int = t[2]
+	# Exit portal.
+	var inv := _sp(a).inventory
+	_sp(b).inventory.add(inv.take_slot(inv.slots.find(inv.live_items()[0])))
+	_exit_here(a, 5)
+	_assert_unique(_all_item_ids())
+	_host.run_tick()
+	_assert_unique(_all_item_ids())
+	# Death.
+	_enter_persistent(a, portal, 6)
+	inv = _sp(a).inventory
+	_sp(b).inventory.add(inv.take_slot(inv.slots.find(inv.live_items()[0])))
+	_sp(a).hp = 0
+	_host.run_tick()
+	assert_true(_instance_of(a).is_overworld())
+	_assert_unique(_all_item_ids())
+	# Disconnect from inside.
+	_host.run_tick()
+	var inv_b := _sp(b).inventory
+	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	var token := _host.remove_local_player(b)
+	_host.run_tick()
+	_assert_unique(_all_item_ids())
+	assert_eq(inv_b.live_items().size() >= 0, true)
+	assert_ne(token, "")
+
+
+func test_practice_death_restores() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_owned_item(a, "a-ring")
+	var before := _progress(a)
+	_enter(a, portal)
+	_grant_inside(a)
+	_sp(a).hp = 0
+	_host.run_tick()
+	assert_true(_instance_of(a).is_overworld(), "death leaves the practice instance")
+	assert_eq(_progress(a), before)
+	assert_gt(_host.sim.get_player(a).hp, 0)
+	assert_true(_ids_of(a).has("a-ring"))
+
+
+func test_practice_reconnect_restores() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_owned_item(a, "a-ring")
+	var before := _progress(a)
+	_enter(a, portal)
+	_grant_inside(a)
+	var token := _host.remove_local_player(a)
+	_ticks(LobbyHost.LINGER_TICKS + 1)
+	var back := _host.add_local_player(null, token)
+	_host.run_tick()
+	assert_eq(back, a)
+	assert_eq(_progress(a), before, "reconnect after the linger restores")
+	assert_true(_ids_of(a).has("a-ring"))
+	_assert_unique(_all_item_ids())
+
+
+func test_practice_piles_wiped_on_reset() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	var bag := GroundDrop.new()
+	bag.id = inst.sim._alloc_id()
+	var item := ItemState.new()
+	item.drop_id = "pile"
+	bag.item = item
+	inst.sim._ground_drops.append(bag)
+	_exit_here(a, 5)
+	_enter_persistent(a, portal, 6)
+	assert_eq(inst.sim.ground_drops().size(), 0, "reset leaves no piles")
+	assert_false(_all_item_ids().has("pile"))

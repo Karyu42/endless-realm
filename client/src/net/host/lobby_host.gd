@@ -999,6 +999,10 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			p.x = sp.x
 			p.y = sp.y
 			p.aim_applied = sp.aim
+	for inst in stepped:
+		if inst.no_persistent_rewards:
+			_enforce_practice_items(inst)
+			_route_practice_deaths(inst)
 	# Transfers queued during this step: the mover is rostered in the
 	# destination now and first steps there next tick (one step per tick).
 	for inst in stepped:
@@ -1059,6 +1063,13 @@ func _resolve_bag(target_id: int, player_id: int) -> Dictionary:
 	var p := _find_player(player_id)
 	if p == null or p.instance == null:
 		return {}
+	if p.instance.no_persistent_rewards:
+		# Practice instances: no pickups, deposits or hand-offs; only the
+		# exit can be used.
+		var exit: PortalSnapshot = p.instance.sim.portal_by_id(target_id)
+		if exit == null or exit.kind != PortalSnapshot.KIND_EXIT:
+			return {}
+		return {"x": exit.x, "y": exit.y}
 	var bag: GroundDrop = p.instance.sim.bag_by_id(target_id)
 	if bag == null:
 		return _resolve_portal(p, target_id)
@@ -1233,6 +1244,8 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 			return
 		dest.portal_key = key
 		dest.no_persistent_rewards = record.no_persistent_rewards
+		if dest.no_persistent_rewards:
+			dest.sim.set_item_rules(false, false)
 		dest.capacity = record.capacity
 		dest.admitted = record.admitted
 		record.instance = dest
@@ -1273,6 +1286,63 @@ func _create_dungeon_instance(xfer: PortalTransfer) -> HostInstance:
 	inst.sim = dsim
 	instances.append(inst)
 	return inst
+
+
+## Practice instances: nothing leaves its owner's inventory. Items a
+## player did not bring in are removed, brought-in items that left are put
+## back, and any copy of them elsewhere in the instance is removed.
+func _enforce_practice_items(inst: HostInstance) -> void:
+	var owned: Dictionary = {}  # drop_id -> HostPlayer that brought it in
+	var originals: Dictionary = {}  # drop_id -> ItemState (entry copy)
+	var here: Array[HostPlayer] = []
+	for p in players:
+		if p.instance != inst or p.progression_entries.is_empty():
+			continue
+		here.append(p)
+		var inv: PlayerInventory = p.progression_entries.back()["fields"].get("inventory")
+		if inv == null:
+			continue
+		for item in inv.live_items():
+			if item.drop_id != "":
+				owned[item.drop_id] = p
+				originals[item.drop_id] = item
+	for p in here:
+		var sp := inst.sim.get_player(p.sim_id)
+		if sp == null or sp.inventory == null:
+			continue
+		var inv := sp.inventory
+		for i in range(inv.slots.size()):
+			var it: ItemState = inv.slots[i]
+			if it != null and it.drop_id != "" and owned.get(it.drop_id) != p:
+				inv.slots[i] = null
+		for slot in ["weapon", "armor", "charm"]:
+			var eq: ItemState = inv.equipped_for(slot)
+			if eq != null and eq.drop_id != "" and owned.get(eq.drop_id) != p:
+				inv.set_equipped(slot, null)
+	if not inst.sim.ground_drops().is_empty():
+		inst.sim.clear_ground_drops()  # no ground piles in a practice instance
+	for p in here:
+		var sp := inst.sim.get_player(p.sim_id)
+		if sp == null or sp.inventory == null:
+			continue
+		var have := {}
+		for it in sp.inventory.live_items():
+			have[it.drop_id] = true
+		for did in owned:
+			if owned[did] == p and not have.has(did):
+				sp.inventory.add((originals[did] as ItemState).duplicate_item())
+
+
+## Practice instances: a player who dies leaves for the overworld (the
+## Hearth stand-in) with the same restore as any other way out.
+## TODO(§7 Hearth): route to the Hearth once it exists.
+func _route_practice_deaths(inst: HostInstance) -> void:
+	for p in players.duplicate():
+		if p.instance != inst:
+			continue
+		var sp := inst.sim.get_player(p.sim_id)
+		if sp != null and sp.hp <= 0:
+			_move_player(p, instances[0], p.id, 16.0, 16.0)
 
 
 ## Deep inventory snapshot, preserving equipment/slot references within it.
@@ -1319,12 +1389,15 @@ func _restore_entry_progression(p: HostPlayer, carry: PlayerCarry) -> void:
 		p.progression_entries.pop_back()
 
 
-func _build_dungeon_sim(def: DungeonDef, xfer: PortalTransfer, id_floor: int) -> LocalSim:
+func _build_dungeon_sim(def: DungeonDef, xfer: PortalTransfer, id_floor: int, practice: bool = false) -> LocalSim:
 	var dsim := LocalSim.new(_config, xfer.arrival_x, xfer.arrival_y, catalog)
 	dsim.remove_player(1)  # the built-in player; gone at the first step
 	if not dsim.set_id_floor(id_floor):
 		return null
 	dsim.set_lobby_settings(_settings)
+	if practice:
+		# Practice instances: no loot bags and no item transfers (§2.5).
+		dsim.set_item_rules(false, false)
 	# opener_id is the opener's sim id in the SOURCE world, not the
 	# destination id allocated later. Preserve that creation provenance.
 	dsim.configure_dungeon(def, xfer.seed, xfer.m100, xfer.base_level, xfer.content_level,
@@ -1356,7 +1429,7 @@ func _reset_instance(record: PortalRecord) -> bool:
 	var floor := old.alloc_player_id() + 1
 	if floor >= (inst.index + 1) * INSTANCE_ID_BLOCK:
 		return false
-	var fresh := _build_dungeon_sim(def, inst.created_from, floor)
+	var fresh := _build_dungeon_sim(def, inst.created_from, floor, inst.no_persistent_rewards)
 	if fresh == null:
 		return false
 	record.sim_ids.clear()
@@ -1396,6 +1469,9 @@ func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: 
 	carry.player_id = dest_id
 	dest.sim.place_player(dest_id, x, y)
 	dest.sim.apply_carried_player(carry, x, y)
+	# The source copy is gone at its next step; it holds no items meanwhile.
+	if from.inventory != null:
+		from.inventory = PlayerInventory.new(from.inventory.slot_count)
 	src.remove_player(p.sim_id)
 	p.instance = dest
 	p.sim_id = dest_id

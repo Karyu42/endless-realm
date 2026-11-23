@@ -55,6 +55,11 @@ var _scaling: SimScaling = SimScaling.new()
 var _loot: LootTables = LootTables.new()
 var _ground_drops: Array[GroundDrop] = []
 var _granted_drop_ids: Dictionary = {} # drop_id -> true
+## Host item rules for an instance (true everywhere except where the host
+## turns them off): whether loot bags may spawn, and whether items may move
+## between a player and the world.
+var _loot_bags_allowed: bool = true
+var _item_transfers_allowed: bool = true
 var _instance_m100: int = 100
 var _in_portal: bool = false
 var _practice_yard: bool = false
@@ -1019,6 +1024,20 @@ func pending_glint() -> int:
 	return p.pending_glint if p != null else 0
 
 
+func set_item_rules(loot_bags_allowed: bool, item_transfers_allowed: bool) -> void:
+	_loot_bags_allowed = loot_bags_allowed
+	_item_transfers_allowed = item_transfers_allowed
+
+
+## Removes every ground bag (host use: instances that allow none).
+func clear_ground_drops() -> void:
+	_ground_drops.clear()
+
+
+func item_transfers_allowed() -> bool:
+	return _item_transfers_allowed
+
+
 ## Read-only view of ground bags. Do not mutate or keep past a step().
 func ground_drops() -> Array[GroundDrop]:
 	return _ground_drops
@@ -1414,7 +1433,7 @@ func _try_grant_roll(e: EnemyState, looter_id: int, drop_index: int, looter_clas
 	)
 	# A miss still consumes the id so a retry cannot reroll the chance.
 	_granted_drop_ids[did] = true
-	if item == null:
+	if item == null or not _loot_bags_allowed:
 		return null
 	item.drop_id = did
 	var bag := GroundDrop.new()
@@ -1780,6 +1799,8 @@ func _apply_interact(p: SimPlayerState, sim_tick: int) -> void:
 		return
 	p.last_interact_seq = p.intent.seq
 	var bag := _bag_by_id(target_id)
+	if bag != null and not _item_transfers_allowed:
+		return
 	if _live_own_bag(p, bag):
 		if not _scaling.in_accept_range(_bag_distance(p, bag)):
 			return
