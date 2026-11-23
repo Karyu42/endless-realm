@@ -270,6 +270,13 @@ A small tutorial space, separate from the Wilds. Its layout belongs to the clien
 - **Rewards:** each kill gives base `killXP(1)`, credited per vision §3.4 (the over-level penalty still applies), `ceil(m(1))` = **1 Glint**, and loot rolled at `T* = 0` with the normal enemy rules (§4.2–4.3, vision §4.2).
 - Every other rule (enemy stats at E = 1, patterns, banking, death) is the same as in the Wilds.
 
+### 2.5 Practice Hollowmere Vault
+The practice slice of the Hollowmere Vault (from #49) is entered through the practice-yard door.
+- **Persistent door:** the door is persistent. The host keeps **one long-lived practice-vault instance** for its lifetime (#55).
+- **Reset when empty:** once no living player is inside, the whole slice is rebuilt on the next entry: trash, the Tallow Warden and the exit. No clears are tracked per player.
+- **Nothing persists outside it:** the practice vault grants no XP and no currency or season progress (Glint, Riftstone, Echo Dust, Sparks or any other). It drops no gear or loot bags and no found portals. That's why the resets are free.
+- **Yard credit is separate:** the §2.4 credit (base `killXP(1)`, 1 Glint, loot at `T* = 0`) applies to the practice yard only, not to the practice vault.
+
 ---
 
 ## 3. Dungeon: the Hollowmere Vault
