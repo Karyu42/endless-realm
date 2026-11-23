@@ -23,13 +23,16 @@ All names and content are original. All numbers are starting values that Design 
 |---|---|
 | Content level E, M in whole hundredths (`M100`), off-step rejection, round-half-up | vision §6 |
 | Extra boss rolls `floor((M100 − 100) / 25)` and Riftstone `round(4 × M²)` per eligible player | vision §6 |
-| Riftstone **deposit** `ceil(5 × M²)` for M > 1, refunded in full when the boss dies, lost only on a failed run | vision §6 |
+| Opening a portal with a **Vault Sigil** (price, rules, refunds) | vision §5, §6 |
+| Riftstone **deposit** `(5 × M100² + 9999) div 10000` for M > 1, refunded on a boss kill even if the opener is absent, refunded on a server fault, otherwise forfeited | vision §6, §7.3 |
 | Effective level `Le = min(Lp, E + 5)` in portals, and which formulas use `Le` and which use the real `Lp` | vision §3.2a |
 | `attackerLevel` in mitigation (`E` when an enemy hits; weapon gear level `W = max(1, 5 × T_eff)` when a player hits), rounding and min 1 | vision §3.2 |
 | `D` factor, XP crediting (tenths of XP, under-level cap at `Le + 10`, over-level penalty) | vision §3.3, §3.4 |
 | Effective tier `T_eff = min(T, T*(E) + 3)` | vision §4.1 |
 | Personal loot and normal-kill eligibility (damaged it, or within 10 tiles when it died) | vision §4.2 |
-| Party cap of **8**, per-player HP scaling, boss eligibility, instance lifetimes, re-entry after death | vision §6.1 |
+| Party cap of **8**, per-player HP scaling, the **boss-arena seal** (rule 6a: seals on first boss damage, n snapshotted then, no entry while sealed, no rescaling, reset when no living player is inside), boss eligibility and non-idle input, instance lifetimes, re-entry after death | vision §6.1 |
+| Ground-item expiry (personal drops tombstoned `EXPIRED` 60 s after they drop, or when the instance closes), Wilds included | vision §8.2 |
+| Incident windows and fault refunds | vision §7.3 |
 | Pending loot and banking, Standard death order, hardcore separation, disconnect linger | vision §7 |
 | Season track and Sparks (no Prism in v0.1) | vision §9 |
 
@@ -37,11 +40,8 @@ All examples below use these rules. With the vision §6.1 scaling, an 8-player p
 
 ### 0.3 Rules this spec adds
 These fill gaps in `vision.md` and don't change any of its formulas:
-- **When n is counted:** dungeon enemies spawn when their room activates (§3.1), so the vision §6.1 "n at spawn" is n at room activation. Boss adds use the n of the boss fight.
+- **When n is counted:** dungeon enemies spawn when their room activates (§3.1), so the vision §6.1 "n at spawn" is n at room activation. Boss adds use the boss's n, which is snapshotted at the seal (vision §6.1 rule 6a).
 - **Wilds enemies don't scale with n.** The Wilds aren't an instance and have open-world respawns instead.
-- **Boss arena seal:** room 6 seals 3 s after the fight starts (the boss first takes damage, vision §6.1). Anyone who enters during those 3 s counts as a mid-fight join (vision §6.1: HP scales up and keeps its percentage). After the seal, nobody can enter until the boss dies or resets.
-- **Boss reset:** if every player in the arena is dead or has left for 10 s, the arena unseals and the boss heals to full and returns to phase 1. The deposit isn't forfeited by a reset, only by the instance closing without a kill (vision §6.1).
-- **Wilds drops:** personal drops in the Wilds despawn after 90 s. In a dungeon they last as long as the instance (location `GROUND`, vision §8.2).
 
 ---
 
@@ -218,9 +218,9 @@ The vault is a linear crypt of sunken candle halls: 6 rooms joined by 3-tile-wid
 ```
 
 - **Room activation:** a room's enemies spawn and wake when the first player enters it, and that is when n is counted (§0.3). Doors never lock in rooms 1–5, and players can retreat.
-- **Room 6** seals as described in §0.3, after a "the doors are closing" warning.
+- **Room 6** seals, lifts and resets as in vision §6.1 rule 6a. The client shows a "the doors are sealed" cue on the seal tick.
 - **Clear rule:** room 6's door opens once rooms 2–5 are all cleared (every enemy dead). This stops players skipping straight to the boss.
-- **Exit:** when the boss dies, the exit portal to the Hearth spawns in the center of room 6, together with the loot bags.
+- **Exit:** when the boss dies, the exit portal to the Hearth spawns in the center of room 6, together with the loot bags. The bags expire after 60 s (vision §8.2), so the client shows a countdown on each one.
 
 ### 3.2 Vault enemies
 These enemies spawn at the instance's level E and use the normal-enemy `n` scaling from vision §6.1.
@@ -290,7 +290,7 @@ The thresholds are fractions of the scaled max HP. A transition happens on the f
 - `warden_gapring`: every 3.0 s, a 24-bullet ring (15° apart) with 4 consecutive bullets left out. The gap's start index is a PCG32 roll of 0–23, which leaves one safe lane. Speed 6, range 12, size M, 26 damage.
 - **Soft enrage:** 240 s after the arena seals, every attack interval in P3 is ×0.80. This depends on time only, not on M (vision §6: M doesn't change patterns).
 
-**Death:** loot (§4.2), XP, Glint and Riftstone go to every eligible player (vision §6.1). The deposit is refunded (vision §6). The exit portal spawns, and pools and all live enemy bullets are cleared.
+**Death:** loot (§4.2), XP, Glint and Riftstone go to every eligible player (vision §6.1). The deposit is refunded to the opener even if they are absent (vision §6). The exit portal spawns, and pools and all live enemy bullets are cleared.
 
 ### 3.5 How you get in: portal drops and open cost
 There are two ways in.
@@ -301,13 +301,12 @@ There are two ways in.
 - Lifetimes, the join floor and the party cap are as in vision §6.1.
 
 **B. Opened portal (Hearth portal board, chosen M).**
-- The opener picks M under the vision §6 rules and pays the vision §6 Riftstone **deposit** when M > 1.00. It is refunded on a boss kill and lost if the instance closes without one.
-- **Vault Sigil (added by this spec):** opening also uses 1 Vault Sigil. It is a character-bound consumable that stacks to 10 and isn't tradeable in v0.1, so it stays out of NTV. It paces opened runs now that the deposit makes them free on success.
-- **Sigil sources:**
+- Opening uses one **Vault Sigil** and, when M > 1.00, the Riftstone deposit. They are taken in one transaction with the instance's creation (vision §6).
+- The Sigil's price (`150 × m(Lp)` Glint), tradeability, the `CONSUMED` tombstone and the fault refund are as in vision §5, §6 and §7.3.
+- **Extra Sigil sources (added by this spec, on top of the vendor):**
   - 1.5% per eligible kill of a ring-3 or ring-4 normal enemy, rolled separately from the item roll.
   - 50% per eligible player from the Matron.
-  - The Hearth vendor sells it for `150 × m(Lp)` Glint. This is a new Glint sink, and it means you can never be locked out.
-- The Sigil is spent when the instance is created. It is refunded only if instance creation fails on the server.
+  - Sigils stack to 10 per inventory slot.
 
 ---
 
@@ -374,15 +373,15 @@ M only affects loot through `E` (and so T*), plus the vision §6 extra boss roll
 | Salvage yield (Dust) | 5 | 6 | 8 | 9 | 10 | 11 | 30 |
 | Tier-up into T, Dust / Glint | — | 25 / 125 | 30 / 150 | 35 / 175 | 40 / 200 | 45 / 225 | 120 / 600 |
 
-**Riftstone:** the Warden grants `round(4 × M²)` per eligible player, and the deposit works as in vision §6. Nothing else drops Riftstone in v0.1. This table only illustrates those formulas:
+**Riftstone:** the Warden grants `(4 × M100² + 5000) div 10000` (= `round(4 × M²)`) per eligible player, and the deposit works as in vision §6. Nothing else drops Riftstone in v0.1. This table only illustrates those formulas:
 
 | M | 0.50 | 0.75 | 1.00 | 1.25 | 1.50 |
 |---|---|---|---|---|---|
 | Yield per eligible player | 1 | 2 | 4 | 6 | 9 |
-| Deposit (refunded on a boss kill) | 0 | 0 | 0 | 8 | 12 |
+| Deposit `(5 × M100² + 9999) div 10000`, refunded on a boss kill | 0 | 0 | 0 | 8 | 12 |
 | Net for a solo clear | +1 | +2 | +4 | +6 | +9 |
 
-Riftstone sinks (forfeited deposits, stash pages, charm re-rolls) are listed in vision §5.
+Riftstone sinks (forfeited deposits and charm re-rolls) are listed in vision §5. Stash pages cost Glint only.
 
 ### 4.5 Pity and bonus rolls
 All counters are per character and stored on the server. Hardcore characters keep their own, since modes never mix (vision §7.3).
