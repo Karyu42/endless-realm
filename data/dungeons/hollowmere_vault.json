@@ -2,6 +2,7 @@
   "id": "hollowmere_vault",
   "name": "the Hollowmere Vault",
   "base_level": 10,
+  "grants_persistent": true,
   "rooms": [
     {
       "id": "antechamber",
@@ -101,6 +102,7 @@
     "radius": 0.75,
     "m100": 100,
     "practice_base_level": 1,
-    "placeholder": "Practice-slice portal. Official vault base_level is 10 (content-v0.1 \u00a73). This entrance uses practice_base_level so a new character can enter. Found-portal rules: M = 1.00, no deposit (vision \u00a76)."
+    "placeholder": "Practice-slice portal. Official vault base_level is 10 (content-v0.1 \u00a73). This entrance uses practice_base_level so a new character can enter. Found-portal rules: M = 1.00, no deposit (vision \u00a76). Grants nothing that persists outside the practice vault.",
+    "grants_persistent": false
   }
 }

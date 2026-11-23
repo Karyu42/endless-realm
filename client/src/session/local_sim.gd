@@ -68,6 +68,11 @@ var _granted_drop_ids: Dictionary = {} # drop_id -> true
 var _instance_m100: int = 100
 var _in_portal: bool = false
 var _practice_yard: bool = false
+## Overworld / official instances grant persistent rewards. A practice vault
+## overwrites this from packed entrance data in configure_dungeon.
+var _grants_persistent: bool = true
+## Persistent fields at instance entry, used by carry_out() in a practice vault.
+var _entry_persistent: Dictionary = {}
 ## Per-player ability state (id -> PlayerAbilityState). Kept next to
 ## SimPlayerState so class abilities stay keyed by player id.
 var _ability_by_player: Dictionary = {}
@@ -1194,6 +1199,53 @@ func get_enemy(id: int) -> EnemyState:
 
 
 ## Test / tooling hook. Goes through invuln, the seal, phase thresholds and death.
+func grants_persistent() -> bool:
+	return _grants_persistent
+
+
+## Character snapshot for leaving this instance. A practice vault carries no
+## persistent gains (XP, Glint, Riftstone, or items found here).
+func carry_out(player_id: int) -> PlayerCarry:
+	var p: SimPlayerState = _players.get(player_id, null) as SimPlayerState
+	var carry := PlayerCarry.from_sim(p, _ability_of(player_id))
+	if _grants_persistent:
+		return carry
+	if not _entry_persistent.has(player_id):
+		_remember_entry_persistent(p)
+	var entry: Dictionary = _entry_persistent.get(player_id, {})
+	carry.xp_tenths = int(entry.get("xp_tenths", carry.xp_tenths))
+	carry.pending_glint = int(entry.get("pending_glint", carry.pending_glint))
+	carry.pending_riftstone = int(entry.get("pending_riftstone", carry.pending_riftstone))
+	var kept: Variant = entry.get("inventory", null)
+	if kept is PlayerInventory:
+		carry.inventory = kept
+	return carry
+
+
+func _remember_entry_persistent(p: SimPlayerState) -> void:
+	if p == null:
+		return
+	_entry_persistent[p.id] = {
+		"xp_tenths": p.xp_tenths,
+		"pending_glint": p.pending_glint,
+		"pending_riftstone": p.pending_riftstone,
+		"inventory": _snapshot_inventory(p.inventory),
+	}
+
+
+func _snapshot_inventory(inv: PlayerInventory) -> PlayerInventory:
+	if inv == null:
+		return null
+	var out := PlayerInventory.new(inv.slot_count)
+	for i in range(inv.slots.size()):
+		if i < out.slots.size():
+			out.slots[i] = inv.slots[i]
+	out.equipped_weapon = inv.equipped_weapon
+	out.equipped_armor = inv.equipped_armor
+	out.equipped_charm = inv.equipped_charm
+	return out
+
+
 func boss_n_peak() -> int:
 	return _boss_n_peak
 
@@ -1279,6 +1331,10 @@ func spawn_practice_portal(dungeon_id: String) -> int:
 	var practice_base: int = int(src["practice_base_level"])
 	portal.base_level = practice_base
 	portal.content_level = _scaling.portal_content_level(practice_base, portal.m100)
+	if not src.has("grants_persistent"):
+		push_error("DataCatalog: unknown id %s.practice_yard_portal.grants_persistent" % def.id)
+		return 0
+	portal.grants_persistent = bool(src["grants_persistent"])
 	_portals.append(portal)
 	return portal.id
 
@@ -1291,10 +1347,13 @@ func configure_dungeon(
 	base_level: int,
 	content_level: int,
 	opener_id: int,
-	opener_lp: int
+	opener_lp: int,
+	grants_persistent: bool
 ) -> void:
 	_dungeon = def
 	_practice_yard = false
+	_grants_persistent = grants_persistent
+	_entry_persistent.clear()
 	_in_portal = true
 	_instance_m100 = m100
 	_instance_base_level = base_level
@@ -1322,6 +1381,8 @@ func configure_dungeon(
 		set_bounds(r.position.x, r.position.y, r.position.x + r.size.x, r.position.y + r.size.y)
 		_build_dungeon_walls(def)
 		_spawn_boss_placeholders(def)
+	for id in _sorted_ids:
+		_remember_entry_persistent(_players[id])
 
 
 ## Copy a character into this instance at (x, y) after a portal transfer.
@@ -1360,6 +1421,7 @@ func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
 		st.last_ability_seq = carry.ability.last_ability_seq
 		st.ally_ability_heals = carry.ability.ally_ability_heals
 		st.reseed(_world_seed, p.id)
+	_remember_entry_persistent(p)
 
 
 func player_max_hp() -> int:
@@ -1498,6 +1560,10 @@ func _grant_kill_rewards(e: EnemyState, sim_tick: int) -> void:
 	if e.rewards_granted:
 		return
 	e.rewards_granted = true
+	# Practice vault: packed grants_persistent is false — no XP, currency,
+	# gear rolls, loot bags, or found portals, for trash or the Warden.
+	if not _grants_persistent:
+		return
 	if not e.drops_loot:
 		return
 	var rank: String = _reward_rank(e)
@@ -1987,6 +2053,7 @@ func _try_portal_enter(p: SimPlayerState, target_id: int, sim_tick: int) -> void
 		xfer.opener_lp = p.level
 		xfer.arrival_x = arrival.x
 		xfer.arrival_y = arrival.y
+		xfer.grants_persistent = portal.grants_persistent
 		_pending_transfers.append(xfer)
 		return
 	if portal.kind == PortalSnapshot.KIND_EXIT:

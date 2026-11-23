@@ -18,7 +18,7 @@ func _vault(content_level: int = 1, m100: int = 100) -> LocalSim:
 	var sim := LocalSim.new(SimConfig.new(), 6.0, 6.0, catalog)
 	sim.set_lobby_settings(LobbySettings.new())
 	var pid := _pid(sim)
-	sim.configure_dungeon(def, 42, m100, content_level, content_level, pid, content_level)
+	sim.configure_dungeon(def, 42, m100, content_level, content_level, pid, content_level, def.grants_persistent)
 	var p := sim.get_player(pid)
 	p.x = 36.0
 	p.y = 6.0
@@ -497,4 +497,100 @@ func test_acolyte_third_cycle_fires_aim_and_sidesteps() -> void:
 	assert_gt(saw_cross, 0, "the first cycles fire acolyte_cross")
 	assert_gt(saw_aim, 0, "every third cycle fires acolyte_aim")
 	assert_true(saw_sidestep, "the Acolyte starts a sidestep on its 60-tick timer")
+
+
+func _practice_vault() -> LocalSim:
+	var catalog := _catalog()
+	var def := catalog.dungeon("hollowmere_vault")
+	var sim := LocalSim.new(SimConfig.new(), 6.0, 6.0, catalog)
+	sim.set_lobby_settings(LobbySettings.new())
+	var pid := _pid(sim)
+	var base: int = int(def.practice_yard_portal["practice_base_level"])
+	sim.configure_dungeon(def, 42, 100, base, base, pid, base, def.practice_grants_persistent())
+	var p := sim.get_player(pid)
+	p.x = 36.0
+	p.y = 6.0
+	p.prev_x = p.x
+	p.prev_y = p.y
+	sim.step()
+	return sim
+
+
+func test_packed_grants_persistent_flags() -> void:
+	var def := _catalog().dungeon("hollowmere_vault")
+	assert_true(def.grants_persistent, "official vault runs grant persistent rewards")
+	assert_false(def.practice_grants_persistent(), "the yard entrance does not")
+	assert_true(def.practice_yard_portal.has("grants_persistent"))
+
+
+func test_practice_warden_grants_nothing_and_carry_out_is_unchanged() -> void:
+	var sim := _practice_vault()
+	assert_false(sim.grants_persistent())
+	var pid := _pid(sim)
+	var p := sim.get_player(pid)
+	var entry := PlayerCarry.from_sim(p, sim.ability_state(pid))
+	entry.xp_tenths = 123
+	entry.pending_glint = 8
+	entry.pending_riftstone = 2
+	var token := ItemState.new()
+	token.drop_id = "practice-token"
+	token.display_base = "Practice Token"
+	token.tier = 1
+	assert_true(entry.inventory.add(token))
+	sim.apply_carried_player(entry, p.x, p.y)
+	# Trash and the Warden both grant nothing that persists.
+	var drift_id: int = 0
+	for e in sim.snapshot().enemies:
+		if e.def_id == "driftcap_spore":
+			drift_id = e.id
+			break
+	if drift_id != 0:
+		var cap: EnemyState = sim.get_enemy(drift_id)
+		if cap != null:
+			sim.hurt_enemy(drift_id, cap.hp, pid)
+	var w := _warden(sim)
+	assert_not_null(w)
+	for i in range(4):
+		_hold_fire(sim, pid, i + 1)
+		sim.step()
+	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid)
+	sim.step()
+	assert_true(sim.boss_defeated())
+	assert_true(sim.vault_exit_open())
+	var after := sim.get_player(pid)
+	assert_eq(after.xp_tenths, 123)
+	assert_eq(after.pending_glint, 8)
+	assert_eq(after.pending_riftstone, 2)
+	assert_eq(sim.snapshot().ground_drops.size(), 0, "no loot bags in a practice vault")
+	var out := sim.carry_out(pid)
+	assert_eq(out.xp_tenths, 123)
+	assert_eq(out.pending_glint, 8)
+	assert_eq(out.pending_riftstone, 2)
+	assert_eq(out.inventory.slots[0].drop_id, "practice-token")
+	var extra := 0
+	for item in out.inventory.slots:
+		if item != null:
+			extra += 1
+	assert_eq(extra, 1, "no gear or item rolls leave a practice vault")
+
+
+func test_non_practice_vault_still_grants_per_rule_7() -> void:
+	var sim := _vault()
+	assert_true(sim.grants_persistent())
+	var pid := _pid(sim)
+	var w := _warden(sim)
+	for i in range(4):
+		_hold_fire(sim, pid, i + 1)
+		sim.step()
+	sim.hurt_enemy(w.id, w.hp, pid)
+	sim.step()
+	assert_true(sim.boss_defeated())
+	assert_eq(sim.snapshot().pending_glint, 30)
+	assert_eq(sim.snapshot().pending_riftstone, 4)
+	assert_eq(sim.snapshot().ground_drops.size(), 2)
+	assert_gt(sim.snapshot().xp_tenths, 0)
+	var out := sim.carry_out(pid)
+	assert_eq(out.pending_glint, 30)
+	assert_eq(out.pending_riftstone, 4)
+	assert_gt(out.xp_tenths, 0)
 

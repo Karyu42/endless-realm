@@ -5,6 +5,8 @@ extends RefCounted
 var id: String = ""
 var name: String = ""
 var base_level: int = 0
+## Official runs: whether kills persist XP, currency, gear, bags, and found portals.
+var grants_persistent: bool = false
 var rooms: Array[Dictionary] = []
 var corridors: Array[Dictionary] = []
 var practice_yard_portal: Dictionary = {}
@@ -19,6 +21,8 @@ static func from_json(d: Dictionary) -> DungeonDef:
 	def.name = String(d.get("name", ""))
 	if d.has("base_level"):
 		def.base_level = int(d["base_level"])
+	if d.has("grants_persistent"):
+		def.grants_persistent = bool(d["grants_persistent"])
 	for item in d.get("rooms", []):
 		if item is Dictionary:
 			def.rooms.append((item as Dictionary).duplicate(true))
@@ -33,14 +37,22 @@ static func from_json(d: Dictionary) -> DungeonDef:
 
 func missing_pack_ids() -> PackedStringArray:
 	var ids: PackedStringArray = PackedStringArray()
-	for field in ["id", "name", "base_level", "rooms", "corridors"]:
+	for field in ["id", "name", "base_level", "grants_persistent", "rooms", "corridors"]:
 		if not _present.has(field):
 			ids.append("%s.%s" % [id if id != "" else "dungeon", field])
 	if id == "hollowmere_vault":
-		for field in ["x", "y", "radius", "m100", "practice_base_level", "placeholder"]:
+		for field in ["x", "y", "radius", "m100", "practice_base_level", "grants_persistent", "placeholder"]:
 			if not practice_yard_portal.has(field):
 				ids.append("%s.practice_yard_portal.%s" % [id, field])
 	return ids
+
+
+func practice_grants_persistent() -> bool:
+	# Packed practice_yard_portal.grants_persistent only. A missing field is
+	# a pack error (missing_pack_ids) and fails closed (no persistent grants).
+	if not practice_yard_portal.has("grants_persistent"):
+		return false
+	return bool(practice_yard_portal["grants_persistent"])
 
 
 func arrival_point() -> Vector2:
