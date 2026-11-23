@@ -1,0 +1,446 @@
+# Endless Realm CI.
+#
+# Job names below are stable on purpose: they become required status checks on main.
+#   data-validate, proto-codegen-check, server-build-test, client-tests,
+#   fixtures-parity, integration-smoke, export-builds (linux|windows|android)
+#
+# Every job first checks that its inputs exist. If one is missing it prints
+# "skipped: <path> not present yet" (as a notice and in the job summary) and passes.
+# Once the inputs exist the job really runs; nothing is masked with `|| true`.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Cancel superseded PR runs; let every push to main finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+  # Published SHA512s from https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/SHA512-SUMS.txt
+  GODOT_EDITOR_SHA512: 9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
+  GODOT_TEMPLATES_SHA512: ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079
+  GUT_VERSION: v9.7.1
+  # GUT publishes no checksums: sha256 of https://github.com/bitwes/Gut/archive/refs/tags/v9.7.1.tar.gz, computed and pinned.
+  GUT_SHA256: 6da99c4e9228d9bec3fb4bd1730a487770a989f0f511dac82a2897a964613385
+  # Compose stack endpoints used by integration-smoke.
+  SERVER_URL: ws://127.0.0.1:8080/ws
+  HEALTHZ_URL: http://127.0.0.1:8080/healthz
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  data-validate:
+    name: data-validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: inputs
+        uses: ./.github/actions/check-inputs
+        with:
+          paths: data/schema
+      - if: steps.inputs.outputs.present == 'true'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - if: steps.inputs.outputs.present == 'true'
+        run: pip install check-jsonschema==0.39.0
+      - name: Validate data/ against data/schema/
+        if: steps.inputs.outputs.present == 'true'
+        run: python3 .github/scripts/validate-data.py
+      - name: make data-validate (if the Makefile has it)
+        if: steps.inputs.outputs.present == 'true'
+        run: |
+          if .github/scripts/has-make-target.sh data-validate; then
+            make data-validate
+          else
+            .github/scripts/skip-notice.sh "Makefile target data-validate not present yet (built-in schema checks above still ran)"
+          fi
+
+  proto-codegen-check:
+    name: proto-codegen-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: inputs
+        uses: ./.github/actions/check-inputs
+        with:
+          paths: |
+            proto
+            server/go.mod
+            Makefile
+      - id: target
+        if: steps.inputs.outputs.present == 'true'
+        run: |
+          if .github/scripts/has-make-target.sh proto; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            .github/scripts/skip-notice.sh "Makefile target proto not present yet"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.target.outputs.present == 'true'
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - id: godobuf
+        if: steps.target.outputs.present == 'true'
+        run: |
+          if grep -qi godobuf Makefile; then echo "needed=true" >> "$GITHUB_OUTPUT"; else echo "needed=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Set up Godot (godobuf GDScript codegen)
+        if: steps.target.outputs.present == 'true' && steps.godobuf.outputs.needed == 'true'
+        uses: ./.github/actions/setup-godot
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          editor-sha512: ${{ env.GODOT_EDITOR_SHA512 }}
+      - name: make tools (if the Makefile has it)
+        if: steps.target.outputs.present == 'true'
+        run: |
+          # The pinned toolchain lives in tools/versions.env; `make proto` installs protoc and
+          # protoc-gen-go itself. A separate `tools` target is optional.
+          if .github/scripts/has-make-target.sh tools; then make tools; fi
+      - name: make proto
+        if: steps.target.outputs.present == 'true'
+        run: make proto GODOT="${GODOT:-godot}"
+      - name: Generated code must be committed
+        if: steps.target.outputs.present == 'true'
+        run: |
+          git status --porcelain
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            echo "::error::make proto changed or added files. Run 'make proto' and commit the result."
+            git diff
+            exit 1
+          fi
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  server-build-test:
+    name: server-build-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: inputs
+        uses: ./.github/actions/check-inputs
+        with:
+          paths: server/go.mod
+      - if: steps.inputs.outputs.present == 'true'
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: make test (vet + go test -race), or raw go commands
+        if: steps.inputs.outputs.present == 'true'
+        env:
+          # Applied to every go command make runs; keeps CI from hanging and from using cached results.
+          GOFLAGS: -timeout=3m -count=1
+        run: |
+          if .github/scripts/has-make-target.sh test; then
+            make test
+          else
+            echo "No Makefile 'test' target; running go vet / go test directly."
+            (cd server && go vet ./... && go test -race ./...)
+          fi
+      - name: go build
+        if: steps.inputs.outputs.present == 'true'
+        working-directory: server
+        run: go build ./...
+
+  client-tests:
+    name: client-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: inputs
+        uses: ./.github/actions/check-inputs
+        with:
+          paths: client/project.godot
+      - if: steps.inputs.outputs.present == 'true'
+        uses: ./.github/actions/setup-godot
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          editor-sha512: ${{ env.GODOT_EDITOR_SHA512 }}
+      - name: Install GUT (unless vendored)
+        if: steps.inputs.outputs.present == 'true'
+        run: .github/scripts/install-gut.sh client "$GUT_VERSION" "$GUT_SHA256"
+      - name: godot --headless --import
+        if: steps.inputs.outputs.present == 'true'
+        run: godot --headless --path client --import
+      - name: Run GUT
+        if: steps.inputs.outputs.present == 'true'
+        env:
+          JUNIT: ${{ runner.temp }}/gut/junit.xml
+        run: |
+          set -o pipefail
+          mkdir -p "$(dirname "$JUNIT")"
+          args=(-gexit "-gjunit_xml_file=${JUNIT}")
+          if [ ! -f client/.gutconfig.json ]; then
+            dirs=()
+            for d in test tests; do [ -d "client/$d" ] && dirs+=("res://$d"); done
+            if [ ${#dirs[@]} -eq 0 ]; then
+              echo "::error::client/project.godot exists but there is no client/.gutconfig.json, client/test/ or client/tests/. CI requires GUT tests."
+              exit 1
+            fi
+            args+=("-gdir=$(IFS=,; echo "${dirs[*]}")" -ginclude_subdirs)
+          fi
+          godot --headless --path client -s res://addons/gut/gut_cmdln.gd "${args[@]}" 2>&1 | tee "${RUNNER_TEMP}/gut/gut.log"
+      - name: Require JUnit XML with >0 tests
+        if: steps.inputs.outputs.present == 'true'
+        run: python3 .github/scripts/check-junit.py "${RUNNER_TEMP}/gut/junit.xml"
+      - name: Upload GUT results
+        if: always() && steps.inputs.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gut-results
+          path: ${{ runner.temp }}/gut/
+          if-no-files-found: warn
+
+  fixtures-parity:
+    name: fixtures-parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: inputs
+        uses: ./.github/actions/check-inputs
+        with:
+          paths: |
+            fixtures
+            server/go.mod
+            client/project.godot
+            Makefile
+      - id: target
+        if: steps.inputs.outputs.present == 'true'
+        run: |
+          if .github/scripts/has-make-target.sh fixtures-parity; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            .github/scripts/skip-notice.sh "Makefile target fixtures-parity not present yet"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.target.outputs.present == 'true'
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - if: steps.target.outputs.present == 'true'
+        uses: ./.github/actions/setup-godot
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          editor-sha512: ${{ env.GODOT_EDITOR_SHA512 }}
+      - name: Install GUT (unless vendored)
+        if: steps.target.outputs.present == 'true'
+        run: .github/scripts/install-gut.sh client "$GUT_VERSION" "$GUT_SHA256"
+      - name: godot --headless --import
+        if: steps.target.outputs.present == 'true'
+        run: godot --headless --path client --import
+      - name: make fixtures-parity (Go and GDScript against the same golden fixtures)
+        if: steps.target.outputs.present == 'true'
+        run: make fixtures-parity GODOT="$GODOT"
+
+  integration-smoke:
+    name: integration-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: inputs
+        name: Check inputs (compose file, server/cmd/bot)
+        run: |
+          compose=""
+          for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+            if [ -f "$f" ]; then compose="$f"; break; fi
+          done
+          if [ -z "$compose" ]; then
+            .github/scripts/skip-notice.sh "docker-compose file (compose.yaml / docker-compose.yml) not present yet"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          elif [ ! -d server/cmd/bot ]; then
+            .github/scripts/skip-notice.sh "server/cmd/bot not present yet"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          elif [ ! -f server/go.mod ]; then
+            .github/scripts/skip-notice.sh "server/go.mod not present yet"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "compose=$compose" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.inputs.outputs.present == 'true'
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Build bot client
+        if: steps.inputs.outputs.present == 'true'
+        working-directory: server
+        run: go build -o "${RUNNER_TEMP}/er-bot" ./cmd/bot
+      - name: docker compose up --wait
+        if: steps.inputs.outputs.present == 'true'
+        env:
+          COMPOSE_FILE: ${{ steps.inputs.outputs.compose }}
+        run: docker compose up --build --detach --wait --wait-timeout 300
+      - name: Wait for server /healthz
+        if: steps.inputs.outputs.present == 'true'
+        env:
+          COMPOSE_FILE: ${{ steps.inputs.outputs.compose }}
+        run: |
+          # The server service has no compose healthcheck yet, so `up --wait` only proves the
+          # container started. Poll the Go listener directly.
+          for i in $(seq 1 60); do
+            if curl -sf --max-time 2 "$HEALTHZ_URL" > /dev/null; then
+              echo "server healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::$HEALTHZ_URL did not return 2xx within ~120 s"
+          docker compose ps --all
+          docker compose logs --no-color --timestamps --tail=200
+          exit 1
+      - name: Bot client smoke (1 client, seed 1, mult 1.0)
+        if: steps.inputs.outputs.present == 'true'
+        run: |
+          set -o pipefail
+          mkdir -p ci-logs
+          timeout 5m "${RUNNER_TEMP}/er-bot" -url="$SERVER_URL" -clients=1 -seed=1 -mult=1.0 2>&1 | tee ci-logs/bot.log
+      - name: Collect compose logs
+        if: always() && steps.inputs.outputs.present == 'true'
+        env:
+          COMPOSE_FILE: ${{ steps.inputs.outputs.compose }}
+        run: |
+          mkdir -p ci-logs
+          docker compose ps --all > ci-logs/compose-ps.txt 2>&1 || echo "compose ps failed" >> ci-logs/compose-ps.txt
+          docker compose logs --no-color --timestamps > ci-logs/compose.log 2>&1 || echo "compose logs failed" >> ci-logs/compose.log
+      - name: docker compose down -v
+        if: always() && steps.inputs.outputs.present == 'true'
+        env:
+          COMPOSE_FILE: ${{ steps.inputs.outputs.compose }}
+        run: docker compose down -v --remove-orphans
+      - name: Upload logs on failure
+        if: failure() && steps.inputs.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: integration-smoke-logs
+          path: ci-logs/
+          if-no-files-found: warn
+
+  export-builds:
+    name: export-builds (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux
+            preset: Linux
+            output: endless-realm.x86_64
+          - target: windows
+            preset: Windows Desktop
+            output: endless-realm.exe
+          - target: android
+            preset: Android
+            output: endless-realm.apk
+    env:
+      PRESET: ${{ matrix.preset }}
+      OUT_DIR: ${{ github.workspace }}/export-out/${{ matrix.target }}
+      OUT_FILE: ${{ matrix.output }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: inputs
+        uses: ./.github/actions/check-inputs
+        with:
+          paths: |
+            client/project.godot
+            client/export_presets.cfg
+      - name: Preset must exist in export_presets.cfg
+        if: steps.inputs.outputs.present == 'true'
+        run: |
+          if ! grep -qxF "name=\"${PRESET}\"" client/export_presets.cfg; then
+            echo "::error::client/export_presets.cfg has no preset named \"${PRESET}\". Add it (export-builds (${{ matrix.target }}) expects that exact name)."
+            exit 1
+          fi
+      - if: steps.inputs.outputs.present == 'true'
+        uses: ./.github/actions/setup-godot
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          editor-sha512: ${{ env.GODOT_EDITOR_SHA512 }}
+          templates: "true"
+          templates-sha512: ${{ env.GODOT_TEMPLATES_SHA512 }}
+
+      # ---- Android only: JDK 17, SDK, CI-generated debug keystore (nothing secret is committed) ----
+      - if: steps.inputs.outputs.present == 'true' && matrix.target == 'android'
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - if: steps.inputs.outputs.present == 'true' && matrix.target == 'android'
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: platform-tools build-tools;35.0.0 platforms;android-35
+      - name: Debug keystore + Godot Android editor settings
+        if: steps.inputs.outputs.present == 'true' && matrix.target == 'android'
+        run: |
+          set -euo pipefail
+          ks="${RUNNER_TEMP}/debug.keystore"
+          keytool -genkeypair -v -keystore "$ks" -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          sdk="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          cfg="${HOME}/.config/godot"
+          mkdir -p "$cfg"
+          minor="$(echo "$GODOT_VERSION" | cut -d. -f1-2)"
+          for f in "editor_settings-${minor}.tres" "editor_settings-${minor%%.*}.tres"; do
+            cat > "${cfg}/${f}" <<TRES
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "${sdk}"
+          export/android/java_sdk_path = "${JAVA_HOME}"
+          export/android/debug_keystore = "${ks}"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          TRES
+          done
+          {
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=${ks}"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android"
+          } >> "$GITHUB_ENV"
+
+      - name: Install GUT if the project references it
+        if: steps.inputs.outputs.present == 'true'
+        run: |
+          if grep -q 'addons/gut' client/project.godot; then
+            .github/scripts/install-gut.sh client "$GUT_VERSION" "$GUT_SHA256"
+          fi
+      - name: godot --headless --import
+        if: steps.inputs.outputs.present == 'true'
+        run: godot --headless --path client --import
+      - name: Export (${{ matrix.preset }}, debug)
+        if: steps.inputs.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT_DIR"
+          godot --headless --path client --export-debug "$PRESET" "${OUT_DIR}/${OUT_FILE}"
+          test -s "${OUT_DIR}/${OUT_FILE}" || { echo "::error::export produced no ${OUT_FILE}"; exit 1; }
+          ls -la "$OUT_DIR"
+      - name: Upload ${{ matrix.target }} build
+        if: steps.inputs.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: endless-realm-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ env.OUT_DIR }}
+          if-no-files-found: error
+          retention-days: 14
