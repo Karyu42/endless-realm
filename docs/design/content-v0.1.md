@@ -45,7 +45,8 @@ These fill gaps in `vision.md` and don't change any of its formulas:
 - **Scaled HP rounding:** max HP is computed in exact integer math and rounded half-up once, at spawn (or at the seal for the boss):
   `HP = (baseHP × m100(E) × s100(n) + 5000) div 10000`, where `m100(E) = 100 + 5 × (E − 1)` and `s100(n) = 100 + 60 × (n − 1)` for normal enemies, or `100 + 75 × (n − 1)` for the boss. In the Wilds, `s100 = 100`. Phase thresholds compare current HP against `max HP × threshold` in the same integer math. Example: Tallow Warden at E=10, n=8 → `(5500 × 145 × 625 + 5000) div 10000 = 49,844`.
 - **Fire on press (all weapons):** the first shot fires on the tick fire is pressed, if the weapon is off cooldown. The cooldown is `1 / (Tempo × (1 + tempoBonus))` seconds, counted from that shot, and it keeps running after release. Tapping can therefore never beat the fire rate. The exact rule is in §1.
-- **Vault Sigil binding:** a Sigil is bound to the character who bought it (§3.5). This is consistent with vision §5 "not tradeable" and doesn't change it. If the buyer is **Fallen** (hardcore) or **deleted**, every Sigil bound to them, in inventory or in the stash, is tombstoned in the same transaction. The reason is `CONSUMED` with detail `owner_fallen` or `owner_deleted`, so there is no refund and no unusable leftovers. A pointer to this rule goes into vision §5 the next time `vision.md` is edited.
+- **Vault Sigil binding:** a Sigil is bound to the character who bought it (§3.5). This is consistent with vision §5 "not tradeable" and doesn't change it. If the buyer is **Fallen** (hardcore) or **deleted**, every Sigil bound to them, in inventory or in the stash, is tombstoned in the same transaction. The tombstone reason is `CONSUMED`, so there is no refund and no unusable leftovers. Vision §8.2 defines a tombstone as only `state`, `reason` and timestamp, and this spec adds **no item field**. As a content-level extension, the cause (`owner_fallen` or `owner_deleted`) is recorded as reason metadata in the audit entry of the transaction that tombstones the Sigils, not on the item row.
+  - **Incident revert:** if a hardcore death is reverted inside an incident window (vision §7.3), the Sigils tombstoned in that death's transaction are un-tombstoned and restored to their owner with the same `item_uid` and location, as part of the same audited revert. Deleting a character is never reverted by an incident window. A pointer to this rule goes into vision §5 the next time `vision.md` is edited.
 - **Hazard timing:** a hazard's `duration_ticks` does **not** include its telegraph. The telegraph runs first for `telegraph_ticks`, then the hazard is active for `duration_ticks` (details in §5).
 - **Spiral emits and defaults:** see `spiral` in §5.
 
@@ -59,10 +60,13 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 - If fire has been held on every tick since the previous volley (one continuous hold), set `next_ready = next_ready + cd`. This keeps the long-run rate exact even though `cd` isn't a whole number of ticks.
 - Otherwise (the first volley after a press), set `next_ready = now + cd`.
 - Releasing fire never resets `next_ready`. The cooldown keeps running, so a re-press fires only once `now ≥ next_ready`.
+- **Blocked ticks (no catch-up):** a tick where firing is blocked (for example the Kindle Pulse 5-tick cast lock, §1.2) **breaks the continuous hold**. When the block ends, the next volley fires on the first tick where `now ≥ max(next_ready, block end)`, and the schedule restarts from that shot (`next_ready = now + cd`). There is never a catch-up burst.
+- **Rate change mid-hold** (for example a charm swap changing `tempoBonus`): `cd` is recomputed at once, but it applies from the next scheduled shot. The pending `next_ready` stays as it is, and the new `cd` is added after the next volley fires.
 
 Golden values:
 - **Hold from a press on tick 0:** a Driftrunner (3.5/s, cd ≈ 0.2857 s) fires on ticks 0, 6, 12, 18, 23 and 29 …. A Thornguard (2.0/s) fires on ticks 0, 10, 20 ….
 - **Tap:** if a Thornguard presses on tick 0, releases on tick 1 and presses again on tick 3, the volleys are tick 0 and then tick 10 (held from tick 3). Tapping every other tick fires no faster than holding.
+- **Cast lock:** a Gleamwright (2.5/s, cd = 0.4 s = 8 ticks) holds fire from tick 0 and casts Kindle Pulse on tick 14, so firing is blocked on ticks 14–18. Volleys come on ticks 0 and 8. The volley due on tick 16 is blocked and fires on tick 19, then ticks 27, 35 …, with no extra volley.
 
 ### 1.1 Thornguard (close-range tank)
 | Stat | Value |
@@ -194,7 +198,7 @@ With vision §6.1 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 - **Contact damage** is applied at most once per 0.5 s per enemy–player pair.
 
 ### 2.3 Behaviors and patterns
-"Every X s" is measured from the end of the previous attack, and the first attack comes X s after aggro. Aggro radius is 8 tiles unless stated otherwise. The target is the nearest player in aggro range, re-picked every 1 s.
+"Every X s" is measured from the end of the previous attack, and the first attack comes X s after aggro. **AI `fire` steps don't block.** A `fire` step starts the pattern and the AI goes straight to its next step, while multi-emit patterns (bursts, spirals) keep emitting on their own. Any wait after an attack is an explicit `wait` step measured from the `fire` step. For the AI-step enemies below, the listed waits already include this, so an Acolyte cross (emits on ticks 0 and 10) starts every 48 ticks, which is 38 ticks after its last emit. Aggro radius is 8 tiles unless stated otherwise. The target is the nearest player in aggro range, re-picked every 1 s.
 
 **Burrmite** (skittering beetle, packs of 3)
 - AI: wanders at 1.5 tiles/s. On aggro it closes to 3 tiles, then strafes around the target at 3 tiles, switching direction every 2 s.
@@ -220,7 +224,7 @@ With vision §6.1 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 
 **Gloomlantern Sentinel** (slow lantern-headed golem)
 - AI: walks toward the target at 1.2 tiles/s and stops at 5 tiles. Aggro radius 10.
-- It alternates two attacks with a 1.25 s gap between them. The alternation and the gap are **`enemies.json` AI steps**, not pattern fields: `fire lantern_ring` → `wait 25` → `fire lantern_fan` → `wait 25` → repeat, with `approach` (stop at 5 tiles) running in parallel. The first `fire` is 25 ticks after aggro.
+- It alternates two attacks with a 1.25 s gap between them. The alternation and the gap are **`enemies.json` AI steps**, not pattern fields: `wait 25` → `fire lantern_ring` → `wait 25` → `fire lantern_fan` → repeat, with `approach` (stop at 5 tiles) running in parallel. The first `fire` is 25 ticks after aggro.
   - `lantern_ring`: 12 bullets in a ring (30° apart), speed 5, range 10, size M, 18 damage. Each new ring is rotated +15° from the last one.
   - `lantern_fan`: 5 bullets in a fan with 60° total spread, aimed, speed 8, range 8, size M, 20 damage.
 
