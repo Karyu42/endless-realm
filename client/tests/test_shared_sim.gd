@@ -3,8 +3,8 @@ extends GutTest
 ## and a 50-player per-tick cost check.
 
 
-func _intent(seq: int, mx: float = 0.0, my: float = 0.0, aim: float = 0.0, fire: bool = false, target: int = 0) -> InputIntent:
-	return InputIntent.from_raw(seq, mx, my, aim, fire, false, 0, target)
+func _intent(seq: int, mx: float = 0.0, my: float = 0.0, aim: float = 0.0, fire: bool = false, target: int = 0, ability: bool = false) -> InputIntent:
+	return InputIntent.from_raw(seq, mx, my, aim, fire, false, 0, target, ability)
 
 
 func test_solo_player_one_exists_before_first_step() -> void:
@@ -244,3 +244,68 @@ func test_fifty_player_step_is_cheaper_than_fifty_separate_sims() -> void:
 	# Informational: the shared world should be cheaper; don't fail CI if the
 	# machine is noisy, but record both numbers.
 	assert_gt(shared.projectile_count(), 0)
+
+
+func test_apply_input_keeps_pending_oneshots_until_step() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 0.0, 0.0)
+	sim.set_player_class("thornguard")
+	# First call posts both one-shots; a later movement-only apply must not drop them.
+	sim.apply_input(1, _intent(1, 0.0, 0.0, 0.0, false, 12345, true))
+	sim.apply_input(1, _intent(2, 1.0, 0.0))
+	var p: SimPlayerState = sim.get_player(1)
+	assert_true(p.intent.ability_pressed, "OR ability_pressed across applies")
+	assert_eq(p.intent.interact_target_id, 12345, "keep a pending nonzero target")
+	assert_eq(p.intent.seq, 2)
+	assert_almost_eq(p.intent.move_x, 1.0, 1e-6)
+	# Latest nonzero target wins.
+	sim.apply_input(1, _intent(3, 1.0, 0.0, 0.0, false, 99, false))
+	assert_eq(sim.get_player(1).intent.interact_target_id, 99)
+	assert_true(sim.get_player(1).intent.ability_pressed)
+	sim.step()
+	assert_false(sim.get_player(1).intent.ability_pressed, "consumed after step")
+	assert_eq(sim.get_player(1).intent.interact_target_id, 0)
+
+
+func test_pattern_bullet_skips_invulnerable_and_hits_the_next_player() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 2.0, 0.0)
+	sim.add_player(2, {"x": 2.0, "y": 0.0})
+	sim.step()
+	var src_def := EnemyDef.new()
+	src_def.aggro_radius = 0.0
+	src_def.leash = 1.0
+	src_def.move_speed = 0.0
+	src_def.wander_speed = 0.0
+	src_def.radius = 0.35
+	src_def.base_hp = 60
+	src_def.damage["spit"] = 10
+	var eid: int = sim.spawn_enemy_from_def(src_def, 50.0, 50.0)
+	var b := PatternBullet.new()
+	b.spawn_tick = sim.tick()
+	b.origin_x = 2.0
+	b.origin_y = 0.0
+	b.speed = 0.0
+	b.range_tiles = 1.0
+	b.lifetime_ticks = 10
+	b.radius_tiles = 0.15
+	b.damage_key = "spit"
+	b.source_id = eid
+	sim._pattern_bullets.append(b)
+	sim.set_invuln_ticks(1, 6)
+	var hp1: int = sim.get_player(1).hp
+	var hp2: int = sim.get_player(2).hp
+	sim.step()
+	assert_eq(sim.get_player(1).hp, hp1, "Slipstep i-frames skip the first overlap")
+	assert_eq(sim.get_player(2).hp, hp2 - 10, "the bullet keeps checking other players")
+	assert_true(b.consumed)
+
+
+func test_unknown_player_position_does_not_fall_back_to_default() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 3.0, 4.0)
+	assert_not_null(sim.get_player(1))
+	assert_null(sim.get_player(99))
+	var pos: Vector2 = sim._player_pos(99)
+	assert_push_error("LocalSim: unknown player id 99")
+	assert_eq(pos, Vector2.INF)
+	assert_ne(pos.x, 3.0)
+	assert_ne(pos.y, 4.0)
+
