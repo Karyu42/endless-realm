@@ -100,6 +100,29 @@ func test_rejoin_with_an_old_id_works() -> void:
 	assert_almost_eq(sim.get_player(pid).x, 6.0, 1e-6)
 
 
+func test_same_tick_remove_then_add_player_keeps_the_player() -> void:
+	# remove_player takes effect at the next step, so a same-tick add_player
+	# of that still-live id cancels the leave and applies the new position.
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, {"x": 5.0, "y": 5.0}))
+	sim.step()
+	assert_true(sim.player_ids().has(pid))
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, {"x": 7.0, "y": 8.0}))
+	assert_true(sim.player_ids().has(pid), "the same-tick leave is cancelled")
+	assert_almost_eq(sim.get_player(pid).x, 7.0, 1e-6)
+	assert_almost_eq(sim.get_player(pid).y, 8.0, 1e-6)
+	sim.step()
+	assert_true(sim.player_ids().has(pid))
+	assert_almost_eq(sim.get_player(pid).x, 7.0, 1e-6)
+	assert_almost_eq(sim.get_player(pid).y, 8.0, 1e-6)
+	# A live id with no pending leave is still refused.
+	assert_false(sim.add_player(pid, {"x": 1.0, "y": 1.0}))
+	assert_push_warning("LocalSim: id %d is already live" % pid)
+	assert_almost_eq(sim.get_player(pid).x, 7.0, 1e-6)
+
+
 func test_add_player_refuses_id_above_the_high_water_mark() -> void:
 	var sim := _new_sim()
 	var above: int = sim._next_id
