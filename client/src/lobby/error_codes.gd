@@ -5,16 +5,11 @@ extends RefCounted
 
 const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
 
-## proto ErrorCode.JOIN_REFUSED = 7, added in PR #73. Defined here so the
-## client can show packed copy before that proto change lands. Do not edit
-## proto or net/host in this PR.
-const JOIN_REFUSED := 7
-
 const NAMES: Dictionary = {
 	PB.ErrorCode.MULTIPLIER_NOT_ALLOWED: "MULTIPLIER_NOT_ALLOWED",
 	PB.ErrorCode.INSTANCE_FULL: "INSTANCE_FULL",
 	PB.ErrorCode.INSTANCE_NOT_FOUND: "INSTANCE_NOT_FOUND",
-	JOIN_REFUSED: "JOIN_REFUSED",
+	PB.ErrorCode.JOIN_REFUSED: "JOIN_REFUSED",
 }
 
 
@@ -24,7 +19,7 @@ static func packed() -> PackedInt32Array:
 		PB.ErrorCode.MULTIPLIER_NOT_ALLOWED,
 		PB.ErrorCode.INSTANCE_FULL,
 		PB.ErrorCode.INSTANCE_NOT_FOUND,
-		JOIN_REFUSED,
+		PB.ErrorCode.JOIN_REFUSED,
 	])
 
 

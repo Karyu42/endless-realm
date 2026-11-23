@@ -32,11 +32,11 @@ func test_pack_loads_without_fallbacks() -> void:
 	assert_false(_ui.text("imports_allowed_check").is_empty())
 	assert_false(_ui.text("lobby_full").is_empty())
 	assert_ne(_ui.text("lobby_full"), _ui.error_message(PB.ErrorCode.INSTANCE_FULL))
-	assert_eq(ErrorCodes.JOIN_REFUSED, 7)
-	assert_eq(ErrorCodes.name_of(ErrorCodes.JOIN_REFUSED), "JOIN_REFUSED")
-	assert_true(_ui.maps_error(ErrorCodes.JOIN_REFUSED))
-	assert_false(_ui.error_message(ErrorCodes.JOIN_REFUSED).is_empty())
-	assert_ne(_ui.error_message(ErrorCodes.JOIN_REFUSED), _ui.text("lobby_full"))
+	assert_eq(PB.ErrorCode.JOIN_REFUSED, 7)
+	assert_eq(ErrorCodes.name_of(PB.ErrorCode.JOIN_REFUSED), "JOIN_REFUSED")
+	assert_true(_ui.maps_error(PB.ErrorCode.JOIN_REFUSED))
+	assert_false(_ui.error_message(PB.ErrorCode.JOIN_REFUSED).is_empty())
+	assert_ne(_ui.error_message(PB.ErrorCode.JOIN_REFUSED), _ui.text("lobby_full"))
 	assert_gt(_ui.message_max_width_mm, 0.0)
 
 
@@ -332,7 +332,7 @@ func test_error_messages_cover_each_portal_code() -> void:
 	assert_true(codes.has(PB.ErrorCode.MULTIPLIER_NOT_ALLOWED))
 	assert_true(codes.has(PB.ErrorCode.INSTANCE_FULL))
 	assert_true(codes.has(PB.ErrorCode.INSTANCE_NOT_FOUND))
-	assert_true(codes.has(ErrorCodes.JOIN_REFUSED))
+	assert_true(codes.has(PB.ErrorCode.JOIN_REFUSED))
 	for code in codes:
 		var name: String = ErrorCodes.name_of(code)
 		assert_ne(name, "UNKNOWN", "unnamed ErrorCode %d" % code)
@@ -344,6 +344,51 @@ func test_error_messages_cover_each_portal_code() -> void:
 		assert_false(msg.is_empty(), "empty player-facing message for %s" % name)
 		assert_ne(msg, name, "message for %s should be player-facing" % name)
 		assert_false(msg.contains(name), "message for %s should be original copy" % name)
+
+
+func test_every_host_sent_error_code_has_copy_in_both_packs() -> void:
+	# Codes LobbyHost actually sends on ErrorReply / portal_rejected, except
+	# UNSPECIFIED, which is left without packed copy.
+	var host_src := FileAccess.get_file_as_string("res://src/net/host/lobby_host.gd")
+	assert_false(host_src.is_empty(), "could not read LobbyHost")
+	var re := RegEx.new()
+	assert_eq(re.compile("PB\\.ErrorCode\\.([A-Z_]+)"), OK)
+	var sent: Dictionary = {}
+	for m in re.search_all(host_src):
+		var name: String = m.get_string(1)
+		if name == "ERROR_CODE_UNSPECIFIED":
+			continue
+		sent[name] = true
+	assert_gt(sent.size(), 0, "expected host-sent ErrorCodes")
+	assert_true(sent.has("JOIN_REFUSED"))
+	var data_pack: Dictionary = DataCatalog._read_json(
+		DataCatalog.repo_root().path_join("data/lobby_ui.json")
+	)
+	var client_pack: Dictionary = DataCatalog._read_json("res://data/lobby_ui.json")
+	var data_msgs: Dictionary = data_pack.get("error_messages", {})
+	var client_msgs: Dictionary = client_pack.get("error_messages", {})
+	var packed: PackedInt32Array = ErrorCodes.packed()
+	for name in sent.keys():
+		assert_true(
+			data_msgs.has(name) and String(data_msgs[name]) != "",
+			"data/lobby_ui.json is missing player-facing text for host-sent %s" % name
+		)
+		assert_true(
+			client_msgs.has(name) and String(client_msgs[name]) != "",
+			"client/data/lobby_ui.json is missing player-facing text for host-sent %s" % name
+		)
+		assert_eq(
+			String(data_msgs[name]),
+			String(client_msgs[name]),
+			"lobby_ui packs are out of sync for %s" % name
+		)
+		var code: int = -1
+		for packed_code in packed:
+			if ErrorCodes.name_of(packed_code) == name:
+				code = packed_code
+				break
+		assert_ne(code, -1, "ErrorCodes.packed() / NAMES is missing host-sent %s" % name)
+		assert_true(_ui.maps_error(code), "loaded pack does not map host-sent %s" % name)
 
 
 func test_unknown_error_code_is_logged_and_unmapped() -> void:
@@ -501,13 +546,13 @@ func test_hello_time_join_refused_uses_packed_copy() -> void:
 	assert_eq(client.player_id, 0)
 	var msg = PB.ServerMessage.new()
 	var err = msg.new_error()
-	err.set_code(ErrorCodes.JOIN_REFUSED)
+	err.set_code(PB.ErrorCode.JOIN_REFUSED)
 	err.set_reason("host reason must not become the copy")
 	client._on_packet(msg.to_bytes())
-	assert_eq(join_codes, [ErrorCodes.JOIN_REFUSED])
+	assert_eq(join_codes, [PB.ErrorCode.JOIN_REFUSED])
 	assert_eq(portal_codes, [])
-	var text: String = GameSession.apply_join_error(ErrorCodes.JOIN_REFUSED)
-	assert_eq(text, _ui.error_message(ErrorCodes.JOIN_REFUSED))
+	var text: String = GameSession.apply_join_error(PB.ErrorCode.JOIN_REFUSED)
+	assert_eq(text, _ui.error_message(PB.ErrorCode.JOIN_REFUSED))
 	assert_eq(GameSession.join_error_text, text)
 	assert_eq(GameSession.portal_error_text, "")
 	assert_false(text.contains("host reason"))
@@ -518,8 +563,8 @@ func test_hello_time_join_refused_uses_packed_copy() -> void:
 func test_mid_session_join_refused_uses_packed_copy() -> void:
 	var client := LobbyClient.new()
 	_welcome(client)
-	GameSession._on_client_portal_error(ErrorCodes.JOIN_REFUSED, "host reason")
-	assert_eq(GameSession.portal_error_text, _ui.error_message(ErrorCodes.JOIN_REFUSED))
+	GameSession._on_client_portal_error(PB.ErrorCode.JOIN_REFUSED, "host reason")
+	assert_eq(GameSession.portal_error_text, _ui.error_message(PB.ErrorCode.JOIN_REFUSED))
 	assert_eq(GameSession.join_error_text, "")
 	assert_false(GameSession.portal_error_text.contains("host reason"))
 	client.free()
@@ -534,8 +579,8 @@ func test_lobby_full_status_stays_after_a_later_beacon() -> void:
 
 func test_join_refused_status_stays_after_a_later_beacon() -> void:
 	await _assert_sticky_status_survives_beacon(
-		ErrorCodes.JOIN_REFUSED,
-		_ui.error_message(ErrorCodes.JOIN_REFUSED)
+		PB.ErrorCode.JOIN_REFUSED,
+		_ui.error_message(PB.ErrorCode.JOIN_REFUSED)
 	)
 
 

@@ -259,7 +259,7 @@ func apply_join_error(code: int) -> String:
 		text = ui.text("lobby_full")
 		if text == "":
 			DataCatalog.report_unknown_id("lobby_ui.strings.lobby_full")
-	elif code == ErrorCodes.JOIN_REFUSED:
+	elif code == PB.ErrorCode.JOIN_REFUSED:
 		if ui.maps_error(code):
 			text = ui.error_message(code)
 		else:
