@@ -19,10 +19,12 @@ import (
 )
 
 const (
-	EnvSmokeURL   = "ER_SMOKE_URL"
-	DefaultURL    = "ws://127.0.0.1:8080/ws"
-	firstSnapWait = 10 * time.Second
-	writeTO       = 5 * time.Second
+	EnvSmokeURL         = "ER_SMOKE_URL"
+	DefaultURL          = "ws://127.0.0.1:8080/ws"
+	DefaultStallTimeout = 5 * time.Second
+	firstSnapWait       = 10 * time.Second
+	writeTO             = 5 * time.Second
+	appliedSeqSlack     = 2
 )
 
 // Config is the bot contract invoked by CI (PR #5 ci.yml / soak.yml):
@@ -32,11 +34,12 @@ const (
 //
 // -url is the contract; if it is empty, ER_SMOKE_URL is used, then DefaultURL.
 type Config struct {
-	URL      string
-	Clients  int
-	Seed     uint64
-	Mult     string
-	Duration time.Duration
+	URL          string
+	Clients      int
+	Seed         uint64
+	Mult         string
+	Duration     time.Duration
+	StallTimeout time.Duration
 }
 
 // ParseFlags reads the CI flag contract from args (and ER_SMOKE_URL).
@@ -47,15 +50,17 @@ func ParseFlags(args []string) (Config, error) {
 func parseFlags(eh flag.ErrorHandling, args []string) (Config, error) {
 	fs := flag.NewFlagSet("bot", eh)
 	cfg := Config{
-		Clients: 1,
-		Seed:    1,
-		Mult:    "1.0",
+		Clients:      1,
+		Seed:         1,
+		Mult:         "1.0",
+		StallTimeout: DefaultStallTimeout,
 	}
 	fs.StringVar(&cfg.URL, "url", "", "WebSocket URL (env "+EnvSmokeURL+"; default "+DefaultURL+")")
 	fs.IntVar(&cfg.Clients, "clients", cfg.Clients, "number of concurrent clients")
 	fs.Uint64Var(&cfg.Seed, "seed", cfg.Seed, "expected instance seed (must match Welcome)")
 	fs.StringVar(&cfg.Mult, "mult", cfg.Mult, "expected level multiplier, decimal or hundredths (must match Welcome)")
 	fs.DurationVar(&cfg.Duration, "duration", 0, "soak length (e.g. 10m); if set, the bot exits 0 after this long once every client has a snapshot")
+	fs.DurationVar(&cfg.StallTimeout, "stall-timeout", cfg.StallTimeout, "fail a soak if no new snapshot arrives for this long")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -68,6 +73,9 @@ func parseFlags(eh flag.ErrorHandling, args []string) (Config, error) {
 	if cfg.Clients < 1 {
 		return Config{}, fmt.Errorf("-clients must be >= 1, got %d", cfg.Clients)
 	}
+	if cfg.StallTimeout <= 0 {
+		cfg.StallTimeout = DefaultStallTimeout
+	}
 	if _, err := instance.ParseMultiplier(cfg.Mult); err != nil {
 		return Config{}, fmt.Errorf("-mult: %w", err)
 	}
@@ -77,29 +85,39 @@ func parseFlags(eh flag.ErrorHandling, args []string) (Config, error) {
 // Run connects cfg.Clients clients. Every client must complete the
 // handshake and receive at least one snapshot; otherwise Run returns a
 // non-zero error. With -duration, clients stay connected for that long
-// after the first snapshot and Run returns nil if they remain healthy.
+// after the first snapshot and Run returns nil if they remain healthy
+// (ticks advance and applied_seq catches up). The first client error
+// cancels the others.
 func Run(ctx context.Context, cfg Config) error {
 	m100, err := instance.ParseMultiplier(cfg.Mult)
 	if err != nil {
 		return err
 	}
-	var wg sync.WaitGroup
-	errCh := make(chan error, cfg.Clients)
+	if cfg.StallTimeout <= 0 {
+		cfg.StallTimeout = DefaultStallTimeout
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg    sync.WaitGroup
+		once  sync.Once
+		first error
+	)
 	for i := 0; i < cfg.Clients; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- runOne(ctx, cfg, m100)
+			if err := runOne(ctx, cfg, m100); err != nil {
+				once.Do(func() {
+					first = err
+					cancel()
+				})
+			}
 		}()
 	}
 	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return first
 }
 
 func runOne(ctx context.Context, cfg Config, wantM100 int) error {
@@ -139,52 +157,167 @@ func runOne(ctx context.Context, cfg Config, wantM100 int) error {
 		return fmt.Errorf("welcome multiplier=%g (%d hundredths), want %d", w.GetMultiplier(), gotM100, wantM100)
 	}
 
+	track := newSnapTracker(w.GetPlayerId())
+	// One long-lived reader for the rest of the session. A short per-read
+	// timeout would cancel this context and close the WebSocket.
+	go track.read(ctx, conn)
+
 	var seq uint32 = 1
 	if err := writeMsg(ctx, conn, inputMsg(seq)); err != nil {
 		return fmt.Errorf("send input: %w", err)
 	}
 
-	snapCtx, cancel := context.WithTimeout(ctx, firstSnapWait)
-	got, err := readMsg(snapCtx, conn)
-	cancel()
-	if err != nil {
+	if err := track.waitFirst(ctx, firstSnapWait); err != nil {
 		return fmt.Errorf("no snapshot: %w", err)
 	}
-	if got.GetSnapshot() == nil {
-		if rej := got.GetReject(); rej != nil {
-			return fmt.Errorf("no snapshot: rejected: %s", rej.GetReason())
-		}
-		return fmt.Errorf("no snapshot: got %T", got.Payload)
-	}
-
 	if cfg.Duration <= 0 {
 		return nil
 	}
 
+	firstTick := track.tick()
 	deadline := time.Now().Add(cfg.Duration)
 	ticker := time.NewTicker(instance.TickDuration)
 	defer ticker.Stop()
 	for {
 		if time.Now().After(deadline) {
-			return nil
+			return track.soakOK(firstTick, seq)
 		}
 		select {
 		case <-ctx.Done():
+			if err := track.err(); err != nil {
+				return err
+			}
 			return fmt.Errorf("cancelled before -duration elapsed: %w", ctx.Err())
 		case <-ticker.C:
+			if err := track.err(); err != nil {
+				return fmt.Errorf("soak read: %w", err)
+			}
+			if stalled, forAgo := track.stalled(cfg.StallTimeout); stalled {
+				return fmt.Errorf("no new snapshot for %s (last tick %d)", forAgo, track.tick())
+			}
 			seq++
 			if err := writeMsg(ctx, conn, inputMsg(seq)); err != nil {
 				return fmt.Errorf("soak input: %w", err)
 			}
-			// Drain any pending snapshots so the buffer does not stall.
-			drainCtx, drainCancel := context.WithTimeout(ctx, 200*time.Millisecond)
-			_, err := readMsg(drainCtx, conn)
-			drainCancel()
-			if err != nil && drainCtx.Err() == nil && ctx.Err() == nil {
-				return fmt.Errorf("soak read: %w", err)
-			}
 		}
 	}
+}
+
+type snapTracker struct {
+	mu          sync.Mutex
+	playerID    uint32
+	lastTick    uint32
+	lastApplied uint32
+	lastAt      time.Time
+	gotFirst    bool
+	readErr     error
+}
+
+func newSnapTracker(playerID uint32) *snapTracker {
+	return &snapTracker{playerID: playerID}
+}
+
+func (s *snapTracker) read(ctx context.Context, conn *websocket.Conn) {
+	for {
+		msg, err := readMsg(ctx, conn)
+		if err != nil {
+			s.mu.Lock()
+			if s.readErr == nil {
+				s.readErr = err
+			}
+			s.mu.Unlock()
+			return
+		}
+		if rej := msg.GetReject(); rej != nil {
+			s.mu.Lock()
+			if s.readErr == nil {
+				s.readErr = fmt.Errorf("rejected: %s", rej.GetReason())
+			}
+			s.mu.Unlock()
+			return
+		}
+		if snap := msg.GetSnapshot(); snap != nil {
+			s.note(snap)
+		}
+	}
+}
+
+func (s *snapTracker) note(snap *protocolv1.Snapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastTick = snap.GetTick()
+	s.lastAt = time.Now()
+	s.gotFirst = true
+	for _, p := range snap.GetPlayers() {
+		if p.GetId() == s.playerID && p.GetAppliedSeq() > s.lastApplied {
+			s.lastApplied = p.GetAppliedSeq()
+		}
+	}
+}
+
+func (s *snapTracker) waitFirst(ctx context.Context, d time.Duration) error {
+	deadline := time.NewTimer(d)
+	defer deadline.Stop()
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		s.mu.Lock()
+		ok, err := s.gotFirst, s.readErr
+		s.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("timed out after %s", d)
+		case <-poll.C:
+		}
+	}
+}
+
+func (s *snapTracker) err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readErr
+}
+
+func (s *snapTracker) tick() uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastTick
+}
+
+func (s *snapTracker) stalled(d time.Duration) (bool, time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastAt.IsZero() {
+		return true, d
+	}
+	ago := time.Since(s.lastAt)
+	return ago > d, ago
+}
+
+func (s *snapTracker) soakOK(firstTick, lastSeq uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.gotFirst {
+		return fmt.Errorf("no snapshot")
+	}
+	if s.lastTick <= firstTick {
+		return fmt.Errorf("ticks did not advance: first=%d last=%d", firstTick, s.lastTick)
+	}
+	if s.lastApplied == 0 {
+		return fmt.Errorf("applied_seq never appeared in a snapshot")
+	}
+	if lastSeq > appliedSeqSlack && s.lastApplied+appliedSeqSlack < lastSeq {
+		return fmt.Errorf("applied_seq=%d did not catch up to sent seq=%d", s.lastApplied, lastSeq)
+	}
+	return nil
 }
 
 func inputMsg(seq uint32) *protocolv1.ClientMessage {

@@ -52,10 +52,10 @@ Flags and env (env is the default; flags override):
 
 - `--listen` / `ER_LISTEN_ADDR` (default `:8080`)
 - `--seed` / `ER_SEED` (default `1`)
-- `--multiplier` / `ER_MULTIPLIER` — a decimal (`1.05`, `1.0`) or an integer number of hundredths (`105`). Decimals are rounded to whole hundredths, then accepted only when `50 ≤ M100 ≤ 150` and `M100 % 5 == 0` (0.05 steps in `[0.5, 1.5]`, per the design doc). The instance stores the rounded `M100`. Locked at process start.
+- `--multiplier` / `ER_MULTIPLIER` — a decimal (`1.05`, `1.0`) or an integer. Integers **under 10** are decimals (`1` means 1.00); integers **≥ 10** are hundredths (`105` means 1.05). Decimals must already be whole hundredths (within float tolerance); `1.053` is rejected, not rounded. Then `50 ≤ M100 ≤ 150` and `M100 % 5 == 0` (0.05 steps in `[0.5, 1.5]`, per the design doc). The instance stores `M100`. Locked at process start.
 - `--healthcheck` — probe `/healthz` on the listen address and exit (compose HEALTHCHECK)
 
-Compose binds Postgres to `127.0.0.1:5432` only. The server does not connect to it yet.
+Compose binds Postgres to `127.0.0.1:5432` and the game server to `127.0.0.1:8080`. The Postgres volume is mounted at `/var/lib/postgresql` (required for Postgres 18+ images). If you already ran compose when the volume was mounted at `/var/lib/postgresql/data`, delete the stale volume once with `docker compose down -v` before `make dev` or `make smoke`. The server does not connect to Postgres yet.
 
 The first WebSocket message must be a protobuf `Hello` with `protocol_version = 1`. A mismatch, a text frame, or a garbage binary frame is rejected with a `Reject` frame and the connection is closed.
 
@@ -84,10 +84,11 @@ Without Docker, start the server with `make run` and run the smoke command above
 | `-url` | WebSocket URL. CI passes `-url ws://127.0.0.1:8080/ws`. If omitted, `ER_SMOKE_URL` is used; if that is also empty, the default is `ws://127.0.0.1:8080/ws`. |
 | `-clients` | Concurrent clients (must be ≥ 1). CI smoke uses `1`. |
 | `-seed` | Expected `Welcome.instance_seed`. Exit non-zero on mismatch. CI passes `1`, matching compose `ER_SEED`. |
-| `-mult` | Expected level multiplier, decimal or hundredths (same rules as the server). Exit non-zero on mismatch. CI passes `1.0`. |
-| `-duration` | Soak length, Go duration syntax (e.g. `10m`). If set, the bot exits 0 after this elapses once every client has received a snapshot. If omitted, the bot exits 0 after the first snapshot (smoke). `-h` lists this flag (soak detects it that way). |
+| `-mult` | Expected level multiplier (same parse rules as the server). Exit non-zero on mismatch. CI passes `1.0`. |
+| `-duration` | Soak length, Go duration syntax (e.g. `10m`). If set, the bot exits 0 after this elapses once every client has received a snapshot, ticks have advanced, and `applied_seq` has caught up. If omitted, the bot exits 0 after the first snapshot (smoke). `-h` lists this flag (soak detects it that way). |
+| `-stall-timeout` | During a soak, fail if no new snapshot arrives for this long (default `5s`). A 600 ms server pause must not fail the bot. |
 
-The bot exits non-zero on dial failure, handshake failure (`Reject` or missing `Welcome`), seed/multiplier mismatch, or if no snapshot arrives within 10s. `ER_MULTIPLIER=1.0` and `ER_SEED=1` in compose are the values smoke checks.
+The bot exits non-zero on dial failure, handshake failure (`Reject` or missing `Welcome`), seed/multiplier mismatch, if no snapshot arrives within 10s, if snapshots stall for `-stall-timeout` during a soak, or if ticks / `applied_seq` do not advance. One failing client cancels the others. `ER_MULTIPLIER=1.0` and `ER_SEED=1` in compose are the values smoke checks.
 
 ## Client connection (including Android)
 
