@@ -25,8 +25,8 @@ func test_pack_loads_without_fallbacks() -> void:
 
 
 func test_missing_pack_is_invalid() -> void:
-	assert_push_error("LobbyUiSettings: missing or empty lobby UI pack")
 	var u := LobbyUiSettings.from_json({})
+	assert_push_error("LobbyUiSettings: missing or empty lobby UI pack")
 	assert_false(u.is_valid())
 
 
