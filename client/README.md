@@ -120,8 +120,10 @@ damage / death, packed `res://data` loading, the burr_spit cadence
 (first spit 30 ticks after aggro), protocol v1 handshake and import refusal,
 portal-multiplier selection, beacon encode/decode, a headless loopback
 host+client WebSocket session, deterministic personal loot, idempotent
-drop ids, the vision §3.4 XP table (including level 1000), and multi-level-up
-from one grant.
+drop ids, interact prompt/accept ranges, once-per-seq interact including the
+uint32 wrap and skip-0, InputFrame `interact_target_id` encode/decode, the
+vision §3.4 XP table (including level 1000), and multi-level-up from one
+grant.
 
 `spawn_tick` is the time index of the tick that spawned a shot (the first
 processed tick is 0). `tick()` and `snapshot.tick` count completed ticks, so
@@ -149,12 +151,14 @@ and keys 1–8 equip an inventory slot.
 
 Interact prompt (1.5 tiles) and accept (2.0 tiles) ranges, and the practice-yard
 enemy level (E = 1), come from `data/scaling.json`. The client auto-selects a
-target in the prompt range and sends `interact_target_id` (0 means none). The
-sim applies a nonzero id as a press, at most once per seq, and silently drops
-an unknown id, a bag the player may not use, or a target farther than the
-accept range. The Server Engineer's protocol PR will add
-`uint64 interact_target_id = 6` to `InputFrame`; until then the field lives
-in `InputIntent` and `LocalSim`. Entity ids are `int` from one counter and stay below 2^63 so they fit the uint64 wire field.
+target in the prompt range and `NetClient.encode_input` sends it as
+`InputFrame.interact_target_id` (0 means none). `LocalSim` applies a nonzero
+id as a press, at most once per seq (`Seq.seq_is_next`, the same rule as
+`HostInteractValidator`), and silently drops an unknown id, a bag the player
+may not use, or a target farther than `SimScaling.in_accept_range`. The
+InputIntent seq counter uses `Seq.next`, which wraps from `0xFFFFFFFF` to 1
+and skips 0. Entity ids are `int` from one counter and stay below 2^63 so
+they fit the uint64 wire field.
 Every practice-yard enemy is fixed at the data E: kills give normal
 `killXP(1)`, Glint `ceil(m(1))` = 1, and loot rolls at T* = 0.
 
@@ -166,6 +170,15 @@ presses from accepted inputs and evaluates them after movement using the
 host's position. Unknown / disallowed targets and targets beyond the accept range in
 `data/scaling.json` (`interact_accept_range_tiles`) are silently dropped;
 the same seq cannot interact twice, including across the uint32 wrap.
+
+The listen-host `GameSession` path does not set those hooks yet. The host
+player still plays in a separate `LocalSim` (`HostWorldSource`), remotes
+each have their own movement `LocalSim` plus the stand-in bullet field, and
+snapshot replication is stubbed. Wiring `resolver` / `on_interact` to the
+listen-host sim would check range against the wrong positions. The Host API
+below (`add_local_player`, `submit_local_input`, `world_view` / `ticked`) is
+on main; interact still waits on the host running one shared `LocalSim`
+(with loot) instead of a per-player sim plus the stand-in field.
 
 The host has not wired the shared sim's interactables yet. For the loot work,
 set `host.interact_validator.resolver` to
@@ -252,3 +265,4 @@ that doesn't repeat it keeps the press. Focus and cooldown checks are the sim's.
 shots). The world is not one shared multi-player `LocalSim` yet, so players
 don't see shared enemies. The stand-in bullet field only runs for the load
 test (`--emitters N`, default 0).
+

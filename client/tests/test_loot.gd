@@ -242,6 +242,35 @@ func test_interact_press_applies_at_most_once_per_seq() -> void:
 	assert_eq(sim.ground_drop_count(), 0)
 
 
+func test_interact_seq_zero_is_ignored_and_wrap_skips_zero() -> void:
+	var sim := _sim()
+	var bag := _grant_bag_at(sim, 0.5)
+	# seq 0 is always rejected, even for a first press.
+	sim.submit_input(InputIntent.from_raw(0, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	assert_null(sim.inventory().slots[0])
+	# A press at the last uint32 seq applies once.
+	sim.submit_input(InputIntent.from_raw(0xFFFFFFFF, 0.0, 0.0, 0.0, false, true, 0, bag.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 0)
+	var bag2 := _grant_bag_at(sim, 0.5)
+	# Re-send the pre-wrap seq: must be ignored.
+	sim.submit_input(InputIntent.from_raw(0xFFFFFFFF, 0.0, 0.0, 0.0, false, true, 0, bag2.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+	# Seq.next(0xFFFFFFFF) is 1, not 0; that press applies once.
+	assert_eq(Seq.next(0xFFFFFFFF), 1)
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, bag2.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 0)
+	# The same post-wrap seq is ignored.
+	var bag3 := _grant_bag_at(sim, 0.5)
+	sim.submit_input(InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, true, 0, bag3.id))
+	sim.step()
+	assert_eq(sim.ground_drop_count(), 1)
+
+
 func test_practice_yard_forces_level_one_rewards() -> void:
 	# A high content_level and a boss rank must not change yard rewards:
 	# killXP(1) = 10.0 (100 tenths), Glint ceil(m(1)) = 1, loot at T* = 0.
