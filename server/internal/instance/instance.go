@@ -56,6 +56,9 @@ type Input struct {
 	MoveY    float64
 	Aim      float64 // radians, Godot 2D convention
 	FireHeld bool
+	// AbilityPressed is one-shot: it stays set if a later frame in the same
+	// tick does not repeat it, and is cleared once the tick is applied.
+	AbilityPressed bool
 }
 
 // Snapshot is the stub state broadcast after a tick.
@@ -235,6 +238,9 @@ func (i *Instance) SetOnSubmit(fn func(Input)) {
 
 func (i *Instance) SubmitInput(in Input) {
 	i.mu.Lock()
+	if prev, ok := i.inputs[in.PlayerID]; ok && prev.AbilityPressed {
+		in.AbilityPressed = true
+	}
 	i.inputs[in.PlayerID] = in
 	hook := i.onSubmit
 	i.mu.Unlock()
