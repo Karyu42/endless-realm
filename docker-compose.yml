@@ -14,7 +14,7 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - er_pgdata:/var/lib/postgresql/data
+      - er_pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U endless -d endless_realm"]
       interval: 2s
@@ -28,7 +28,7 @@ services:
       args:
         GO_VERSION: ${GO_VERSION:-1.27.4}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       ER_LISTEN_ADDR: ":8080"
       ER_SEED: "1"
