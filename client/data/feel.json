@@ -1,0 +1,43 @@
+{
+  "hit_flash": {
+    "player_color": [1.0, 0.55, 0.45, 1.0],
+    "enemy_color": [1.0, 0.62, 0.42, 1.0]
+  },
+  "hit_stop": {
+    "seconds": 0.04,
+    "knockback_px": 3.0,
+    "recover_seconds": 0.08
+  },
+  "damage_numbers": {
+    "pool_size": 96,
+    "lifetime_seconds": 0.7,
+    "rise_px": 28.0,
+    "font_size": 16,
+    "outline_size": 3,
+    "player_taken_color": [1.0, 0.32, 0.28, 1.0],
+    "dealt_color": [1.0, 0.92, 0.45, 1.0],
+    "heal_color": [0.45, 0.85, 0.55, 1.0],
+    "stack_offset_px": 10.0
+  },
+  "bullets": {
+    "player_outline_px": 1.5,
+    "player_outline_color": [0.06, 0.08, 0.10, 0.95],
+    "enemy_outline_px": 2.5,
+    "enemy_outline_color": [0.05, 0.02, 0.02, 1.0],
+    "enemy_rim_px": 1.25,
+    "enemy_rim_color": [1.0, 0.96, 0.88, 0.95]
+  },
+  "aim": {
+    "gamepad_deadzone": 0.2,
+    "gamepad_smooth_halflife_seconds": 0.06
+  },
+  "touch": {
+    "deadzone": 0.15,
+    "stick_thumb_mm": 14.0,
+    "knob_ratio": 0.39,
+    "margin_mm": 8.0,
+    "ability_button_mm": 10.0,
+    "interact_button_mm": 10.0,
+    "button_gap_mm": 3.0
+  }
+}

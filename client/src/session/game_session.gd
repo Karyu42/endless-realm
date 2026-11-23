@@ -32,6 +32,9 @@ var inventory_slot: int = 0
 ## Snapshot id of the interactable the client auto-selected (0 = none).
 var interact_target_id: int = 0
 var ability_pressed: bool = false
+## Hits from the LocalSim tick that produced curr_snapshot, when the source is a LocalSim.
+var last_hits: Array[HitEvent] = []
+var last_hit_tick: int = -1
 
 var _accum: float = 0.0
 var _seq: int = 0
@@ -189,6 +192,7 @@ func _process(delta: float) -> void:
 		_apply_solo_transfers()
 		prev_snapshot = curr_snapshot
 		curr_snapshot = source.snapshot()
+		_capture_hits()
 	# If we hit the catch-up cap, drop leftover time so the sim does not spiral.
 	if steps >= MAX_CATCH_UP_TICKS and _accum >= dt:
 		_accum = fmod(_accum, dt)
@@ -217,6 +221,7 @@ func _process_host(delta: float) -> void:
 	if view != null and view.tick != curr_snapshot.tick:
 		prev_snapshot = curr_snapshot
 		curr_snapshot = view
+		_capture_hits()
 	var due: int = lobby_host.next_deadline_usec()
 	var now: int = lobby_host.clock.call() if lobby_host.clock.is_valid() else Time.get_ticks_usec()
 	alpha = clampf(1.0 - float(due - now) / float(LobbyHost.PERIOD_USEC), 0.0, 1.0)
@@ -242,6 +247,22 @@ func interpolated_aim() -> float:
 	var b: float = curr_snapshot.player_aim
 	var diff: float = fposmod(b - a + PI, TAU) - PI
 	return a + diff * alpha
+
+
+func _capture_hits() -> void:
+	last_hits.clear()
+	last_hit_tick = curr_snapshot.tick if curr_snapshot != null else -1
+	var sim := source as LocalSim
+	if sim == null:
+		return
+	for ev in sim.hits():
+		last_hits.append(ev)
+
+
+func feel() -> FeelSettings:
+	if catalog != null and catalog.feel != null and catalog.feel.is_valid():
+		return catalog.feel
+	return null
 
 
 func _apply_solo_transfers() -> void:

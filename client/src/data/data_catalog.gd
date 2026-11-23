@@ -33,6 +33,7 @@ static func load_from(data_dir: String) -> DataCatalog:
 	cat._load_dungeons(data_dir.path_join("dungeons"))
 	cat.scaling = SimScaling.from_json(DataCatalog._read_json(data_dir.path_join("scaling.json")))
 	cat.loot = LootTables.from_json(DataCatalog._read_json(data_dir.path_join("loot.json")))
+	cat.feel = FeelSettings.from_json(DataCatalog._read_json(data_dir.path_join("feel.json")))
 	cat.report_unknown_ids()
 	return cat
 
@@ -44,6 +45,7 @@ var abilities: Dictionary = {} # String -> AbilityDef
 var dungeons: Dictionary = {} # String -> DungeonDef
 var scaling: SimScaling = SimScaling.new()
 var loot: LootTables = LootTables.new()
+var feel: FeelSettings = FeelSettings.new()
 
 
 ## Merge an extra { "patterns": [...] } file, used for fixtures-only defs.
