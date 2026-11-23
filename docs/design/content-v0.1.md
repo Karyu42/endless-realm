@@ -42,6 +42,8 @@ All examples below use these rules. With the vision §6.1 scaling, an 8-player p
 These fill gaps in `vision.md` and don't change any of its formulas:
 - **When n is counted:** dungeon enemies spawn when their room activates (§3.1), so the vision §6.1 "n at spawn" is n at room activation. Boss adds use the boss's n, which is snapshotted at the seal (vision §6.1 rule 6a).
 - **Wilds enemies don't scale with n.** The Wilds aren't an instance and have open-world respawns instead.
+- **Scaled HP rounding:** max HP is computed in exact integer math and rounded half-up once, at spawn (or at the seal for the boss):
+  `HP = (baseHP × m100(E) × s100(n) + 5000) div 10000`, where `m100(E) = 100 + 5 × (E − 1)` and `s100(n) = 100 + 60 × (n − 1)` for normal enemies, or `100 + 75 × (n − 1)` for the boss. In the Wilds, `s100 = 100`. Phase thresholds compare current HP against `max HP × threshold` in the same integer math. Example: Tallow Warden at E=10, n=8 → `(5500 × 145 × 625 + 5000) div 10000 = 49,844`.
 
 ---
 
@@ -111,7 +113,29 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 | Gleamwright | 30 (×3 if it pierces 3 targets) | 2.5 | 75 single target |
 | Driftrunner | 28 | 3.5 | 98 |
 
-Enemy HP below is tuned for about 65 effective solo DPS: about a 2 s TTK for a normal enemy and about 100 s for the boss solo.
+**Time-to-kill target.** Enemy HP is tuned against a solo player with **on-level gear** (`T = T*(E)`, so `W = 5 × T*`), at `D = 1`, after enemy Ward, with these assumed hit rates:
+- Thornguard: 60% of pellets (3 of 5 at 2–3 tiles).
+- Gleamwright: 80%, single target.
+- Driftrunner: 70%.
+
+The targets are:
+- 1–5 s for a normal enemy
+- 20–30 s for the elite
+- about 100 s for the boss solo, including about 5 s of phase transitions
+
+Per-ring results (the range across the three classes, from the band's low to high level):
+
+| Content | Enemies | Solo TTK |
+|---|---|---|
+| Ring 1 (E 1–5) | Burrmite, Driftcap Spore | 0.8–1.5 s |
+| Ring 2 (E 6–10) | Reedling Slinger, Mossback Boar | 1.4–3.2 s |
+| Ring 3 (E 11–15) | Cinderwisp, Gloomlantern Sentinel | 1.5–4.8 s |
+| Ring 4 (E 16–20) | Thornwing Harrier, Gloomlantern Sentinel | 2.3–4.6 s |
+| Ring 4 elite | Mirebell Matron | 22–27 s |
+| Vault trash (E 10–15) | Wickhound, Waxen Acolyte, plus the ring-3 types | 1.3–4.8 s |
+| Tallow Warden (E 10) | | 89–106 s of damage time, plus 5 s of transitions |
+
+Because `g(T*) ≈ m(E)` and Ward is normalized, these times stay nearly flat at every level (vision §4.1).
 
 With vision §6.1 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS, so the fight is about 80 s.
 
@@ -127,13 +151,14 @@ With vision §6.1 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 ### 2.1 Layout of the Wilds
 - The Wilds are a circle of radius 120 tiles. The Hearth gate sits on the south edge.
 - Enemy level depends on distance `r` from the center: `E = clamp(20 − floor(r / 6), 1, 20)`.
+- Rings are half-open intervals, so every point belongs to exactly one ring. The boundary `r = 90` is in ring 1 (E 5), and `r = 89.9` is in ring 2 (E 6).
 
 | Ring | Name | r (tiles) | Levels | Live population | Roster (spawn weight) |
 |---|---|---|---|---|---|
-| 1 | Saltreach Verge | 90–120 | 1–5 | 60 | Burrmite 60 (packs of 3), Driftcap Spore 40 |
-| 2 | Fernmoor | 60–90 | 6–10 | 50 | Mossback Boar 50, Reedling Slinger 50 (pairs) |
-| 3 | Ashen Glade | 30–60 | 11–15 | 40 | Cinderwisp 55 (pairs), Gloomlantern Sentinel 45 |
-| 4 | Hollow Heart | 0–30 | 16–20 | 30 + 1 elite | Thornwing Harrier 70, Gloomlantern Sentinel 30, Mirebell Matron (elite) |
+| 1 | Saltreach Verge | 90 ≤ r ≤ 120 | 1–5 | 60 | Burrmite 60 (packs of 3), Driftcap Spore 40 |
+| 2 | Fernmoor | 60 ≤ r < 90 | 6–10 | 50 | Mossback Boar 50, Reedling Slinger 50 (pairs) |
+| 3 | Ashen Glade | 30 ≤ r < 60 | 11–15 | 40 | Cinderwisp 55 (pairs), Gloomlantern Sentinel 45 |
+| 4 | Hollow Heart | 0 ≤ r < 30 | 16–20 | 30 + 1 elite | Thornwing Harrier 70, Gloomlantern Sentinel 30, Mirebell Matron (elite) |
 
 - **Respawn:** 20 s after a death, at a random walkable point in the same ring at least 12 tiles from every player. An enemy's level is fixed when it spawns, from its spawn point.
 - **Leash:** if an enemy is pulled more than 16 tiles from its spawn point, or into another ring, it walks back and heals to full.
@@ -151,10 +176,10 @@ With vision §6.1 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 | Cinderwisp | 11–15 | 110 | 165–187 | 4 | 10 | 10 | 5.0 | 0.35 | 15.0 / 2 |
 | Gloomlantern Sentinel | 11–20 | 260 | 390–507 | 10 | 15 | 18 ring / 20 fan | 1.2 | 0.60 | 15.0 / 2 |
 | Thornwing Harrier | 16–20 | 160 | 280–312 | 8 | 20 | 16 | 4.0 (12 diving) | 0.45 | 17.5 / 2 |
-| **Mirebell Matron** (elite) | 16–20 | 1400 | 2450–2730 | 15 | 30 | 16 spiral / 22 fan | 1.5 | 0.90 | 87.5 / 10 |
+| **Mirebell Matron** (elite) | 16–20 | 1400 | 2450–2730 | 15 | 30 | 16 spiral / 22 fan | 1.5 | 0.90 | 87.5 / 2 |
 
 - **XP:** `killXP(E)` for normal enemies, ×5 for elites, credited in tenths as in vision §3.4.
-- **Glint:** `ceil(m(E))` for normal enemies. For elites it is `5 × ceil(m(E))`. Vision §5 only defines the normal and boss multipliers, so the elite multiplier is new here; it mirrors the XP ×5.
+- **Glint:** `ceil(m(E))` per eligible player for every non-boss kill, the elite included (vision §5).
 - **Contact damage** is applied at most once per 0.5 s per enemy–player pair.
 
 ### 2.3 Behaviors and patterns
@@ -202,6 +227,7 @@ With vision §6.1 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
   3. `matron_brood`: below 50% HP only, once every second cycle. She summons 3 Burrmites at her level next to her. They give no loot, XP or Glint, and a cap of 6 summons can be alive at once.
   4. A 1.5 s pause.
 - **Portal drop:** on death, there is a 10% chance a found Hollowmere Vault portal appears where she died (vision §6, and §3.5 here).
+- **Loot:** she uses the normal-enemy rules of vision §4.2 (4%, Normal row) and Glint rule of vision §5. Her XP is the vision §3.4 elite ×5.
 
 ---
 
@@ -258,7 +284,7 @@ A towering warden made of stacked, melting candles. It carries a lantern-staff, 
 
 | Stat | Value |
 |---|---|
-| baseHP | 4500 (E=10 solo: 6,525 · E=10 with 8 players: 40,781) |
+| baseHP | 5500 (E=10 solo: 7,975 · E=10 with 8 players: 49,844; rounding in §0.3) |
 | baseWard | 20 |
 | Contact damage | 40 |
 | Projectile damage | P1 22 / 28 · P2 20 / 30, pools 15 per 0.5 s · P3 22 / 26 |
@@ -267,7 +293,7 @@ A towering warden made of stacked, melting candles. It carries a lantern-staff, 
 | XP | `killXP × 50` = 725.0 at E=10 (vision §3.4) |
 | Glint | `ceil(m(E)) × 30` = 60 at E=10 (vision §5) |
 
-**Targeting:** aimed attacks pick a random eligible player in the arena (PCG32). They never pick the same player more than twice in a row when someone else is available.
+**Targeting:** aimed attacks pick a random **living player in the arena** (PCG32). They never pick the same player more than twice in a row when someone else is available.
 
 ### 3.4 Boss phases
 The thresholds are fractions of the scaled max HP. A transition happens on the first tick HP is at or below the threshold. During a transition the boss takes no damage, and bullets already in flight continue.
@@ -280,7 +306,7 @@ The thresholds are fractions of the scaled max HP. A transition happens on the f
 
 **Phase 2, "Guttering" (66% to 33%)**: a 6.0 s loop.
 - `warden_spiral` (0–4 s): a 4-arm spiral. Arms are 90° apart and emit 1 bullet each every 0.1 s, rotating +9° per emit. Speed 4, range 12, size S, 20 damage.
-- `warden_pools`: at the start of each loop, one telegraphed wax pool under each of up to 3 random players. Each pool has radius 1.5 tiles, a 1.0 s telegraph, and lasts 4.0 s. A player standing in it takes 15 damage every 0.5 s and moves at −30% Stride. This is a debuff, not a stat change, so the D6 cap doesn't apply.
+- `warden_pools`: at the start of each loop, one telegraphed wax pool under each of up to 3 random living players in the arena. Each pool has radius 1.5 tiles, a 1.0 s telegraph, and lasts 4.0 s. A player standing in it takes 15 damage every 0.5 s and moves at −30% Stride. This is a debuff, not a stat change, so the D6 cap doesn't apply.
 - `warden_lunge_fan` (4–6 s): 2 fans 1.0 s apart. Each fan is 5 bullets with 50° total spread, aimed, speed 9, range 13.5, size L, 30 damage.
 
 **Transition at 33%, "Last Wick"** (3.0 s): the boss can't be damaged. It walks to the arena center and anchors there, and its crown flame turns white.
@@ -288,7 +314,7 @@ The thresholds are fractions of the scaled max HP. A transition happens on the f
 **Phase 3, "Last Flame" (33% to 0%)**
 - `warden_twinspiral`: two 3-arm spirals running at the same time. Arms in each set are 120° apart. Set A rotates +8° per emit and set B −8°. Each arm emits every 0.15 s. Speed 4.5, range 13.5, size S, 22 damage. This runs continuously.
 - `warden_gapring`: every 3.0 s, a 24-bullet ring (15° apart) with 4 consecutive bullets left out. The gap's start index is a PCG32 roll of 0–23, which leaves one safe lane. Speed 6, range 12, size M, 26 damage.
-- **Soft enrage:** 240 s after the arena seals, every attack interval in P3 is ×0.80. This depends on time only, not on M (vision §6: M doesn't change patterns).
+- **Soft enrage:** the enrage timer starts on the seal tick, which is the tick the boss first takes damage (vision §6.1 rule 6a). It counts every tick, transitions included, and resets when the boss resets. From tick 4,800 (240 s), every attack interval in P3 is ×0.80; if the boss isn't in P3 yet, that applies from the moment P3 begins. This depends on time only, not on M (vision §6: M doesn't change patterns).
 
 **Death:** loot (§4.2), XP, Glint and Riftstone go to every eligible player (vision §6.1). The deposit is refunded to the opener even if they are absent (vision §6). The exit portal spawns, and pools and all live enemy bullets are cleared.
 
@@ -296,17 +322,15 @@ The thresholds are fractions of the scaled max HP. A transition happens on the f
 There are two ways in.
 
 **A. Found portal (Wilds, free, M = 1.00).**
-- An elite (in v0.1, the Mirebell Matron) has a 10% chance to leave a Vault portal when it dies (vision §6).
+- An elite (in v0.1, the Mirebell Matron) has a 10% chance to leave a Vault portal when it dies (vision §6). With 2 Matrons alive and a 4 min respawn plus about 25 s solo kill time, that works out to about one free portal every 20 min per world.
 - It is M = 1.00 with no deposit and no opener. B is the higher of 10 and the Matron's level, so E is 16–20.
 - Lifetimes, the join floor and the party cap are as in vision §6.1.
 
 **B. Opened portal (Hearth portal board, chosen M).**
 - Opening uses one **Vault Sigil** and, when M > 1.00, the Riftstone deposit. They are taken in one transaction with the instance's creation (vision §6).
 - The Sigil's price (`150 × m(Lp)` Glint), tradeability, the `CONSUMED` tombstone and the fault refund are as in vision §5, §6 and §7.3.
-- **Extra Sigil sources (added by this spec, on top of the vendor):**
-  - 1.5% per eligible kill of a ring-3 or ring-4 normal enemy, rolled separately from the item roll.
-  - 50% per eligible player from the Matron.
-  - Sigils stack to 10 per inventory slot.
+- **Source:** Sigils come only from the Hearth vendor in v0.1 (vision §5). Nothing drops them.
+- **Binding (content-level clarification, consistent with vision's "not tradeable"):** a Sigil is bound to the character who bought it. It can sit in that character's inventory or the buyer's stash, but it can't be traded, given away or moved to another character. Sigils stack to 10 per slot.
 
 ---
 
@@ -337,10 +361,10 @@ Each item has one base type, a tier T, and a server-minted `item_uid` (vision §
 ### 4.2 Drop chances
 | Source | Item chance | Items | Tier row (vision §4.2) | Other drops |
 |---|---|---|---|---|
-| Wilds normal enemy | 4% | 1 | Normal | Sigil 1.5% (rings 3–4 only) |
+| Wilds normal enemy | 4% | 1 | Normal | — |
 | Vault normal enemy | 4% | 1 | Normal | — |
-| Mirebell Matron (elite) | 60% | 1 | Boss | Sigil 50%, found portal 10% (§3.5) |
-| Tallow Warden (boss) | 100% | 2 + extra rolls (vision §6) + daily roll (§4.5) | Boss | Riftstone (§4.4) |
+| Mirebell Matron (elite) | 4% | 1 | Normal | Found portal 10% (vision §6) |
+| Tallow Warden (boss) | 100% | 2 + extra rolls (vision §6) | Boss | Riftstone (§4.4) |
 | Boss phase adds / Matron summons | 0% | — | — | — |
 
 - **Slot weights** for every item roll: weapon 40, armor 35, charm 25.
@@ -383,21 +407,8 @@ M only affects loot through `E` (and so T*), plus the vision §6 extra boss roll
 
 Riftstone sinks (forfeited deposits and charm re-rolls) are listed in vision §5. Stash pages cost Glint only.
 
-### 4.5 Pity and bonus rolls
-All counters are per character and stored on the server. Hardcore characters keep their own, since modes never mix (vision §7.3).
-
-- **Wilds pity:**
-  - Count eligible normal kills since your last item drop. Only kills with `E ≥ Le − 5` count, the same rule as Sparks (vision §9).
-  - At 75, the next eligible kill always drops one item (Normal row).
-  - The counter resets on any item drop. The chance of hitting pity without it is about 4.7%.
-- **Warden's Favor (boss pity):**
-  - Count eligible Warden kills since your last item of tier ≥ T*+2 from the Warden.
-  - At 8, the first item roll of your next kill is forced to T*+2.
-  - The counter resets when that happens.
-- **Daily Hearthfire roll:** your first eligible Warden kill each UTC day gives +1 boss item roll (Boss row). It stacks with the vision §6 extra rolls. Day boundaries are UTC because the server runs on UTC; the client shows the reset in local time.
-- **M bonus:** the vision §6 extra boss rolls.
-
-Example: a party member at M=1.50 on their first clear of the day rolls 2 + 2 + 1 = **5** items.
+### 4.5 Bonus rolls
+The only bonus rolls in v0.1 are the vision §6 extra boss rolls for M > 1. A player at M=1.50 rolls 2 + 2 = **4** Warden items. There is no pity system in v0.1 (see §6).
 
 ---
 
@@ -414,33 +425,98 @@ data/
   patterns.json         # every bullet pattern by id
   enemies.json          # stats + AI + pattern refs
   dungeons/hollowmere_vault.json
-  loot.json             # tier rows, drop tables, slot weights, pity
+  loot.json             # tier rows, drop tables, slot weights
   wilds.json            # rings, populations, respawn
   schema/*.schema.json
 ```
 
-**patterns.json** (one entry; the pattern types are `ring`, `fan`, `spiral`, `burst`, `line_drop`)
+**patterns.json**
+
+*Pattern types.* Every bullet type flies straight at constant speed, so it stays closed-form (`stack.md`). The server broadcasts one `PatternSpawn` per emission. A `hazard` is broadcast as its own spawn, not as bullets.
+
+| Type | Meaning | Type-specific fields |
+|---|---|---|
+| `fan` | N bullets spread evenly across a total arc. N = 1 is a single shot. | `count`, `spread_deg` |
+| `ring` | N bullets 360°/N apart | `count`, `skip` (optional: `{consecutive, start: int or "rng"}`) |
+| `spiral` | K arms that each emit one bullet every interval, rotating as they go | `arms`, `emit_interval_ticks`, `rotate_per_emit_deg`, `duration_ticks` (0 = until the phase ends) |
+| `burst` | Repeats a child pattern N times | `repeats`, `interval_ticks`, `reaim` (bool), `angle_offset_per_repeat_deg`, `child` (inline pattern) |
+| `line_drop` | While the source moves, emits bullets at angles relative to its heading | `emit_interval_ticks`, `emits`, `angles_rel_heading_deg[]` |
+| `hazard` | A ground area that hurts and/or slows players inside it | `shape` (`circle`), `radius`, `placement` (`under_targets`), `max_targets`, `telegraph_ticks`, `duration_ticks`, `tick_interval_ticks`, `damage_key`, `slow_pct` |
+
+*Common fields* (all bullet types):
+- `speed`, `range`, `size`, `damage_key`
+- `aim`: `aimed` (at the target), `fixed` (absolute), or `heading` (the source's facing)
+- `start_angle_deg`
+- **Per-volley angle:** `rotate_per_fire_deg` adds k × value on volley k. `angle_offset_cycle_deg[]` adds `list[k mod len]` on volley k. Use one or the other.
+- `trigger`:
+  - `timer`: from an AI loop or a phase loop
+  - `ai_step`: fired by an AI `fire` step
+  - `on_death`: fired once, at the death position, on the death tick
+  - `phase_enter`
+
+*Mapping of every pattern in this spec:*
+
+| Pattern | Type | Key fields |
+|---|---|---|
+| `burr_spit` | fan | count 1, aimed, speed 6, range 6, S, trigger timer 30 |
+| `spore_ring` | ring | count 8, fixed, start 0, `angle_offset_cycle_deg [0, 22.5]`, speed 4, range 5, M, timer 40 |
+| `boar_burst` | fan | count 3, spread 30, aimed, speed 7, range 7, M, `ai_step` (end of charge) |
+| `reed_volley` | burst | repeats 3, interval 3, reaim true, child fan count 1 aimed speed 9 range 9 S; timer 44 |
+| `wisp_spiral` | spiral | arms 1, emit 4, rotate +25, duration 40, aim aimed at the first emit, speed 5, range 7.5, S; timer 40 (the 2 s pause) |
+| `lantern_ring` | ring | count 12, fixed, `rotate_per_fire_deg 15`, speed 5, range 10, M |
+| `lantern_fan` | fan | count 5, spread 60, aimed, speed 8, range 8, M |
+| `harrier_quills` | line_drop | emit 2, emits 6, `angles_rel_heading_deg [90, -90]`, speed 4, range 4, S, `ai_step` (dive start) |
+| `matron_tolling` | spiral | arms 3, emit 3, rotate +12, duration 60, speed 4.5, range 9, M |
+| `matron_peal` | burst | repeats 2, interval 10, reaim true, child fan count 7 spread 70 aimed speed 7 range 10.5 M |
+| `acolyte_cross` | burst | repeats 2, interval 10, reaim false, `angle_offset_per_repeat_deg 45`, child ring count 4 fixed start 0 speed 5 range 8 M; timer 48 |
+| `acolyte_aim` | fan | count 1, aimed, speed 9, range 10, M (every 3rd cycle instead of the cross) |
+| `wick_burst` | ring | count 6, fixed, start 30, speed 4, range 4, S, trigger `on_death` |
+| `warden_wickring` | ring | count 16, fixed, `rotate_per_fire_deg 11.25`, speed 5, range 12, M |
+| `warden_drip` | fan | count 3, spread 20, aimed, speed 8, range 12, L |
+| `warden_spiral` | spiral | arms 4, emit 2, rotate +9, duration 80, speed 4, range 12, S |
+| `warden_pools` | hazard | circle r 1.5, `under_targets`, max 3, telegraph 20, duration 80, tick 10, slow 30 |
+| `warden_lunge_fan` | burst | repeats 2, interval 20, reaim true, child fan count 5 spread 50 aimed speed 9 range 13.5 L |
+| `warden_twinspiral_a` / `_b` | spiral | arms 3, emit 3, rotate +8 / −8, duration 0, speed 4.5, range 13.5, S |
+| `warden_gapring` | ring | count 24, fixed, `skip {consecutive 4, start "rng"}`, speed 6, range 12, M; timer 60 |
+
+The charges, dives, pounces and the Matron's summon are AI actions with contact damage, not patterns (see `enemies.json`).
+
+*Examples*
 ```json
-{
-  "id": "warden_wickring",
-  "type": "ring",
-  "count": 16,
-  "start_angle_deg": 0,
-  "aim": "fixed",
-  "rotate_per_fire_deg": 11.25,
-  "speed": 5.0,
-  "range": 12.0,
-  "size": "M",
-  "damage_key": "p1_ring",
-  "skip": null
-}
+{ "id": "warden_wickring", "type": "ring", "count": 16, "aim": "fixed", "start_angle_deg": 0,
+  "rotate_per_fire_deg": 11.25, "speed": 5.0, "range": 12.0, "size": "M", "damage_key": "p1_ring",
+  "trigger": "timer" }
+```
+```json
+{ "id": "spore_ring", "type": "ring", "count": 8, "aim": "fixed", "start_angle_deg": 0,
+  "angle_offset_cycle_deg": [0, 22.5], "speed": 4.0, "range": 5.0, "size": "M", "damage_key": "ring",
+  "trigger": "timer" }
+```
+```json
+{ "id": "acolyte_cross", "type": "burst", "repeats": 2, "interval_ticks": 10, "reaim": false,
+  "angle_offset_per_repeat_deg": 45, "trigger": "timer",
+  "child": { "type": "ring", "count": 4, "aim": "fixed", "start_angle_deg": 0,
+             "speed": 5.0, "range": 8.0, "size": "M", "damage_key": "cross" } }
+```
+```json
+{ "id": "harrier_quills", "type": "line_drop", "emit_interval_ticks": 2, "emits": 6,
+  "angles_rel_heading_deg": [90, -90], "aim": "heading", "speed": 4.0, "range": 4.0, "size": "S",
+  "damage_key": "quill", "trigger": "ai_step" }
+```
+```json
+{ "id": "wick_burst", "type": "ring", "count": 6, "aim": "fixed", "start_angle_deg": 30,
+  "speed": 4.0, "range": 4.0, "size": "S", "damage_key": "death_burst", "trigger": "on_death" }
+```
+```json
+{ "id": "warden_pools", "type": "hazard", "shape": "circle", "radius": 1.5,
+  "placement": "under_targets", "max_targets": 3, "telegraph_ticks": 20, "duration_ticks": 80,
+  "tick_interval_ticks": 10, "damage_key": "p2_pool", "slow_pct": 30, "trigger": "timer" }
 ```
 ```json
 { "id": "warden_twinspiral_a", "type": "spiral", "arms": 3, "emit_interval_ticks": 3,
-  "rotate_per_emit_deg": 8, "duration_ticks": 0, "speed": 4.5, "range": 13.5, "size": "S",
-  "damage_key": "p3_spiral" }
+  "rotate_per_emit_deg": 8, "duration_ticks": 0, "aim": "fixed", "start_angle_deg": 0,
+  "speed": 4.5, "range": 13.5, "size": "S", "damage_key": "p3_spiral", "trigger": "phase_enter" }
 ```
-`duration_ticks: 0` means the pattern runs until the phase ends. `skip` is used by `warden_gapring`: `{"consecutive": 4, "start": "rng"}`.
 
 **enemies.json**
 ```json
@@ -476,9 +552,10 @@ data/
     "on_enter": [ { "summon": "waxen_acolyte", "at": "corners", "count": 4, "loot": false } ] },
   { "id": "p2", "hp_above": 0.33, "loop_ticks": 120, "...": "..." },
   { "id": "t2", "transition": true, "ticks": 60, "invulnerable": true, "move_to": "center" },
-  { "id": "p3", "hp_above": 0.0, "enrage": { "after_ticks": 4800, "interval_mult": 0.8 }, "...": "..." }
+  { "id": "p3", "hp_above": 0.0, "enrage": { "timer_start": "seal", "after_ticks": 4800, "interval_mult": 0.8 }, "...": "..." }
 ],
-"party_scaling": "boss"
+"party_scaling": "boss",
+"target_rule": "living_in_arena"
 ```
 
 **loot.json**
@@ -491,21 +568,17 @@ data/
   "slot_weights": { "weapon": 40, "armor": 35, "charm": 25 },
   "weapon_class_weights": { "own": 70, "other_each": 15 },
   "tables": {
-    "wilds_normal":   { "item_chance": 0.04, "rolls": 1, "row": "normal", "extra": [ { "item": "vault_sigil", "chance": 0.015, "rings": [3, 4] } ] },
-    "matron":         { "item_chance": 0.60, "rolls": 1, "row": "boss",   "extra": [ { "item": "vault_sigil", "chance": 0.50 } ], "found_portal_chance": 0.10 },
-    "tallow_warden":  { "item_chance": 1.0,  "rolls": 2, "row": "boss", "m_extra_step": 25, "daily_bonus_rolls": 1,
+    "wilds_normal":   { "item_chance": 0.04, "rolls": 1, "row": "normal" },
+    "matron":         { "item_chance": 0.04, "rolls": 1, "row": "normal", "found_portal_chance": 0.10 },
+    "tallow_warden":  { "item_chance": 1.0,  "rolls": 2, "row": "boss", "m_extra_step": 25,
                         "riftstone": { "yield_coef": 4, "deposit_coef": 5 } }
-  },
-  "pity": {
-    "wilds": { "threshold": 75, "min_level_offset_vs_le": -5 },
-    "warden_favor": { "threshold": 8, "forced_offset": 2 }
   }
 }
 ```
 
 **CI checks worth adding:**
 - The schema validates.
-- Every `pattern` reference resolves.
+- Every `pattern` reference resolves, and every pattern has a `type` from the table above with its required fields.
 - Every `*_ticks` value is an integer.
 - Each tier row's weights sum to 100.
 - A golden fixture for each pattern (seed plus tick to positions) passes on both Go and GDScript (tech stack).
@@ -514,6 +587,14 @@ data/
 
 ## 6. Out of scope for v0.1
 Affixes and rarity, set items, more classes, procedural dungeon layouts, a Wilds world boss, tradeable Sigils, M above 1.5, pattern density that scales with M, and accelerating or homing bullets. Anti-cheat and anomaly-detection thresholds are deliberately not in this public repo. They live in the private ops doc (vision header). Prism and paid cosmetics are also out of scope for v0.1 (vision §5, §9; `stack.md` decision 6).
+
+### Post-v0.1 candidates
+These were cut to keep v0.1 inside vision §4.2 and §5. No numbers are committed. Each would need a vision change first.
+- Pity for Wilds item drops
+- Boss pity (a guaranteed high-tier roll after a dry streak)
+- A daily first-clear bonus boss roll
+- Sigil drop sources (from enemies or the elite)
+- An elite-specific loot table and Glint multiplier
 
 ## 7. Open questions for Karyu (direction or money only)
 None. Personal loot is already settled in vision §4.2, and everything else here is a tuning number that Design owns (vision §10).
