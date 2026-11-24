@@ -314,9 +314,11 @@ At the death event, before any respawn, the server applies steps 1–3 in order,
 1. Pending items, equipped or not, are tombstoned with reason `DEATH_PENDING`. Banked items (equipped or in inventory) are kept.
 2. Pending currency moves to the sink.
 3. A respawn fee is taken from the banked wallet: `min(floor(20 × m(Lp)), banked Glint)`, in whole Glint (real level, not synced). The wallet never goes below 0. The fee is taken once, at the death event, not at respawn. It applies to a death during linger or while disconnected too.
-4. The character stays dead until it respawns. Respawn is automatic, with no button, **60 ticks** (3 s at `TICK_HZ` 20) after the death event. It respawns in the Hearth with full HP, full Focus and all cooldowns ready. Level and XP are kept. The respawn's banking event (§7.1) is then a no-op.
+4. The character stays dead until it respawns. Respawn is automatic, with no button, at `death_tick + 60` in host sim time (**60 ticks**, 3 s at `TICK_HZ` 20). The timer runs whether or not the player is connected. It respawns in the Hearth with full HP, full Focus and all cooldowns ready. Level and XP are kept. The respawn's banking event (§7.1) is then a no-op.
 
-- **Join or reconnect while dead:** any join or reconnect of a dead character, whatever the path (token rejoin included), respawns it in the Hearth per step 4 with full HP. It never appears in the Wilds or an instance at full HP. No second fee is taken.
+- **Join or reconnect while dead:** any join or reconnect of a dead character, whatever the path (token rejoin included), respawns it in the Hearth with full HP, full Focus and cooldowns ready. A reconnect before `death_tick + 60` waits for the remaining ticks; a reconnect after it respawns at once. It never appears in the Wilds or an instance at full HP. No second fee is taken.
+- **Collapse during the death wait:** an instance collapse (§6.1 rule 8) doesn't change it. The character stays dead and gets the normal Standard respawn at `death_tick + 60`.
+- **Practice vault exception:** this section applies to Standard deaths outside the practice vault. A death in the practice vault (content-v0.1 §2.5) is not a Standard respawn: the character arrives in the Hearth with its practice entry state, and no respawn fee is taken.
 - **Re-entry:** rule 9 re-entry (§6.1) still works from the Hearth portal board after that respawn.
 
 ### 7.3 Hardcore (permadeath)
@@ -327,7 +329,7 @@ At the death event, before any respawn, the server applies steps 1–3 in order,
 - **Disconnect rule (both modes; it matters most for hardcore):**
   - **Link lost:** the client sends a heartbeat every 1 s. The link counts as lost on a socket close, or after **5 s** with no packet.
   - **Linger:** for the next **5 s** the character stays in the world. It stops moving, can't fire or use abilities, takes damage normally and can die.
-  - **After linger:** if it survives, the character is removed from the instance. On reconnect it appears in the Hearth, and its pending loot banks then, once (§7.1), not at linger expiry. A character whose linger has ended is in the Hearth or dead. A body removed from the world can't die.
+  - **After linger:** if it survives, the character is removed from the instance. On reconnect it appears in the Hearth, and its pending loot banks then, once (§7.1), not at linger expiry. A character whose linger has ended is placed in the Hearth on reconnect, or is dead. A body removed from the world can't die.
   - **Collapse:** an instance collapse (§6.1 rule 8) ends any linger in that instance at once. The body moves to the Hearth as a living arrival and banks once, on reconnect (§7.1).
   - **Lobby slot:** a lingering body stays in the world, still takes damage and can die. It holds its lobby slot until its 5 s linger ends, or until it dies during linger, not until a later reconnect. The linger then resolves normally: death if it died, otherwise the after-linger outcome above. No linger can be evicted. A join into a full lobby is refused with the existing packed lobby-full copy (`lobby_full` in `data/lobby_ui.json`, #72), and no lingering body is evicted to make room.
   - **Logout:** a voluntary logout or quit outside the Hearth uses the same 5 s linger. A logout inside the Hearth is instant.

@@ -298,7 +298,7 @@ The practice slice of the Hollowmere Vault (from #49) is entered through the pra
   - leaving the lobby;
   - the return to the Hearth after the linger window expires (vision §7.3).
 
-  #55 implements the exit portal and leaving the lobby. Restore on death and the Hearth return after linger are planned (#55 still has full §7.3 linger and Hearth routing as TODOs).
+  A practice-vault death is not a Standard respawn (vision §7.2): the character arrives in the Hearth with its practice entry state, and no respawn fee is taken.
 - **No transfers out of an inventory:** inside the practice vault, items and currency can't leave their owner's inventory. Dropping, trading, giving and depositing to any shared container are disabled, and no loot bags spawn there.
 - **What comes back out:**
   - What the player **brought in is kept unchanged**, carry and pending Riftstone included; it is never stripped or reduced.
