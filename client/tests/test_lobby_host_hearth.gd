@@ -319,3 +319,33 @@ func test_fire_and_abilities_work_in_the_hearth_and_spend_focus() -> void:
 		_host.submit_local_input(a, InputIntent.from_raw(1 + i, 0.0, 0.0, 0.0, true, false, 0, 0))
 		_host.run_tick()
 	assert_eq(hs.get_player(pb.sim_id).hp, hp_b, "no PvP")
+
+
+func test_gate_cooldown_survives_a_hearth_logout_and_rejoin() -> void:
+	_host = _new_host()
+	var a := _joined()
+	var p := _host._find_player(a)
+	_stand_on(_host.sim, a, _host._wilds_gate_id)
+	_host.run_tick()
+	assert_same(p.instance, _host.hearth)
+	var deadline := p.gate_ready_tick
+	var token := _host.remove_local_player(a)
+	assert_null(_host._find_player(a), "Hearth logout is instant")
+	_host.run_tick()
+	assert_eq(_host.add_local_player(null, token), a)
+	_host.run_tick()
+	p = _host._find_player(a)
+	assert_eq(p.gate_ready_tick, deadline, "same absolute per-character deadline")
+	_stand_on(_host.hearth.sim, p.sim_id, _host._hearth_gate_id)
+	_host.run_tick()
+	assert_same(p.instance, _host.hearth, "still refused during the cooldown")
+	token = _host.remove_local_player(a)
+	assert_null(_host._find_player(a))
+	while _host.tick <= deadline:
+		_host.run_tick()
+	assert_eq(_host.add_local_player(null, token), a)
+	_host.run_tick()
+	p = _host._find_player(a)
+	_stand_on(_host.hearth.sim, p.sim_id, _host._hearth_gate_id)
+	_host.run_tick()
+	assert_true(p.instance.is_overworld(), "offline time counts: free to cross after the deadline")

@@ -403,9 +403,10 @@ func _configure_sim() -> void:
 
 
 ## A permanent safe zone, separate from both the Wilds and dungeon slices.
-## No combat content is configured here. Rejoins arrive here (see
-## _seat_in_hearth and _class_change_arrival); fresh joins, dungeon exits,
-## collapse and practice deaths still land in the Wilds for now.
+## No combat content is configured here. Rejoins (_seat_in_hearth),
+## class-change arrivals (_class_change_arrival), practice deaths and
+## practice resets arrive here; fresh joins, dungeon exits and collapse
+## still land in the Wilds for now.
 func _create_hearth() -> void:
 	hearth = HostInstance.new()
 	hearth.kind = HostInstance.Kind.HEARTH
@@ -1084,8 +1085,8 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
 	# The class stays with the character on every rejoin: no class change
-	# while the body is lingering or held for a rejoin (there is no town or
-	# Hearth sim yet, and the Wilds lock the class like a dungeon).
+	# while the body is lingering or held for a rejoin, since the Wilds lock
+	# the class like a dungeon and only the Hearth is town.
 	var locked_class := _locked_class_for(identity, saved)
 	# A different class is applied only on arrival in the Hearth (the only
 	# town): after the linger if the body still lingers, else right away.
@@ -1138,6 +1139,9 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		p.restore_hp = int(saved.get("hp", -1))
 		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
 				"left_tick": int(saved["left_tick"])}
+		# The gate cooldown belongs to the character: an absolute deadline
+		# tick, so time offline counts toward it.
+		p.gate_ready_tick = int(saved.get("gate_ready_tick", 0))
 	elif takes_builtin:
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
@@ -1340,7 +1344,8 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 			# Progression is filled in when the body leaves the sim.
 			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"],
 					"left_tick": saved["left_tick"], "progression": {}, "class_id": p.class_id,
-					"hp": maxi(0, leaving.hp) if leaving != null else -1})
+					"hp": maxi(0, leaving.hp) if leaving != null else -1,
+					"gate_ready_tick": p.gate_ready_tick})
 	if lingers:
 		p.linger_until_tick = tick + LINGER_TICKS
 		p.linger_identity = identity
@@ -1362,10 +1367,6 @@ func _end_linger(p: HostPlayer) -> void:
 	if p.pending_class_id != "" and _class_change_arrival(p):
 		return
 	var leaving := p.instance.sim.get_player(p.sim_id)
-	if leaving != null and p.linger_identity != "":
-		var held: Dictionary = _ability_stash.get(p.linger_identity, {})
-		if int(held.get("id", 0)) == p.id:
-			held["hp"] = maxi(0, leaving.hp)  # HP after any damage taken while lingering
 	# The whole character is saved for the Hearth arrival of a later rejoin
 	# (practice entries restore their entry state first).
 	if leaving != null and p.linger_identity != "":
@@ -1374,6 +1375,10 @@ func _end_linger(p: HostPlayer) -> void:
 		var saved: Dictionary = _ability_stash.get(p.linger_identity, {})
 		if int(saved.get("id", 0)) == p.id:
 			saved["progression"] = _progression_fields(carry)
+			# HP after any damage taken while lingering, read after the
+			# practice entry state is restored (a practice death leaves with
+			# its entry HP, never as a respawn).
+			saved["hp"] = maxi(0, carry.hp)
 	# Persistent entrances admit by occupancy, so per-player entries of
 	# players who left the lobby are dropped to keep them bounded.
 	for record: PortalRecord in _portal_records.values():
@@ -1401,7 +1406,9 @@ func _class_change_arrival(p: HostPlayer) -> bool:
 		return false
 	p.linger_until_tick = -1
 	p.linger_identity = ""
-	return _enter_hearth(p, body.hp <= 0, cls)
+	# Only a death outside practice is a Standard respawn; a practice
+	# death leaves with its entry state (_move_player restores it).
+	return _enter_hearth(p, body.hp <= 0 and p.instance.grants_persistent, cls)
 
 
 ## Ends lingers that ran out, or whose body died or is gone (a dead body
