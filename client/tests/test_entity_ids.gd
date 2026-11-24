@@ -275,27 +275,28 @@ func test_character_dict_hp_is_sanitized() -> void:
 	sim.step()
 	assert_eq(sim.get_player(fresh_over).hp, 200)
 
-	# place_player of a current occupant.
+	# place_player of a current occupant. HP <= 0 keeps the current value.
 	var placed: int = sim.alloc_player_id()
 	assert_true(sim.add_player(placed, {"x": 3.0, "y": 3.0}))
 	sim.step()
 	sim.get_player(placed).hp = 120
 	sim.place_player(placed, 3.0, 3.0, -5)
 	assert_eq(sim.get_player(placed).hp, 120, "place_player ignores HP below 0")
+	sim.place_player(placed, 3.0, 3.0, 0)
+	assert_eq(sim.get_player(placed).hp, 120, "place_player ignores HP 0 on an existing player")
 	sim.place_player(placed, 3.0, 3.0, 99999)
 	assert_eq(sim.get_player(placed).hp, 200)
-	sim.place_player(placed, 3.0, 3.0, 0)
-	assert_eq(sim.get_player(placed).hp, 0)
+	sim.get_player(placed).hp = 0
 	sim.place_player(placed, 3.0, 3.0, 80)
 	assert_eq(sim.get_player(placed).hp, 0, "place_player does not revive a dead player")
 
-	# place_player creating a new player.
+	# place_player creating a new player. HP <= 0 starts at max.
 	var new_neg: int = sim.alloc_player_id()
 	sim.place_player(new_neg, 3.0, 3.0, -5)
 	assert_eq(sim.get_player(new_neg).hp, 200)
 	var new_zero: int = sim.alloc_player_id()
 	sim.place_player(new_zero, 3.0, 3.0, 0)
-	assert_eq(sim.get_player(new_zero).hp, 0)
+	assert_eq(sim.get_player(new_zero).hp, 200, "a new place_player with HP <= 0 starts at max")
 	var new_over: int = sim.alloc_player_id()
 	sim.place_player(new_over, 3.0, 3.0, 99999)
 	assert_eq(sim.get_player(new_over).hp, 200)
@@ -406,3 +407,46 @@ func test_cancelled_leave_with_the_same_class_keeps_ability_state() -> void:
 	assert_eq(sim.ability_cooldown_ticks(pid), 150)
 	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
 	assert_eq(sim.ally_ability_heals(pid), 3)
+
+
+func test_place_player_non_positive_hp_matches_add_player() -> void:
+	# place_player with HP <= 0 matches add_player: a new player starts at
+	# max, and an existing player's current HP is kept.
+	var sim := _new_sim()
+	var fresh: int = sim.alloc_player_id()
+	sim.place_player(fresh, 3.0, 3.0, 0)
+	assert_eq(sim.get_player(fresh).hp, 200)
+	var existing: int = sim.alloc_player_id()
+	assert_true(sim.add_player(existing, {"x": 3.0, "y": 3.0}))
+	sim.step()
+	sim.get_player(existing).hp = 120
+	sim.place_player(existing, 4.0, 4.0, 0)
+	assert_eq(sim.get_player(existing).hp, 120)
+	sim.place_player(existing, 4.0, 4.0, -5)
+	assert_eq(sim.get_player(existing).hp, 120)
+
+
+func test_class_change_clamps_cooldown_to_the_new_ability_max() -> void:
+	# Thorn Ward is 160 ticks; Kindle Pulse is 120. A leftover cooldown
+	# longer than the new max is clamped; a shorter one is kept.
+	var sim := _new_sim()
+	var over: int = sim.alloc_player_id()
+	assert_true(sim.add_player(over, "thornguard"))
+	sim.step()
+	sim.set_ability_cooldown_ticks(over, 150)
+	sim.ability_state(over).ally_ability_heals = 3
+	sim.get_player(over).hp = 80
+	sim.remove_player(over)
+	assert_true(sim.add_player(over, "gleamwright"))
+	assert_eq(sim.get_player(over).class_id, "gleamwright")
+	assert_eq(sim.ability_cooldown_ticks(over), 120)
+	assert_eq(sim.get_player(over).hp, 80)
+	assert_eq(sim.ally_ability_heals(over), 3)
+
+	var under: int = sim.alloc_player_id()
+	assert_true(sim.add_player(under, "thornguard"))
+	sim.step()
+	sim.set_ability_cooldown_ticks(under, 40)
+	sim.remove_player(under)
+	assert_true(sim.add_player(under, "gleamwright"))
+	assert_eq(sim.ability_cooldown_ticks(under), 40)

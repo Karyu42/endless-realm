@@ -194,6 +194,8 @@ func player_count() -> int:
 ## the pre-spawned player 1). Accepts an id at or below the high-water mark
 ## that is not currently live. Refuses, and logs, an id above the mark or
 ## any live player or entity id.
+## Explicit HP must come only from host-built character data, never from
+## a client-supplied value.
 ## A same-tick re-add of a still-live player who was queued to leave cancels
 ## that leave and, if a character Dictionary has x/y, applies the position
 ## immediately through _set_placed_position.
@@ -351,7 +353,7 @@ func _apply_character_state(p: SimPlayerState, character: Variant, fresh: bool) 
 		if d.has("x") or d.has("y"):
 			_set_placed_position(p, p.x, p.y)
 	# A fresh add treats HP <= 0 as omitted and fills to max, so it never
-	# creates a 0-HP player. place_player still allows an explicit 0.
+	# creates a 0-HP player. place_player uses the same rule.
 	var fresh_fill: bool = fresh and (not has_hp or requested_hp <= 0)
 	if fresh:
 		_set_player_class_on(p, class_id, fresh_fill)
@@ -377,6 +379,9 @@ func _adopt_player_class(p: SimPlayerState, class_id: String) -> void:
 	var st := _ability_of(p.id)
 	st.class_def = p.class_def
 	st.ability_def = adef
+	var cd_max: int = adef.cooldown_ticks if adef != null else 0
+	if st.cooldown_ticks > cd_max:
+		st.cooldown_ticks = cd_max
 	var max_hp: int = _current_max_hp(p)
 	if p.hp > max_hp:
 		p.hp = max_hp
@@ -389,6 +394,8 @@ func _adopt_player_class(p: SimPlayerState, class_id: String) -> void:
 ## the current HP is kept, or max HP is used on a fresh add. On a fresh
 ## add_player, HP <= 0 is also ignored and uses max. Values above max are
 ## capped. A dead player (hp <= 0) is not brought back to life.
+## Explicit HP must come only from host-built character data, never from
+## a client-supplied value.
 func _apply_placed_hp(p: SimPlayerState, requested: int, fresh: bool) -> void:
 	if p == null:
 		return
@@ -798,6 +805,10 @@ func _spawn_projectile(p: SimPlayerState, sim_tick: int) -> void:
 
 ## Immediate position / hp write for tests. Creates a player if needed
 ## (does not wait for the next step, unlike add_player).
+## HP <= 0 is omitted, same as add_player: a new player starts at max, and
+## an existing player's current HP is kept, so this never creates a 0-HP
+## player. Explicit HP must come only from host-built character data, never
+## from a client-supplied value.
 ## Sealed arena placement invariants: a point inside a sealed arena is moved
 ## to a deterministic safe spot outside the doorway. A returning player never
 ## lands inside a live fight.
@@ -818,8 +829,8 @@ func place_player(id: int, x: float, y: float, hp: int = -1) -> void:
 		# built-in player 1, or a same-tick re-add).
 		_pending_removes.erase(id)
 	_set_placed_position(p, x, y)
-	# The default hp of -1 means "leave HP alone" (or fill to max on a new player).
-	_apply_placed_hp(p, hp, created)
+	# HP <= 0 is omitted: max on a new player, current HP on an existing one.
+	_apply_placed_hp(p, -1 if hp <= 0 else hp, created)
 
 
 func enemy_target_id(enemy_id: int) -> int:
