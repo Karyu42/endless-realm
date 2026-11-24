@@ -76,6 +76,7 @@ func _drain(ws: WebSocketPeer, counts: Dictionary) -> void:
 		elif m.has_error():
 			counts["error"] = counts.get("error", 0) + 1
 			counts["last_code"] = m.get_error().get_code()
+			counts["last_reason"] = m.get_error().get_reason()
 
 
 func _closed(ws: WebSocketPeer) -> bool:
@@ -181,9 +182,11 @@ func test_full_lobby_refuses_a_join_while_a_linger_holds_the_seat() -> void:
 	assert_true(_pump(func() -> bool:
 		_drain(b, cb)
 		return cb.get("error", 0) >= 1), "the new join is refused")
-	assert_eq(cb.get("last_code", -1), PB.ErrorCode.INSTANCE_FULL)
+	assert_eq(cb.get("last_code", -1), PB.ErrorCode.INSTANCE_FULL, "the Hello-time code the client shows as lobby_full")
+	assert_eq(cb.get("last_reason", ""), "lobby is full")
 	assert_eq(cb.get("welcome", 0), 0)
 	assert_eq(_host.players, [held] as Array[LobbyHost.HostPlayer], "the linger keeps its seat")
+	assert_eq(_host.players.size(), _host.max_players, "the lingering seat is counted")
 	assert_not_null(_host.sim.get_player(held.sim_id), "the body is still there")
 	# The linger resolves normally, then the seat is free again.
 	assert_true(_pump(func() -> bool: return _host.players.is_empty()), "the seat frees after the linger")
