@@ -205,6 +205,11 @@ class HostPlayer:
 	var linger_until_tick: int = -1
 	## Rejoin key saved at the leave ("" = none), for the linger's end.
 	var linger_identity: String = ""
+	## content §1 class lock: a different-class join made during the linger.
+	## When the linger ends, the seat continues in the Hearth with this class.
+	var class_switch: String = ""
+	## After the join step, HP is capped at this (-1 = no cap).
+	var hp_cap_after_join: int = -1
 	func is_lingering() -> bool:
 		return linger_until_tick >= 0
 	## Ability state to apply right after the step that adds this player:
@@ -258,6 +263,9 @@ var loadtest_entrances: int = 0
 var loadtest_distinct_admitted: bool = false
 var _loadtest_admitted: Dictionary = {}  # lobby player id -> true
 const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
+## Stand-in for the Hearth (town) placement in the overworld until the real
+## Hearth zone exists: where deaths, resets and class-change moves land.
+const HEARTH_STAND_IN := Vector2(16.0, 16.0)
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
 var _portal_records: Dictionary = {}  # source instance / entrance -> PortalRecord
@@ -817,8 +825,9 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 			c.ws.put_packet(_encode_instance_list(c.player))
 	elif c.player != null and (msg.has_open_portal() or msg.has_join_instance() \
 			or msg.has_leave_instance()):
-		# Portals are not part of this load-test host yet.
-		_send_error(c, PB.ErrorCode.ERROR_CODE_UNSPECIFIED, "portals are not supported by the Godot host yet")
+		# vision §6.1 rule 11: entry only at an entrance portal, no command
+		# to leave an instance, portals are opened in the world.
+		_send_error(c, PB.ErrorCode.COMMAND_NOT_ALLOWED, "command is not allowed")
 
 
 ## Shared by remote InputFrames and submit_local_input: applied once per seq,
@@ -863,6 +872,9 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	var resumed := _resume_lingering(identity, character)
 	if resumed != null:
 		return resumed
+	var switching := _class_switch_while_lingering(identity, character)
+	if switching != null:
+		return switching
 	var saved_unusable: bool = not saved.is_empty() and (
 			not _stash_id_issued_here(saved) or _find_player(int(saved["id"])) != null)
 	var saved_usable: bool = not saved.is_empty() and not saved_unusable
@@ -885,6 +897,12 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		p.restore_progression = saved.get("progression", {})
 		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
 				"left_tick": int(saved["left_tick"])}
+		if String(saved.get("class_id", class_id)) != class_id:
+			# content §1: a class change in the Hearth (after any linger):
+			# HP = min(HP it had, new max), 0 Focus, full cooldown, no snapshot.
+			p.restore_ability = CONSERVATIVE
+			if int(saved.get("hp", -1)) > 0:
+				p.hp_cap_after_join = int(saved["hp"])
 	elif takes_builtin:
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
@@ -980,7 +998,7 @@ func _default_class_id() -> String:
 ## takeover falls back to the default when none or an invalid class is given.
 func _resolve_join_class(character: Variant, fallback_to_default: bool) -> String:
 	var requested: Variant = _requested_class_id(character)
-	if requested == null:
+	if requested == null or String(requested) == "":
 		return _default_class_id()
 	var class_id := String(requested)
 	if _catalog_has_class(class_id):
@@ -1026,7 +1044,8 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 			# A pending restore that was never applied keeps its own left_tick.
 			# Progression is filled in when the body leaves the sim.
 			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"],
-					"left_tick": saved["left_tick"], "progression": {}})
+					"left_tick": saved["left_tick"], "progression": {}, "class_id": p.class_id,
+					"hp": leaving.hp if leaving != null else -1})
 	if lingers:
 		p.linger_until_tick = tick + LINGER_TICKS
 		p.linger_identity = identity
@@ -1052,6 +1071,10 @@ func _end_linger(p: HostPlayer) -> void:
 		var saved: Dictionary = _ability_stash.get(p.linger_identity, {})
 		if int(saved.get("id", 0)) == p.id:
 			saved["progression"] = _progression_fields(carry)
+	if leaving != null and p.linger_identity != "":
+		var saved_hp: Dictionary = _ability_stash.get(p.linger_identity, {})
+		if int(saved_hp.get("id", 0)) == p.id:
+			saved_hp["hp"] = leaving.hp
 	# Persistent entrances admit by occupancy, so per-player entries of
 	# players who left the lobby are dropped to keep them bounded.
 	for record: PortalRecord in _portal_records.values():
@@ -1073,7 +1096,10 @@ func _step_lingering() -> void:
 			continue
 		var body: SimPlayerState = p.instance.sim.get_player(p.sim_id)
 		if body == null or body.hp <= 0 or tick >= p.linger_until_tick:
-			_end_linger(p)
+			if p.class_switch != "":
+				_class_switch_to_hearth(p)
+			else:
+				_end_linger(p)
 
 
 ## The lingering player this host-verified identity left, if any.
@@ -1089,6 +1115,68 @@ func _lingering_for_identity(identity: String) -> HostPlayer:
 	return p
 
 
+## content §1 class lock: a join with a different (valid) class while this
+## identity's body still lingers in an instance is not a rejoin. The body
+## finishes its linger first; the seat (same lobby id) then continues in the
+## Hearth (_class_switch_to_hearth). Until then the seat takes no input.
+func _class_switch_while_lingering(identity: String, character: Variant) -> HostPlayer:
+	var p := _lingering_for_identity(identity)
+	if p == null:
+		return null
+	var class_id := _resolve_join_class(character, false)
+	if class_id == "" or class_id == p.class_id:
+		return null
+	_ability_stash.erase(identity)
+	_ability_stash_order.erase(identity)
+	p.linger_identity = ""
+	p.class_switch = class_id
+	p.character = character
+	return p
+
+
+## The end of a class-switch linger: the old body leaves its instance and
+## the seat continues in the Hearth stand-in as the new class, with
+## HP = min(HP it had, new class max), 0 Focus, the ability on full
+## cooldown, no snapshot and no boss credit (a new body in another sim).
+## A body that died during the linger arrives at full HP (the Standard
+## respawn). Practice-vault entry progression is restored first.
+func _class_switch_to_hearth(p: HostPlayer) -> void:
+	var src: LocalSim = p.instance.sim
+	var body := src.get_player(p.sim_id)
+	var alive: bool = body != null and body.hp > 0
+	var fields: Dictionary = {}
+	if body != null:
+		var carry := PlayerCarry.from_sim(body, src.ability_state(p.sim_id))
+		while not p.progression_entries.is_empty():
+			_restore_entry_progression(p, carry)
+		fields = _progression_fields(carry)
+		fields.erase("class_id")
+	for record: PortalRecord in _portal_records.values():
+		if record.persistent:
+			record.admitted.erase(p.id)
+			record.sim_ids.erase(p.id)
+	var kept_hp: int = body.hp if alive else -1
+	src.remove_player(p.sim_id)
+	var rec := {"class_id": p.class_switch, "x": HEARTH_STAND_IN.x, "y": HEARTH_STAND_IN.y}
+	p.class_id = p.class_switch
+	p.class_switch = ""
+	p.linger_until_tick = -1
+	p.instance = instances[0]
+	p.sim_id = p.id
+	p.in_sim = false
+	p.x = HEARTH_STAND_IN.x
+	p.y = HEARTH_STAND_IN.y
+	p.seq = 0
+	p.fed_seq = 0
+	p.restore_ability = CONSERVATIVE
+	p.restore_progression = fields
+	p.hp_cap_after_join = kept_hp
+	if sim.add_player(p.id, rec) == false:
+		# Should not happen (the class was validated); fail closed.
+		players.erase(p)
+		_prune_issued_id(p.id)
+
+
 ## A rejoin within the linger cancels the leave: the same body, still in
 ## its instance, with its boss contribution, activity stamp, HP and
 ## ability state untouched (vision §6.1 rule 7). Only for the same class;
@@ -1097,8 +1185,7 @@ func _resume_lingering(identity: String, character: Variant) -> HostPlayer:
 	var p := _lingering_for_identity(identity)
 	if p == null:
 		return null
-	var requested: Variant = _requested_class_id(character)
-	if requested != null and String(requested) != p.class_id:
+	if _resolve_join_class(character, false) != p.class_id:
 		return null
 	if p.instance.sim.get_player(p.sim_id) == null:
 		return null
@@ -1175,6 +1262,11 @@ func _restore_ability(p: HostPlayer) -> void:
 	elif saved.has("conservative"):
 		isim.set_ability_cooldown_ticks(sid, isim.world_view(sid).ability_cooldown_max)
 		isim.set_focus(sid, 0.0)
+	if p.hp_cap_after_join > 0:
+		var sp := isim.get_player(sid)
+		if sp != null:
+			sp.hp = mini(sp.hp, p.hp_cap_after_join)
+		p.hp_cap_after_join = -1
 
 
 ## Number of saved ability states (bounded by MAX_ABILITY_STASH).
@@ -1642,7 +1734,7 @@ func _route_practice_deaths(inst: HostInstance) -> void:
 			continue
 		var sp := inst.sim.get_player(p.sim_id)
 		if sp != null and sp.hp <= 0:
-			_move_player(p, instances[0], p.id, 16.0, 16.0)
+			_move_player(p, instances[0], p.id, HEARTH_STAND_IN.x, HEARTH_STAND_IN.y)
 
 
 ## Deep inventory snapshot, preserving equipment/slot references within it.
@@ -1737,7 +1829,7 @@ func _reset_instance(record: PortalRecord) -> bool:
 		return false
 	for p in players.duplicate():
 		if p.instance == inst:
-			_move_player(p, instances[0], p.id, 16.0, 16.0)
+			_move_player(p, instances[0], p.id, HEARTH_STAND_IN.x, HEARTH_STAND_IN.y)
 	record.sim_ids.clear()
 	inst.sim = fresh
 	record.cleared = false
@@ -1966,8 +2058,13 @@ func _shared_snapshot_body(inst: HostInstance) -> PackedByteArray:
 ## still re-enter. Empty when there are none. Protobuf merges fields that
 ## follow the shared body (repeated fields append), so the two concatenate.
 func _viewer_snapshot_body(inst: HostInstance, bags: Array, owner_id: int, entrances: Variant = null) -> PackedByteArray:
-	if bags.is_empty() and owner_id < 0:
-		return PackedByteArray()
+	var reenter: Array[int] = []
+	if owner_id >= 0:
+		for e in (entrances if entrances != null else _entrance_records(inst)):
+			if _may_reenter(e[1], owner_id):
+				reenter.append(e[0])
+	if bags.is_empty() and reenter.is_empty():
+		return PackedByteArray()  # the common case: nothing of their own
 	var s = PB.Snapshot.new()
 	var any := false
 	for bag in bags:
@@ -1981,11 +2078,9 @@ func _viewer_snapshot_body(inst: HostInstance, bags: Array, owner_id: int, entra
 		b.set_t_star(maxi(bag.t_star, 0))
 		b.set_spawn_tick(maxi(bag.spawn_tick, 0))
 		any = true
-	if owner_id >= 0:
-		for e in (entrances if entrances != null else _entrance_records(inst)):
-			if _may_reenter(e[1], owner_id):
-				s.add_admitted_portal_ids(e[0])
-				any = true
+	for id in reenter:
+		s.add_admitted_portal_ids(id)
+		any = true
 	return s.to_bytes() if any else PackedByteArray()
 
 
@@ -2010,7 +2105,10 @@ static func _wrap_snapshot(body: PackedByteArray) -> PackedByteArray:
 
 ## Includes only public metadata of worlds reachable from this player's
 ## current entrance view, plus their current world and prior admissions.
-## Seeds, identities and lobby credentials are never included.
+## Seeds, identities and lobby credentials are never included. Counts and
+## capacity are left unset for a dungeon the viewer was never admitted to.
+## Informational only: admission is always decided at the entrance portal
+## (_record_refusal), never from this listing.
 func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
 	var msg = PB.ServerMessage.new()
 	var listing = msg.new_instance_list()
@@ -2022,12 +2120,15 @@ func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
 		var info = listing.add_instances()
 		info.set_instance(inst.index)
 		info.set_m100(inst.m100)
-		info.set_player_count(_occupants(inst, -1))
 		info.set_is_default(inst.is_overworld())
 		info.set_base_level(inst.created_from.base_level if inst.created_from != null else 0)
-		info.set_capacity(record.capacity if record != null else _settings.max_players)
-		info.set_admitted_count(_admitted_count(record) if record != null else _occupants(inst, -1))
 		info.set_closed(_entrance_closed(record) if record != null else false)
+		var admitted: bool = inst.is_overworld() or inst == viewer.instance \
+				or (record != null and record.admitted.has(viewer.id))
+		if admitted:
+			info.set_player_count(_occupants(inst, -1))
+			info.set_capacity(record.capacity if record != null else _settings.max_players)
+			info.set_admitted_count(_admitted_count(record) if record != null else _occupants(inst, -1))
 	return msg.to_bytes()
 
 
@@ -2044,6 +2145,9 @@ func _entrance_closed(record: PortalRecord) -> bool:
 
 
 ## An earlier admission this player may still use (see _record_refusal).
+## Persistent entrances are left out on purpose: they admit by current
+## occupancy (content §2.5), not by earlier admission, and never expire, so
+## a past entry grants nothing extra and `closed` alone is accurate.
 func _may_reenter(record: PortalRecord, player_id: int) -> bool:
 	return not record.closed and not record.persistent and record.admitted.has(player_id)
 
