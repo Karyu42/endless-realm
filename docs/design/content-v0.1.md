@@ -75,7 +75,9 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 
 **Class lock:** a character's class is bound to the character. Class changes happen only in town (the Hearth).
 - While a character is inside an instance (a dungeon or the practice vault, §2.5), a rejoin must use the same class.
-- A join with a different class is **not a rejoin**. It spawns in the Hearth as a fresh, conservative join: no snapshot (join state above), 0 Focus and the ability on full cooldown, no boss credit, and no HP or Focus carried over.
+- A join with a different class from anywhere, the Wilds included, while the character's last location was in the Wilds or an instance, is **not a rejoin**. It spawns in the Hearth as a fresh conservative join, with no boss credit and no HP or Focus carried over.
+- **Fresh conservative join:** full max HP, 0 Focus and the ability on full cooldown, with no snapshot (join state above).
+- **Rule 9 re-entry** (vision §6.1) through an entrance from the Hearth is a normal entry, not a rejoin, so a different class is allowed. That character enters with normal entry state and no carried boss credit, and counts as a new distinct character for `n_peak` (vision §3.5).
 - Entering and leaving instances follows vision §6.1 rule 11: entry only at an entrance, no `LeaveInstance`.
 
 **Fire timing (fire on press, all weapons):** each weapon tracks `next_ready` as a float64 sim time in seconds (tick × 0.05), starting at 0. Let `cd = 1 / (Tempo × (1 + tempoBonus))`. On every tick where `fire_held` is true and `now ≥ next_ready − 1e-9`, one volley fires:

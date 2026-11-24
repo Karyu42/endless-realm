@@ -262,11 +262,13 @@ Whoever opens a portal (a dungeon instance; a whole server instance or shard is 
    - (b) they used an ability that affected an ally at least 2 times;
    - (c) they were within 12 tiles of the boss for ≥ 50% of the fight's ticks.
 
-   In every case they must also have been **active** in the rolling 30 s window before the kill. A player is active in that window if any one of these happens in it:
-   - the aim direction changes by ≥ 10°;
+   In every case they must also have been **active** recently. The host keeps each player's **last activity stamp** (a sim tick) and stamps it on any tick where one of these happens:
+   - the aim direction differs by ≥ 10° from the aim direction recorded at the last activity stamp. The difference is the smallest angle with wrap-around, `min(|a − b|, 360 − |a − b|)` in degrees, and the reference resets each time activity is stamped;
    - the character's actual position moves ≥ 1 tile along its cumulative path (input pushed into a wall moves nothing and doesn't count);
-   - an ability is used;
+   - an ability cast the sim accepts (Focus spent and effect applied). A press that fails or is blocked (on cooldown, not enough Focus, silenced and so on) doesn't count;
    - fire goes from released to pressed.
+
+   **Window:** the player is active for the kill if `last_activity_tick ≥ kill_tick − W`, where `W` is 30 s of host sim time, **600 ticks** at the 20 Hz tick (`SimConstants.TICK_HZ`). Both edges are inclusive, and activity on the kill tick itself counts.
 
    Holding fire alone doesn't count. Holding fire with a fixed aim and no movement is idle; holding one direction while actually moving is active. (#65 implements an earlier per-input-frame check; a GE follow-up is needed to match this rule.)
 8. **Lifetimes:**
@@ -277,7 +279,7 @@ Whoever opens a portal (a dungeon instance; a whole server instance or shard is 
 9. **Re-entry after death (Standard):** a Standard player who died keeps their party slot and can rejoin the same live instance from the Hearth portal board, up to 2 times per instance. The 120 s entrance limit doesn't apply to rejoining. They can enter the instance during a fight but not the sealed arena (rule 6a). Hardcore deaths are final.
 10. **Rate limits:** one open portal per player, with a 60 s cooldown that starts when the portal is opened.
 11. **Entering and leaving (Godot host):**
-   - **Leaving:** a player leaves an instance only by its exit portal, by death, or by the return to the Hearth after linger (§7.3). The proto `LeaveInstance` command is refused.
+   - **Leaving:** a player leaves an instance only by its exit portal, by death, by the return to the Hearth after linger (§7.3), or by instance collapse (rule 8), which moves them to the Hearth. The proto `LeaveInstance` command is refused.
    - **Entering:** a player enters an instance only at its entrance portal (including the Hearth portal board for rule 9 re-entry). Joining an instance by id (proto `JoinInstance`) is disabled.
    - The entrance rules above (rules 2, 5, 6a, 8 and 9), the #55 host routing, and the practice-vault rules (content-v0.1 §2.5) apply to every entry and exit.
 
