@@ -39,6 +39,15 @@ const CLASS_CHANGE_REFUSED_LOG := "LocalSim: class change refused outside town"
 ## Host-set zone id. Only ZONE_HEARTH is town; the default (empty) is not.
 const ZONE_HEARTH := "hearth"
 const CLASS_REFUSAL_LOG_CAP: int = 64
+## Damage source kinds for `_hurt_player`. Player-source damage is refused
+## in every zone.
+enum DamageSource {
+	ENEMY,
+	PLAYER,
+	ENVIRONMENT,
+}
+const PLAYER_DAMAGE_REFUSED_LOG := "LocalSim: player-source damage refused"
+const PLAYER_DAMAGE_REFUSAL_LOG_CAP: int = 64
 
 var _config: SimConfig
 var _catalog: DataCatalog
@@ -98,6 +107,8 @@ var _zone_id: String = ""
 ## Logged class-change refusals: player_id -> {class_id: true}. Capped, and
 ## cleared when that player is removed from the roster.
 var _logged_class_refusals: Dictionary = {}
+## attacker_id -> { target_id: true } of already-logged player-source refusals.
+var _logged_player_damage_refusals: Dictionary = {}
 ## Test hook for vision §3.2 step 1. Real player Ward is not wired yet, so
 ## mitigation is a no-op (Ward = 0) unless a test sets this.
 var _test_armor_ward: float = 0.0
@@ -1147,7 +1158,7 @@ func _pattern_shots_vs_players(sim_tick: int) -> void:
 					attacker_level = src.content_level
 					if src.def != null:
 						dmg = src.def.damage_for(b.damage_key)
-				if _hurt_player(p, dmg, attacker_level):
+				if _hurt_player(p, dmg, attacker_level, DamageSource.ENEMY, b.source_id):
 					b.consumed = true
 				break
 
@@ -1169,13 +1180,19 @@ func _contact_vs_players() -> void:
 				if _ability_of(p.id).invuln_ticks > 0:
 					continue
 				var dmg: int = e.def.contact_damage if e.def != null else 0
-				if _hurt_player(p, dmg, e.content_level):
+				if _hurt_player(p, dmg, e.content_level, DamageSource.ENEMY, e.id):
 					e.contact_cooldown = _config.contact_cooldown_ticks
 				break
 
 
-func _hurt_player(p: SimPlayerState, amount: int, attacker_level: int = 1) -> bool:
+## Apply incoming damage to a player. `source_kind` defaults to
+## DamageSource.ENEMY so existing two- and three-argument callers keep
+## working. Player-source damage is refused in every zone.
+func _hurt_player(p: SimPlayerState, amount: int, attacker_level: int = 1, source_kind: int = DamageSource.ENEMY, attacker_id: int = 0) -> bool:
 	if p == null or amount <= 0 or p.hp <= 0:
+		return false
+	if source_kind == DamageSource.PLAYER:
+		_log_player_damage_refusal(attacker_id, p.id)
 		return false
 	var ast := _ability_of(p.id)
 	if ast.invuln_ticks > 0:
@@ -1356,7 +1373,8 @@ func is_town() -> bool:
 
 
 ## Whether the host can apply `class_id` in place for this player. A same-class
-## rejoin is always allowed. A different class is allowed only in the Hearth.
+## rejoin is always allowed. A player with no class yet (first assignment)
+## is also allowed anywhere. A different class is allowed only in the Hearth.
 ## The host should run linger and then apply_class_change_arrival when this is
 ## false (Wilds or a dungeon instance).
 func class_change_allowed(id: int, class_id: String) -> bool:
@@ -1434,10 +1452,8 @@ func _log_class_refusal(player_id: int, class_id: String) -> void:
 	var by_class: Dictionary = _logged_class_refusals.get(player_id, {})
 	if by_class.has(class_id):
 		return
-	var n: int = 0
-	for pid in _logged_class_refusals:
-		n += (_logged_class_refusals[pid] as Dictionary).size()
-	if n >= CLASS_REFUSAL_LOG_CAP:
+	# Cap is per player, not a global total across the roster.
+	if by_class.size() >= CLASS_REFUSAL_LOG_CAP:
 		return
 	by_class[class_id] = true
 	_logged_class_refusals[player_id] = by_class
@@ -1446,6 +1462,29 @@ func _log_class_refusal(player_id: int, class_id: String) -> void:
 
 func _clear_class_refusals(player_id: int) -> void:
 	_logged_class_refusals.erase(player_id)
+
+
+func _log_player_damage_refusal(attacker_id: int, target_id: int) -> void:
+	var by_target: Dictionary = _logged_player_damage_refusals.get(attacker_id, {})
+	if by_target.has(target_id):
+		return
+	var n: int = 0
+	for aid in _logged_player_damage_refusals:
+		n += (_logged_player_damage_refusals[aid] as Dictionary).size()
+	if n >= PLAYER_DAMAGE_REFUSAL_LOG_CAP:
+		return
+	by_target[target_id] = true
+	_logged_player_damage_refusals[attacker_id] = by_target
+	push_error(PLAYER_DAMAGE_REFUSED_LOG)
+
+
+func _clear_player_damage_refusals(player_id: int) -> void:
+	_logged_player_damage_refusals.erase(player_id)
+	for aid in _logged_player_damage_refusals.keys():
+		var by_target: Dictionary = _logged_player_damage_refusals[aid]
+		by_target.erase(player_id)
+		if by_target.is_empty():
+			_logged_player_damage_refusals.erase(aid)
 
 
 func _set_player_class_on(p: SimPlayerState, class_id: String, fill: bool) -> void:
@@ -2561,6 +2600,7 @@ func _apply_pending_roster() -> void:
 				# back on rejoin saves it first (focus / cooldown getters).
 				_ability_by_player.erase(pid)
 				_clear_class_refusals(pid)
+				_clear_player_damage_refusals(pid)
 				for e in _enemies:
 					e.damaged_by.erase(pid)
 				changed = true
@@ -3654,7 +3694,7 @@ func _tick_hazards(sim_tick: int) -> void:
 			if p.hp <= 0:
 				continue
 			if h.contains(p.x, p.y):
-				_hurt_player(p, amount, attacker_level)
+				_hurt_player(p, amount, attacker_level, DamageSource.ENEMY, h.source_id)
 
 
 func _cull_hazards(sim_tick: int) -> void:
