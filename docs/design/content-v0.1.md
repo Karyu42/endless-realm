@@ -78,7 +78,7 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 - A join with a different class from anywhere, the Wilds included, while the character's last location was in the Wilds or an instance, is **not a rejoin**:
   1. The old character first runs the normal disconnect linger (vision §7.3), with all its normal outcomes, hardcore death during linger included.
   2. Only once linger finishes with the character alive does it move to the Hearth. It arrives with `HP = min(current HP, new class max HP)`, 0 Focus and the ability on full cooldown, with no snapshot (join state above) and no boss credit, and its pending loot banks per vision §7.1. This counts as a way out of an instance (vision §6.1 rule 11).
-- **Fresh conservative join with no prior in-world state:** full max HP, 0 Focus and the ability on full cooldown, with no snapshot. "No prior in-world state" means the character has no live or lingering body in the Wilds or an instance.
+- **Fresh conservative join with no prior in-world state:** full max HP, 0 Focus and the ability on full cooldown, with no snapshot. "No prior in-world state" means the character has no live or lingering body in the Wilds or an instance. This doesn't override the first-join ready state (join state above): a first join this host session still starts ready.
 - **Class change in the Hearth:** `HP = min(current HP, new class max HP)`, 0 Focus and the ability on full cooldown.
 - **Reconnect after linger** has ended is a fresh entry with no carried boss credit (vision §6.1 rule 7).
 - **Rule 9 re-entry** (vision §6.1) through an entrance from the Hearth is a normal entry, not a rejoin, so a different class is allowed. That character enters with normal entry state and no carried boss credit, and counts as a new identity in the `n_now` set (vision §3.5). That doesn't add 1 to `n_peak` by itself; `n_peak` only changes through the normal `n_now` count.
@@ -196,7 +196,8 @@ With vision §3.5 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 ## 2. Wilds enemies
 
 ### 2.1 Layout of the Wilds
-- The Wilds are a circle of radius 120 tiles. The Hearth gate sits on the south edge; it is a two-way walk-through gate between the Wilds and the Hearth.
+- The Wilds are a circle of radius 120 tiles; that is the ship size. Smaller arenas are for dev and test builds only. The Hearth gate sits on the south edge; it is a two-way walk-through gate between the Wilds and the Hearth.
+- **Gate cooldown:** after any crossing, the gate refuses that character for 5 s (**100 ticks** at `TICK_HZ` 20), in both directions. A refused touch does nothing. There is no in-combat lock; leaving combat through the gate is allowed.
 - Enemy level depends on distance `r` from the center: `E = clamp(20 − floor(r / 6), 1, 20)`.
 - Rings are half-open intervals, so every point belongs to exactly one ring. The boundary `r = 90` is in ring 1 (E 5), and `r = 89.9` is in ring 2 (E 6).
 

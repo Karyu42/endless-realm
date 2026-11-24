@@ -16,7 +16,7 @@ Legend: **[v0.1]** is in the first playable slice. **[Later]** is a later-phase 
 
 ## 1. Core loop
 
-1. **[v0.1]** Spawn in **the Hearth**, a safe hub with a vendor, a stash and a portal board.
+1. **[v0.1]** Spawn in **the Hearth**, a safe hub with a vendor, a stash and a portal board. Safe means no enemies and no damage to players from any source (§7.1).
 2. Step into **the Wilds**, a shared open zone in rings. Enemy level rises from the edge (level 1) toward the center (top ring = base level 20 in v0.1; ring count, widths and levels are in `content-v0.1.md`).
 3. Dodge bullet patterns, kill enemies, and earn XP, Glint and gear drops.
 4. Find a **portal**, or open one with a **Vault Sigil**, to a dungeon instance (v0.1 has one dungeon, **the Hollowmere Vault**, with one boss, **the Tallow Warden**). The opener sets the level multiplier (§6).
@@ -297,8 +297,9 @@ Each character is created as **Standard** or **Hardcore**. The mode is fixed for
 - **Pending:** everything picked up or earned outside the Hearth is *pending*. Items carry `pending = true` wherever they are (inventory or equipped). Currency goes into the character's pending wallet. Equipping a pending item is allowed, and it stays pending.
 - **Banking event:** the moment the character's position enters the Hearth zone (portal exit, instance collapse, walking in, or reconnecting into the Hearth), the server clears every pending flag and moves pending currency into the account's banked wallet for that mode. This is one ledger transaction. Trading, salvage, the vendor and the stash exist only in the Hearth, so they only ever touch banked assets.
 - **XP is never pending.** XP is kept the moment it's credited, even if you die later.
+- **Safe zone:** the Hearth has no enemies, and nothing damages players there, from any source. There is no PvP in v0.1. Players may fire and use abilities in the Hearth; these deal no damage and still spend Focus and cooldown. The rule 7 activity stamp (§6.1) is per instance and re-seeded at each sim entry, so Hearth activity never counts toward boss credit.
 - **Hearth arrivals:** these all land in the Hearth:
-  - **Fresh join:** starts per content-v0.1 §1 (fresh conservative join).
+  - **Fresh join:** full max HP. Focus and cooldown follow the content-v0.1 §1 join-state rules, so a first join this host session starts ready.
   - **Standard respawn (§7.2):** the only arrival at full HP.
   - **Living arrivals:** a dungeon exit portal, instance collapse (§6.1 rule 8), or the reconnect of a character that survived linger (§7.3). These keep the character's current HP, Focus and cooldown, adjusted only for elapsed time per the content-v0.1 §1 join-state rules. A character that survives linger while disconnected is placed in the Hearth when it reconnects, not at linger expiry.
   - **Different-class join:** arrives with `HP = min(current HP, new class max HP)`, per content-v0.1 §1.
@@ -324,7 +325,7 @@ At the death event, before any respawn, the server applies steps 1–3 in order,
   - **Link lost:** the client sends a heartbeat every 1 s. The link counts as lost on a socket close, or after **5 s** with no packet.
   - **Linger:** for the next **5 s** the character stays in the world. It stops moving, can't fire or use abilities, takes damage normally and can die.
   - **After linger:** if it survives, the character is removed from the instance. On reconnect it appears in the Hearth, and its pending loot banks then, once (§7.1), not at linger expiry.
-  - **Lobby slot:** a lingering body stays in the world, still takes damage and can die. It holds its lobby slot until its linger resolves normally: death if it dies during linger, otherwise the after-linger outcome above. No linger can be evicted. A join into a full lobby is refused with the existing packed lobby-full copy (`lobby_full` in `data/lobby_ui.json`, #72), and no lingering body is evicted to make room.
+  - **Lobby slot:** a lingering body stays in the world, still takes damage and can die. It holds its lobby slot until its 5 s linger ends, or until it dies during linger, not until a later reconnect. The linger then resolves normally: death if it died, otherwise the after-linger outcome above. No linger can be evicted. A join into a full lobby is refused with the existing packed lobby-full copy (`lobby_full` in `data/lobby_ui.json`, #72), and no lingering body is evicted to make room.
   - **Logout:** a voluntary logout or quit outside the Hearth uses the same 5 s linger. A logout inside the Hearth is instant.
   - **Incident windows:** these protect players from server faults.
     - **⚠ Hosting:** "on-call" below means the lobby's **host admin** (§11.6).
