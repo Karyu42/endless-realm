@@ -78,6 +78,9 @@ message Snapshot {
   repeated LootBag bags = 3;
   // Portals and markers in the receiving player's current instance only.
   repeated PortalState portals = 4;
+  // Entrances in `portals` this receiving player may still re-enter even
+  // when `closed` (an earlier admission); the only per-viewer portal data.
+  repeated uint64 admitted_portal_ids = 5;
 }
 
 // PortalSnapshot kind; names are packed-data ids, never display names.
@@ -101,7 +104,8 @@ message PortalState {
   uint32 content_level = 10;
   uint32 capacity = 11;
   uint32 admitted_count = 12;
-  // Admission is closed for this viewer (existing admissions can remain valid).
+  // Closed for new entry: host-closed or past its admission deadline. The
+  // same for every viewer; see Snapshot.admitted_portal_ids for re-entry.
   bool closed = 13;
   bool persistent = 14;
   bool grants_persistent = 15;
@@ -156,6 +160,7 @@ message InstanceInfo {
   uint32 base_level = 6;
   uint32 capacity = 7;
   uint32 admitted_count = 8;
+  // Same meaning as PortalState.closed for the entrance behind it.
   bool closed = 9;
 }
 

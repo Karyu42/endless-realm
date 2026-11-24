@@ -65,7 +65,15 @@ make loadtest-godot                                   # 8, 25, 50 clients, 60 s 
 # 100 is test-only: the script supplies --loadtest-unsafe-max-players 100.
 make loadtest-godot LOADTEST_CLIENTS=100 LOADTEST_DURATION=60
 python3 tools/loadtest/godot_host_loadtest.py --clients 50 --emitters 40 --duration 30
+# Open overworld entrances (practice door + 6), then the per-viewer worst case
+# where every client has a distinct admitted set (needs 2^entrances >= clients).
+python3 tools/loadtest/godot_host_loadtest.py --clients 50 --entrances 6
+python3 tools/loadtest/godot_host_loadtest.py --clients 50 --entrances 6 --distinct-admitted
 ```
+
+`viewer_snapshot_bytes_avg` / `_max` are the Snapshot bytes actually sent per
+viewer (the instance's shared part plus that viewer's own fields);
+`snapshot_bytes_*` is the shared overworld Snapshot only.
 
 Results land in `loadtest-results/results.{json,md}` (git-ignored), with the
 raw host and bot output in `loadtest-results/{host,bot}-<clients>.log`.

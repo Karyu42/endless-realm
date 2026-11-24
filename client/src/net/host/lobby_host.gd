@@ -244,6 +244,11 @@ var instances: Array[HostInstance] = []
 ## Load test only: spread joining remote players over this many dungeon
 ## instances (0 or 1 = everyone stays in the overworld).
 var loadtest_instances: int = 0
+## Load test only: open the practice door plus N normal overworld entrances.
+var loadtest_entrances: int = 0
+## Load test only: admit each remote player to a distinct subset of them.
+var loadtest_distinct_admitted: bool = false
+var _loadtest_admitted: Dictionary = {}  # lobby player id -> true
 const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
@@ -299,6 +304,12 @@ var st_encode := PackedInt64Array()
 var st_send := PackedInt64Array()
 var st_bullets := PackedInt32Array()
 var st_snapshot_bytes_sum: int = 0
+## Bytes actually sent per viewer (shared body plus that viewer's fields).
+var st_viewer_bytes_sum: int = 0
+var st_viewer_packets: int = 0
+var st_viewer_bytes_max: int = 0
+var _tick_viewer_bytes: int = 0
+var _tick_viewer_bytes_max: int = 0
 var st_full_bytes_sum: int = 0
 var st_packets_sent: int = 0
 var st_first_usec: int = -1
@@ -341,6 +352,8 @@ func start() -> Error:
 	_configure_sim()
 	for i in range(loadtest_instances - 1):
 		_create_loadtest_instance(i)
+	if loadtest_entrances > 0:
+		_open_loadtest_entrances()
 	var err := _tcp.listen(port, bind_address)
 	if err != OK:
 		return err
@@ -618,10 +631,11 @@ func run_tick() -> void:
 	tick += 1
 	var new_shots: Array[PackedFloat64Array] = _step_sim()
 	var t2 := Time.get_ticks_usec()
-	var snap_bytes := _encode_snapshot()
+	var shared := _encode_shared_snapshots()
+	var snap_bytes: PackedByteArray = shared[instances[0]][1]
 	var full_bytes := _encode_full(new_shots)
 	var t3 := Time.get_ticks_usec()
-	var sent := _send(snap_bytes)
+	var sent := _send(shared)
 	var t4 := Time.get_ticks_usec()
 	last_snapshot_bytes = snap_bytes.size()
 	last_full_bytes = full_bytes.size()
@@ -642,6 +656,9 @@ func run_tick() -> void:
 		st_send.append(t4 - t3)
 		st_bullets.append(bullets.live_bullets())
 		st_snapshot_bytes_sum += snap_bytes.size()
+		st_viewer_bytes_sum += _tick_viewer_bytes
+		st_viewer_packets += sent
+		st_viewer_bytes_max = maxi(st_viewer_bytes_max, _tick_viewer_bytes_max)
 		st_full_bytes_sum += full_bytes.size()
 		st_packets_sent += sent
 		st_inputs += _inputs_this_tick
@@ -1077,6 +1094,8 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			_route_transfer(inst, xfer)
 	if loadtest_instances > 1:
 		_spread_loadtest_players()
+	if loadtest_distinct_admitted:
+		_admit_loadtest_players()
 	_teardown_empty_instances()
 	# Stand-in bullets live in the overworld only.
 	var ow: Array[HostPlayer] = []
@@ -1657,6 +1676,36 @@ func _create_loadtest_instance(i: int) -> void:
 		_instance_by_portal[inst.portal_key] = inst
 
 
+## Load test only: the packed practice door plus `loadtest_entrances` normal
+## (expiring) entrances beside it, all in the overworld.
+func _open_loadtest_entrances() -> void:
+	sim.spawn_practice_portal("hollowmere_vault")
+	for i in range(loadtest_entrances):
+		var portal := sim.portal_by_id(sim.spawn_practice_portal("hollowmere_vault"))
+		if portal == null:
+			return
+		portal.x += 1.5 * float(i + 1)
+		portal.persistent = false
+	_sync_portal_records()
+
+
+## Load test only: worst case for per-viewer snapshot data. Each remote
+## player is admitted to the normal entrances picked by the bits of its id,
+## so no two players share an admitted set (up to 2^N players).
+func _admit_loadtest_players() -> void:
+	var entrances: Array = []
+	for e in _entrance_records(instances[0]):
+		if not (e[1] as PortalRecord).persistent:
+			entrances.append(e[1])
+	for p in players:
+		if p.is_local or not p.in_sim or _loadtest_admitted.has(p.id):
+			continue
+		_loadtest_admitted[p.id] = true
+		for j in range(entrances.size()):
+			if p.id & (1 << j):
+				(entrances[j] as PortalRecord).admitted[p.id] = true
+
+
 ## Load test only: remote players in the overworld sim are spread by id
 ## over the overworld and the load-test instances, once each.
 func _spread_loadtest_players() -> void:
@@ -1712,13 +1761,26 @@ func _encode_snapshot() -> PackedByteArray:
 	return _encode_snapshot_for([])
 
 
-## Snapshot of one instance (default: the overworld) with the given bags
-## (one viewer's own). Every viewer there without bags gets the same bytes.
+
+## Field 3 (ServerMessage.snapshot), length-delimited.
+const SNAPSHOT_FIELD_TAG: int = (3 << 3) | 2
+
+
+## One viewer's full Snapshot message (default: the overworld, no viewer).
+## Same bytes the send path builds: the instance's shared body followed by
+## this viewer's own fields.
 func _encode_snapshot_for(bags: Array, inst: HostInstance = null, owner_id: int = -1) -> PackedByteArray:
 	if inst == null:
 		inst = instances[0]
-	var msg = PB.ServerMessage.new()
-	var s = msg.new_snapshot()
+	var body := _shared_snapshot_body(inst)
+	body.append_array(_viewer_snapshot_body(inst, bags, owner_id))
+	return _wrap_snapshot(body)
+
+
+## Viewer-independent Snapshot fields of `inst`: tick, players, portals.
+## Encoded once per instance per tick.
+func _shared_snapshot_body(inst: HostInstance) -> PackedByteArray:
+	var s = PB.Snapshot.new()
 	s.set_tick(tick)
 	for p in players:
 		if p.instance != inst:
@@ -1726,6 +1788,19 @@ func _encode_snapshot_for(bags: Array, inst: HostInstance = null, owner_id: int 
 		var stub = s.add_players()
 		stub.set_id(p.id)
 		stub.set_applied_seq(p.seq)
+	for portal in inst.sim.portals():
+		_encode_portal(s.add_portals(), portal, inst)
+	return s.to_bytes()
+
+
+## One viewer's own Snapshot fields: their bags and the entrances they may
+## still re-enter. Empty when there are none. Protobuf merges fields that
+## follow the shared body (repeated fields append), so the two concatenate.
+func _viewer_snapshot_body(inst: HostInstance, bags: Array, owner_id: int, entrances: Variant = null) -> PackedByteArray:
+	if bags.is_empty() and owner_id < 0:
+		return PackedByteArray()
+	var s = PB.Snapshot.new()
+	var any := false
 	for bag in bags:
 		if not inst.sim.ground_drops().has(bag):
 			continue
@@ -1736,9 +1811,32 @@ func _encode_snapshot_for(bags: Array, inst: HostInstance = null, owner_id: int 
 		b.set_owner_player_id(owner_id if owner_id >= 0 else bag.item.owner_player_id)
 		b.set_t_star(maxi(bag.t_star, 0))
 		b.set_spawn_tick(maxi(bag.spawn_tick, 0))
+		any = true
+	if owner_id >= 0:
+		for e in (entrances if entrances != null else _entrance_records(inst)):
+			if _may_reenter(e[1], owner_id):
+				s.add_admitted_portal_ids(e[0])
+				any = true
+	return s.to_bytes() if any else PackedByteArray()
+
+
+## [portal id, record] for each entrance in `inst` the host has a record for.
+func _entrance_records(inst: HostInstance) -> Array:
+	var out: Array = []
 	for portal in inst.sim.portals():
-		_encode_portal(s.add_portals(), portal, inst, owner_id)
-	return msg.to_bytes()
+		if portal.kind != PortalSnapshot.KIND_ENTER:
+			continue
+		var record: PortalRecord = _portal_records.get(_portal_key(inst, portal.id))
+		if record != null:
+			out.append([portal.id, record])
+	return out
+
+
+static func _wrap_snapshot(body: PackedByteArray) -> PackedByteArray:
+	var out := PackedByteArray([SNAPSHOT_FIELD_TAG])
+	out.append_array(PB.PBPacker.pack_varint(body.size()))
+	out.append_array(body)
+	return out
 
 
 ## Includes only public metadata of worlds reachable from this player's
@@ -1760,7 +1858,7 @@ func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
 		info.set_base_level(inst.created_from.base_level if inst.created_from != null else 0)
 		info.set_capacity(record.capacity if record != null else _settings.max_players)
 		info.set_admitted_count(_admitted_count(record) if record != null else _occupants(inst, -1))
-		info.set_closed(_admission_closed(record, viewer.id) if record != null else false)
+		info.set_closed(_entrance_closed(record) if record != null else false)
 	return msg.to_bytes()
 
 
@@ -1770,12 +1868,18 @@ func _admitted_count(record: PortalRecord) -> int:
 	return record.admitted.size()
 
 
-func _admission_closed(record: PortalRecord, viewer_id: int) -> bool:
-	return record.closed or (not record.persistent and not record.admitted.has(viewer_id) \
+## Closed for new entry, the same for every viewer.
+func _entrance_closed(record: PortalRecord) -> bool:
+	return record.closed or (not record.persistent \
 			and tick >= record.created_tick + _entrance_lifetime_ticks(record))
 
 
-func _encode_portal(out, portal: PortalSnapshot, inst: HostInstance, viewer_id: int) -> void:
+## An earlier admission this player may still use (see _record_refusal).
+func _may_reenter(record: PortalRecord, player_id: int) -> bool:
+	return not record.closed and not record.persistent and record.admitted.has(player_id)
+
+
+func _encode_portal(out, portal: PortalSnapshot, inst: HostInstance) -> void:
 	out.set_id(portal.id)
 	out.set_x(portal.x)
 	out.set_y(portal.y)
@@ -1799,7 +1903,7 @@ func _encode_portal(out, portal: PortalSnapshot, inst: HostInstance, viewer_id: 
 			return
 		out.set_capacity(record.capacity)
 		out.set_admitted_count(_admitted_count(record))
-		out.set_closed(_admission_closed(record, viewer_id))
+		out.set_closed(_entrance_closed(record))
 		out.set_persistent(record.persistent)
 		out.set_grants_persistent(record.grants_persistent)
 		if not record.persistent:
@@ -1854,23 +1958,45 @@ func _encode_full(new_shots: Array[PackedFloat64Array]) -> PackedByteArray:
 	return full.to_bytes()
 
 
-## Sends each viewer their instance's Snapshot (`bytes` is the overworld's),
-## or a per-viewer one carrying only that viewer's own bags.
-func _send(bytes: PackedByteArray) -> int:
+## Shared Snapshot of the overworld and of every instance with a viewer:
+## instance -> [body, wrapped message, entrance records]. One encode per instance per tick.
+func _encode_shared_snapshots() -> Dictionary:
+	var out := {}
+	var wanted: Array[HostInstance] = [instances[0]]
+	for c in _conns:
+		if c.player != null and not wanted.has(c.player.instance):
+			wanted.append(c.player.instance)
+	for inst in wanted:
+		var body := _shared_snapshot_body(inst)
+		out[inst] = [body, _wrap_snapshot(body), _entrance_records(inst)]
+	return out
+
+
+## Sends each viewer their instance's shared Snapshot; a viewer with own
+## fields (bags, re-enterable entrances) gets them appended to that body.
+func _send(shared: Dictionary) -> int:
 	var sent: int = 0
+	_tick_viewer_bytes = 0
+	_tick_viewer_bytes_max = 0
 	var bags := _bags_by_owner()
-	var by_instance := {instances[0]: bytes}
 	for c in _conns:
 		if c.player == null or c.ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
 			continue
 		var inst: HostInstance = c.player.instance
-		if not by_instance.has(inst):
-			by_instance[inst] = _encode_snapshot_for([], inst)
-		var out: PackedByteArray = by_instance[inst]
-		if bags.has(c.player.id) or not inst.sim.portals().is_empty():
-			out = _encode_snapshot_for(bags.get(c.player.id, []), inst, c.player.id)
+		if not shared.has(inst):
+			var b := _shared_snapshot_body(inst)
+			shared[inst] = [b, _wrap_snapshot(b), _entrance_records(inst)]
+		var pair: Array = shared[inst]
+		var out: PackedByteArray = pair[1]
+		var own := _viewer_snapshot_body(inst, bags.get(c.player.id, []), c.player.id, pair[2])
+		if not own.is_empty():
+			var body: PackedByteArray = pair[0].duplicate()
+			body.append_array(own)
+			out = _wrap_snapshot(body)
 		if c.ws.put_packet(out) == OK:
 			sent += 1
+			_tick_viewer_bytes += out.size()
+			_tick_viewer_bytes_max = maxi(_tick_viewer_bytes_max, out.size())
 		c.ws.poll()  # flush now instead of 50 ms later
 	return sent
 
@@ -1918,6 +2044,8 @@ func stats() -> Dictionary:
 		"bullets_max": max_bullets,
 		"snapshot_bytes_avg": snappedf(float(st_snapshot_bytes_sum) / maxf(nrec, 1), 0.1),
 		"snapshot_bytes_per_client_s": snappedf(float(st_snapshot_bytes_sum) / wall_s, 1.0),
+		"viewer_snapshot_bytes_avg": snappedf(float(st_viewer_bytes_sum) / maxf(st_viewer_packets, 1), 0.1),
+		"viewer_snapshot_bytes_max": st_viewer_bytes_max,
 		"full_state_bytes_avg": snappedf(float(st_full_bytes_sum) / maxf(nrec, 1), 0.1),
 		"full_state_bytes_per_client_s": snappedf(float(st_full_bytes_sum) / wall_s, 1.0),
 		"packets_sent": st_packets_sent,

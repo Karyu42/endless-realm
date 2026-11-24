@@ -17,6 +17,11 @@ extends SceneTree
 ##                          the load test uses 20, ~1000 live bullets)
 ##   --loadtest-instances N LOAD TEST: spread remote players over the overworld and
 ##                          N-1 dungeon instances (default 0 = overworld only)
+##   --loadtest-entrances N LOAD TEST: open the practice door plus N normal
+##                          overworld entrances (default 0 = none)
+##   --loadtest-distinct-admitted
+##                          LOAD TEST: admit every remote player to a distinct
+##                          subset of those entrances (per-viewer worst case)
 ##   --arena TILES          square arena edge in tiles (default 48)
 ##   --expect-clients N     record stats only while >= N players are connected
 ##   --run-seconds S        hard stop after S seconds (default 0 = no limit)
@@ -61,6 +66,10 @@ func _initialize() -> void:
 				_host.emitter_count = int(v); i += 1
 			"--loadtest-instances":
 				_host.loadtest_instances = int(v); i += 1
+			"--loadtest-entrances":
+				_host.loadtest_entrances = int(v); i += 1
+			"--loadtest-distinct-admitted":
+				_host.loadtest_distinct_admitted = true
 			"--arena":
 				_host.arena_size = float(v); i += 1
 			"--expect-clients":

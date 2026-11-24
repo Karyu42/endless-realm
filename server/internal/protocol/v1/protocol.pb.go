@@ -454,9 +454,12 @@ type Snapshot struct {
 	// Each recipient gets its own list; it is empty for most players.
 	Bags []*LootBag `protobuf:"bytes,3,rep,name=bags,proto3" json:"bags,omitempty"`
 	// Portals and markers in the receiving player's current instance only.
-	Portals       []*PortalState `protobuf:"bytes,4,rep,name=portals,proto3" json:"portals,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Portals []*PortalState `protobuf:"bytes,4,rep,name=portals,proto3" json:"portals,omitempty"`
+	// Entrances in `portals` this receiving player may still re-enter even
+	// when `closed` (an earlier admission); the only per-viewer portal data.
+	AdmittedPortalIds []uint64 `protobuf:"varint,5,rep,packed,name=admitted_portal_ids,json=admittedPortalIds,proto3" json:"admitted_portal_ids,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Snapshot) Reset() {
@@ -517,6 +520,13 @@ func (x *Snapshot) GetPortals() []*PortalState {
 	return nil
 }
 
+func (x *Snapshot) GetAdmittedPortalIds() []uint64 {
+	if x != nil {
+		return x.AdmittedPortalIds
+	}
+	return nil
+}
+
 type PortalState struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -531,7 +541,8 @@ type PortalState struct {
 	ContentLevel  uint32                 `protobuf:"varint,10,opt,name=content_level,json=contentLevel,proto3" json:"content_level,omitempty"`
 	Capacity      uint32                 `protobuf:"varint,11,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	AdmittedCount uint32                 `protobuf:"varint,12,opt,name=admitted_count,json=admittedCount,proto3" json:"admitted_count,omitempty"`
-	// Admission is closed for this viewer (existing admissions can remain valid).
+	// Closed for new entry: host-closed or past its admission deadline. The
+	// same for every viewer; see Snapshot.admitted_portal_ids for re-entry.
 	Closed           bool `protobuf:"varint,13,opt,name=closed,proto3" json:"closed,omitempty"`
 	Persistent       bool `protobuf:"varint,14,opt,name=persistent,proto3" json:"persistent,omitempty"`
 	GrantsPersistent bool `protobuf:"varint,15,opt,name=grants_persistent,json=grantsPersistent,proto3" json:"grants_persistent,omitempty"`
@@ -1001,7 +1012,8 @@ type InstanceInfo struct {
 	BaseLevel     uint32 `protobuf:"varint,6,opt,name=base_level,json=baseLevel,proto3" json:"base_level,omitempty"`
 	Capacity      uint32 `protobuf:"varint,7,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	AdmittedCount uint32 `protobuf:"varint,8,opt,name=admitted_count,json=admittedCount,proto3" json:"admitted_count,omitempty"`
-	Closed        bool   `protobuf:"varint,9,opt,name=closed,proto3" json:"closed,omitempty"`
+	// Same meaning as PortalState.closed for the entrance behind it.
+	Closed        bool `protobuf:"varint,9,opt,name=closed,proto3" json:"closed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1653,12 +1665,13 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\x03aim\x18\x04 \x01(\x02R\x03aim\x12\x1b\n" +
 	"\tfire_held\x18\x05 \x01(\bR\bfireHeld\x12,\n" +
 	"\x12interact_target_id\x18\x06 \x01(\x04R\x10interactTargetId\x12'\n" +
-	"\x0fability_pressed\x18\a \x01(\bR\x0eabilityPressed\"\xac\x01\n" +
+	"\x0fability_pressed\x18\a \x01(\bR\x0eabilityPressed\"\xdc\x01\n" +
 	"\bSnapshot\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\rR\x04tick\x120\n" +
 	"\aplayers\x18\x02 \x03(\v2\x16.endless.v1.PlayerStubR\aplayers\x12'\n" +
 	"\x04bags\x18\x03 \x03(\v2\x13.endless.v1.LootBagR\x04bags\x121\n" +
-	"\aportals\x18\x04 \x03(\v2\x17.endless.v1.PortalStateR\aportals\"\xda\x03\n" +
+	"\aportals\x18\x04 \x03(\v2\x17.endless.v1.PortalStateR\aportals\x12.\n" +
+	"\x13admitted_portal_ids\x18\x05 \x03(\x04R\x11admittedPortalIds\"\xda\x03\n" +
 	"\vPortalState\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\f\n" +
 	"\x01x\x18\x02 \x01(\x02R\x01x\x12\f\n" +

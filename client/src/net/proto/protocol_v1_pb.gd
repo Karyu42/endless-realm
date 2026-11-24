@@ -1144,6 +1144,12 @@ class Snapshot:
 		service.func_ref = Callable(self, "add_portals")
 		data[__portals.tag] = service
 		
+		var __admitted_portal_ids_default: Array[int] = []
+		__admitted_portal_ids = PBField.new("admitted_portal_ids", PB_DATA_TYPE.UINT64, PB_RULE.REPEATED, 5, true, __admitted_portal_ids_default)
+		service = PBServiceField.new()
+		service.field = __admitted_portal_ids
+		data[__admitted_portal_ids.tag] = service
+		
 	var data = {}
 	
 	var __tick: PBField
@@ -1191,6 +1197,15 @@ class Snapshot:
 		var element = PortalState.new()
 		__portals.value.append(element)
 		return element
+	
+	var __admitted_portal_ids: PBField
+	func get_admitted_portal_ids() -> Array[int]:
+		return __admitted_portal_ids.value
+	func clear_admitted_portal_ids() -> void:
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__admitted_portal_ids.value.clear()
+	func add_admitted_portal_ids(value : int) -> void:
+		__admitted_portal_ids.value.append(value)
 	
 	func _to_string() -> String:
 		return PBPacker.message_to_string(data)

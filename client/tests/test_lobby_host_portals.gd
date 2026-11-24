@@ -2089,3 +2089,118 @@ func test_join_requirement_unknown_player_fails_closed() -> void:
 	assert_eq(r[0], PB.ErrorCode.INSTANCE_NOT_FOUND, "fails closed with a specific code")
 	assert_ne(String(r[1]), "")
 	assert_eq(_host._enter_refusal(p, portal)[1], "", "a known player may enter")
+
+
+# --- shared snapshot body + per-viewer fields --------------------------------
+
+## The same Snapshot built field by field in one godobuf message.
+func _reference_snapshot(inst: LobbyHost.HostInstance, bags: Array, viewer: int) -> PackedByteArray:
+	var msg = PB.ServerMessage.new()
+	var s = msg.new_snapshot()
+	s.set_tick(_host.tick)
+	for p in _host.players:
+		if p.instance == inst:
+			var stub = s.add_players()
+			stub.set_id(p.id)
+			stub.set_applied_seq(p.seq)
+	for bag in bags:
+		if inst.sim.ground_drops().has(bag):
+			var b = s.add_bags()
+			b.set_id(bag.id)
+			b.set_x(bag.x)
+			b.set_y(bag.y)
+			b.set_owner_player_id(viewer)
+			b.set_t_star(maxi(bag.t_star, 0))
+			b.set_spawn_tick(maxi(bag.spawn_tick, 0))
+	for portal in inst.sim.portals():
+		_host._encode_portal(s.add_portals(), portal, inst)
+	for e in _host._entrance_records(inst):
+		if _host._may_reenter(e[1], viewer):
+			s.add_admitted_portal_ids(e[0])
+	return msg.to_bytes()
+
+
+func _decode_snapshot(bytes: PackedByteArray):
+	var msg = PB.ServerMessage.new()
+	assert_eq(msg.from_bytes(bytes), PB.PB_ERR.NO_ERRORS)
+	assert_true(msg.has_snapshot())
+	return msg
+
+
+## a entered and left `portal` (admitted); b never entered.
+func _admitted_and_not() -> Array:
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	_exit_here(a, 5)
+	var b := _join_near_portal(portal)
+	_ticks(2)
+	assert_true(_instance_of(a).is_overworld())
+	return [portal, a, b]
+
+
+func test_concatenated_snapshot_decodes_like_full_encode() -> void:
+	_host = _new_host()
+	var r := _admitted_and_not()
+	var a: int = r[1]
+	var b: int = r[2]
+	var second := _open_portal()
+	second.x += 2.0
+	_host._sync_portal_records()
+	var bag := _overworld_bag(a)
+	var ow: LobbyHost.HostInstance = _host.instances[0]
+	for v in [[a, [bag]], [b, []], [a, []], [-1, []]]:
+		var bytes := _host._encode_snapshot_for(v[1], ow, v[0])
+		var shared := _host._shared_snapshot_body(ow)
+		assert_eq(bytes.slice(bytes.size() - _host._viewer_snapshot_body(ow, v[1], v[0]).size() - shared.size(),
+				bytes.size() - _host._viewer_snapshot_body(ow, v[1], v[0]).size()), shared, "shared body is a prefix")
+		var decoded = _decode_snapshot(bytes)
+		assert_eq(decoded.to_bytes(), _reference_snapshot(ow, v[1], v[0]), "same message as a full encode")
+	var with_bag = _decode_snapshot(_host._encode_snapshot_for([bag], ow, a)).get_snapshot()
+	assert_eq(with_bag.get_bags().size(), 1)
+	assert_eq(with_bag.get_portals().size(), _host.sim.portals().size())
+	assert_eq(with_bag.get_admitted_portal_ids(), [r[0].id] as Array[int])
+
+
+func test_admitted_ids_only_for_admitted_viewer_and_closed_shared() -> void:
+	_host = _new_host()
+	var r := _admitted_and_not()
+	var portal: PortalSnapshot = r[0]
+	var ow: LobbyHost.HostInstance = _host.instances[0]
+	var rec: LobbyHost.PortalRecord = _host._portal_records[_host._portal_key(ow, portal.id)]
+	for expired in [false, true]:
+		if expired:
+			rec.created_tick -= LobbyHost.ENTRANCE_LIFETIME_TICKS
+		var sa = _decode_snapshot(_host._encode_snapshot_for([], ow, r[1])).get_snapshot()
+		var sb = _decode_snapshot(_host._encode_snapshot_for([], ow, r[2])).get_snapshot()
+		assert_eq(sa.get_admitted_portal_ids(), [portal.id] as Array[int], "admitted viewer may re-enter")
+		assert_eq(sb.get_admitted_portal_ids().size(), 0, "not admitted")
+		var pa = _wire_portal(sa, portal.id)
+		var pb = _wire_portal(sb, portal.id)
+		assert_eq(pa.get_closed(), expired)
+		assert_eq(pa.to_bytes(), pb.to_bytes(), "portal state identical across viewers")
+	# The admission list matches what the host actually allows.
+	assert_eq(_host._enter_refusal(_host._find_player(r[1]), portal)[0], 0)
+	assert_ne(_host._enter_refusal(_host._find_player(r[2]), portal)[0], 0)
+
+
+func test_remote_admitted_ids_over_websocket() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var rr := _connect_remote()
+	var me: int = _host.players[0].id
+	var r2 := _connect_remote()
+	var portal := _open_portal()
+	_host._sync_portal_records()
+	var rec: LobbyHost.PortalRecord = _host._portal_records[_host._portal_key(_host.instances[0], portal.id)]
+	rec.admitted[me] = true  # as after an earlier entry
+	rec.created_tick -= LobbyHost.ENTRANCE_LIFETIME_TICKS
+	var s1 = _fresh_snapshot(rr)
+	assert_true(_pump(r2, func() -> bool: return r2.snap != null and r2.snap.get_tick() >= s1.get_tick()))
+	var s2 = r2.snap
+	assert_eq(s1.get_admitted_portal_ids(), [portal.id] as Array[int])
+	assert_eq(s2.get_admitted_portal_ids().size(), 0)
+	assert_true(_wire_portal(s1, portal.id).get_closed())
+	assert_true(_wire_portal(s2, portal.id).get_closed())
+	rr.ws.close()
+	r2.ws.close()
