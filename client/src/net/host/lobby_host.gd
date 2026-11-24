@@ -104,6 +104,7 @@ class HostConn:
 	var over_budget_ticks: int = 0
 	var error_window_start: int = 0
 	var errors_in_window: int = 0
+	var last_instance_list_tick: int = -1000
 
 
 ## One world the host runs: the overworld (index 0) or a portal dungeon.
@@ -776,8 +777,13 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 		var f = msg.get_input()
 		_queue_input(c.player, f.get_seq(), f.get_move_x(), f.get_move_y(), f.get_aim(),
 				f.get_fire_held(), f.get_interact_target_id(), f.get_ability_pressed())
+	elif c.player != null and msg.has_list_instances():
+		# Listings are read-only and bounded to one per half-second per peer.
+		if tick - c.last_instance_list_tick >= SimConstants.TICK_HZ / 2:
+			c.last_instance_list_tick = tick
+			c.ws.put_packet(_encode_instance_list(c.player))
 	elif c.player != null and (msg.has_open_portal() or msg.has_join_instance() \
-			or msg.has_list_instances() or msg.has_leave_instance()):
+			or msg.has_leave_instance()):
 		# Portals are not part of this load-test host yet.
 		_send_error(c, PB.ErrorCode.ERROR_CODE_UNSPECIFIED, "portals are not supported by the Godot host yet")
 
@@ -1727,7 +1733,74 @@ func _encode_snapshot_for(bags: Array, inst: HostInstance = null, owner_id: int 
 		b.set_owner_player_id(owner_id if owner_id >= 0 else bag.item.owner_player_id)
 		b.set_t_star(maxi(bag.t_star, 0))
 		b.set_spawn_tick(maxi(bag.spawn_tick, 0))
+	for portal in inst.sim.portals():
+		_encode_portal(s.add_portals(), portal, inst, owner_id)
 	return msg.to_bytes()
+
+
+## Includes only public metadata of worlds reachable from this player's
+## current entrance view, plus their current world and prior admissions.
+## Seeds, identities and lobby credentials are never included.
+func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
+	var msg = PB.ServerMessage.new()
+	var listing = msg.new_instance_list()
+	for inst in instances:
+		var record: PortalRecord = _portal_records.get(inst.portal_key)
+		if not inst.is_overworld() and inst != viewer.instance:
+			if record == null or (record.source != viewer.instance and not record.admitted.has(viewer.id)):
+				continue
+		var info = listing.add_instances()
+		info.set_instance(inst.index)
+		info.set_m100(inst.m100)
+		info.set_player_count(_occupants(inst, -1))
+		info.set_is_default(inst.is_overworld())
+		info.set_base_level(inst.created_from.base_level if inst.created_from != null else 0)
+		info.set_capacity(record.capacity if record != null else _settings.max_players)
+		info.set_admitted_count(_admitted_count(record) if record != null else _occupants(inst, -1))
+		info.set_closed(_admission_closed(record, viewer.id) if record != null else false)
+	return msg.to_bytes()
+
+
+func _admitted_count(record: PortalRecord) -> int:
+	if record.persistent:
+		return _occupants(record.instance, -1) if record.instance != null else 0
+	return record.admitted.size()
+
+
+func _admission_closed(record: PortalRecord, viewer_id: int) -> bool:
+	return record.closed or (not record.persistent and not record.admitted.has(viewer_id) \
+			and tick >= record.created_tick + _entrance_lifetime_ticks(record))
+
+
+func _encode_portal(out, portal: PortalSnapshot, inst: HostInstance, viewer_id: int) -> void:
+	out.set_id(portal.id)
+	out.set_x(portal.x)
+	out.set_y(portal.y)
+	out.set_radius(portal.radius)
+	match portal.kind:
+		PortalSnapshot.KIND_ENTER: out.set_kind(PB.PortalKind.ENTER)
+		PortalSnapshot.KIND_EXIT: out.set_kind(PB.PortalKind.EXIT)
+		PortalSnapshot.KIND_PLACEHOLDER: out.set_kind(PB.PortalKind.PLACEHOLDER)
+	out.set_dungeon_id(portal.dungeon_id)
+	out.set_marker_id(portal.marker_id)
+	out.set_m100(portal.m100)
+	out.set_base_level(portal.base_level)
+	out.set_content_level(portal.content_level)
+	out.set_persistent(portal.persistent)
+	out.set_grants_persistent(portal.grants_persistent)
+	if portal.kind == PortalSnapshot.KIND_ENTER:
+		var record: PortalRecord = _portal_records.get(_portal_key(inst, portal.id))
+		if record == null:
+			# An entrance must have host admission policy before advertising it.
+			out.set_closed(true)
+			return
+		out.set_capacity(record.capacity)
+		out.set_admitted_count(_admitted_count(record))
+		out.set_closed(_admission_closed(record, viewer_id))
+		out.set_persistent(record.persistent)
+		out.set_grants_persistent(record.grants_persistent)
+		if not record.persistent:
+			out.set_expire_tick(record.created_tick + _entrance_lifetime_ticks(record))
 
 
 ## Live bags in every instance, grouped by owner's lobby id:
@@ -1791,8 +1864,8 @@ func _send(bytes: PackedByteArray) -> int:
 		if not by_instance.has(inst):
 			by_instance[inst] = _encode_snapshot_for([], inst)
 		var out: PackedByteArray = by_instance[inst]
-		if bags.has(c.player.id):
-			out = _encode_snapshot_for(bags[c.player.id], inst, c.player.id)
+		if bags.has(c.player.id) or not inst.sim.portals().is_empty():
+			out = _encode_snapshot_for(bags.get(c.player.id, []), inst, c.player.id)
 		if c.ws.put_packet(out) == OK:
 			sent += 1
 		c.ws.poll()  # flush now instead of 50 ms later

@@ -22,6 +22,7 @@ func after_each() -> void:
 				src[k] = _flag_restore[k]
 	_flag_restore = {}
 	if _host != null:
+		_host.catalog.dungeon("hollowmere_vault").rooms[0].erase("boss_placeholder")
 		_host.stop()
 		_host = null
 	_rejections = []
@@ -1846,3 +1847,225 @@ func test_host_position_matches_sim_after_sealed_arena_placement() -> void:
 	assert_lt(sp.x, 34.0, "the sim moved the placement out of the sealed arena")
 	assert_almost_eq(pb.x, sp.x, 1e-9, "host x follows the sim placement")
 	assert_almost_eq(pb.y, sp.y, 1e-9, "host y follows the sim placement")
+
+
+# --- portal replication over WebSocket ---------------------------------------
+
+class _Remote:
+	extends RefCounted
+	var ws := WebSocketPeer.new()
+	var snap = null  # latest PB.Snapshot
+	var list = null  # latest PB.InstanceList
+	var seq: int = 0
+
+
+func _connect_remote() -> _Remote:
+	var r := _Remote.new()
+	assert_eq(r.ws.connect_to_url("ws://127.0.0.1:%d/ws" % _host.port), OK)
+	assert_true(_pump(r, func() -> bool: return r.ws.get_ready_state() == WebSocketPeer.STATE_OPEN))
+	var hello = PB.ClientMessage.new()
+	hello.new_hello().set_protocol_version(SimConstants.PROTOCOL_VERSION)
+	r.ws.send(hello.to_bytes())
+	var n := _host.players.size() + 1
+	assert_true(_pump(r, func() -> bool: return _host.players.size() == n and _host.players[n - 1].in_sim))
+	return r
+
+
+func _drain(r: _Remote) -> void:
+	r.ws.poll()
+	while r.ws.get_available_packet_count() > 0:
+		var m = PB.ServerMessage.new()
+		if m.from_bytes(r.ws.get_packet()) != PB.PB_ERR.NO_ERRORS:
+			continue
+		if m.has_snapshot():
+			r.snap = m.get_snapshot()
+		elif m.has_instance_list():
+			r.list = m.get_instance_list()
+
+
+func _pump(r: _Remote, pred: Callable) -> bool:
+	for i in range(500):
+		_host.run_tick()
+		_drain(r)
+		if pred.call():
+			return true
+		OS.delay_msec(5)
+	return false
+
+
+## Waits for a snapshot from a tick after now.
+func _fresh_snapshot(r: _Remote):
+	var t := _host.tick
+	assert_true(_pump(r, func() -> bool: return r.snap != null and r.snap.get_tick() > t))
+	return r.snap
+
+
+func _remote_send_interact(r: _Remote, target: int) -> void:
+	r.seq += 1
+	var m = PB.ClientMessage.new()
+	var f = m.new_input()
+	f.set_seq(r.seq)
+	f.set_interact_target_id(target)
+	r.ws.send(m.to_bytes())
+
+
+func _wire_portal(snap, id: int):
+	for pt in snap.get_portals():
+		if pt.get_id() == id:
+			return pt
+	return null
+
+
+func _assert_wire_matches(pt, src: PortalSnapshot) -> void:
+	assert_not_null(pt)
+	if pt == null:
+		return
+	assert_almost_eq(pt.get_x(), src.x, 0.001)
+	assert_almost_eq(pt.get_y(), src.y, 0.001)
+	assert_almost_eq(pt.get_radius(), src.radius, 0.001)
+	var kinds := {PortalSnapshot.KIND_ENTER: PB.PortalKind.ENTER,
+		PortalSnapshot.KIND_EXIT: PB.PortalKind.EXIT,
+		PortalSnapshot.KIND_PLACEHOLDER: PB.PortalKind.PLACEHOLDER}
+	assert_eq(pt.get_kind(), kinds[src.kind])
+	assert_eq(pt.get_dungeon_id(), src.dungeon_id)
+	assert_eq(pt.get_marker_id(), src.marker_id)
+	assert_eq(pt.get_m100(), src.m100)
+	assert_eq(pt.get_base_level(), src.base_level)
+	assert_eq(pt.get_content_level(), src.content_level)
+
+
+func _place_remote(id: int, x: float, y: float) -> void:
+	var p: LobbyHost.HostPlayer = _host._find_player(id)
+	p.instance.sim.place_player(p.sim_id, x, y)
+	_host._sync_position(p, p.instance.sim, p.sim_id)
+
+
+func test_remote_sees_overworld_entrance_fields() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var r := _connect_remote()
+	var portal := _open_portal()
+	_host._sync_portal_records()
+	var pt = _wire_portal(_fresh_snapshot(r), portal.id)
+	_assert_wire_matches(pt, portal)
+	var rec: LobbyHost.PortalRecord = _host._portal_records[_host._portal_key(_host.instances[0], portal.id)]
+	assert_eq(pt.get_capacity(), rec.capacity)
+	assert_eq(pt.get_admitted_count(), 0)
+	assert_false(pt.get_closed())
+	assert_false(pt.get_persistent())
+	assert_eq(pt.get_expire_tick(), rec.created_tick + LobbyHost.ENTRANCE_LIFETIME_TICKS)
+	r.ws.close()
+
+
+func test_remote_inside_dungeon_sees_exit_and_placeholder_only() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var r := _connect_remote()
+	var me: int = _host.players[0].id
+	# Test-only boss marker in the host's packed vault data (removed below).
+	var room: Dictionary = _host.catalog.dungeon("hollowmere_vault").rooms[0]
+	assert_false(room.has("boss_placeholder"))
+	room["boss_placeholder"] = {"id": "test_marker", "name": "Test Marker", "x": 4.0, "y": 4.0}
+	var portal := _open_portal()
+	_place_remote(me, portal.x + 0.5, portal.y)
+	_remote_send_interact(r, portal.id)
+	assert_true(_pump(r, func() -> bool: return not _instance_of(me).is_overworld()))
+	room.erase("boss_placeholder")
+	var inst := _instance_of(me)
+	assert_gt(_clear_vault(me), 0)
+	assert_eq(_exit_portals(inst.sim), 1)
+	var snap = _fresh_snapshot(r)
+	var exits := 0
+	var markers := 0
+	for src in inst.sim.portals():
+		var pt = _wire_portal(snap, src.id)
+		_assert_wire_matches(pt, src)
+		if src.kind == PortalSnapshot.KIND_EXIT:
+			exits += 1
+		elif src.kind == PortalSnapshot.KIND_PLACEHOLDER:
+			markers += 1
+			assert_ne(pt.get_marker_id(), "", "placeholder carries its marker id")
+	assert_gt(exits, 0, "dungeon exit replicated")
+	assert_gt(markers, 0, "boss placeholder replicated")
+	assert_eq(snap.get_portals().size(), inst.sim.portals().size())
+	assert_null(_wire_portal(snap, portal.id), "overworld entrance is not in the dungeon view")
+	r.ws.close()
+
+
+func test_remote_does_not_see_other_instance_portals() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var r := _connect_remote()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var inst := _instance_of(a)
+	assert_false(inst.is_overworld())
+	var snap = _fresh_snapshot(r)
+	for src in inst.sim.portals():
+		assert_null(_wire_portal(snap, src.id), "dungeon portal hidden from overworld viewer")
+	assert_not_null(_wire_portal(snap, portal.id))
+	assert_eq(snap.get_portals().size(), _host.sim.portals().size())
+	r.ws.close()
+
+
+func test_remote_sees_entrance_close_on_expiry_and_removal() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var r := _connect_remote()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	var pt = _wire_portal(_fresh_snapshot(r), portal.id)
+	assert_eq(pt.get_admitted_count(), 1)
+	assert_false(pt.get_closed())
+	var rec: LobbyHost.PortalRecord = _host._portal_records[_host._portal_key(_host.instances[0], portal.id)]
+	rec.created_tick -= LobbyHost.ENTRANCE_LIFETIME_TICKS
+	pt = _wire_portal(_fresh_snapshot(r), portal.id)
+	assert_not_null(pt)
+	assert_true(pt.get_closed(), "expired entrance reported closed")
+	_host.sim._portals.erase(portal)
+	assert_null(_wire_portal(_fresh_snapshot(r), portal.id), "removed entrance disappears")
+	r.ws.close()
+
+
+func test_remote_list_instances() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var r := _connect_remote()
+	var me: int = _host.players[0].id
+	var portal := _open_portal()
+	_place_remote(me, portal.x + 0.5, portal.y)
+	_remote_send_interact(r, portal.id)
+	assert_true(_pump(r, func() -> bool: return not _instance_of(me).is_overworld()))
+	var inst := _instance_of(me)
+	# A second world the remote viewer can neither see an entrance to nor
+	# was ever admitted to.
+	var other := _open_portal()
+	other.x += 3.0
+	var b := _join_near_portal(other)
+	_enter(b, other, 1)
+	var hidden := _instance_of(b)
+	assert_false(hidden.is_overworld())
+	assert_ne(hidden, inst)
+	var m = PB.ClientMessage.new()
+	m.new_list_instances()
+	r.ws.send(m.to_bytes())
+	assert_true(_pump(r, func() -> bool: return r.list != null))
+	var by_index := {}
+	for info in r.list.get_instances():
+		by_index[int(info.get_instance())] = info
+	assert_true(by_index.has(0))
+	assert_true(by_index[0].get_is_default())
+	assert_true(by_index.has(inst.index))
+	assert_false(by_index.has(hidden.index), "unrelated world not listed")
+	var info = by_index[inst.index]
+	assert_false(info.get_is_default())
+	assert_eq(info.get_m100(), portal.m100)
+	assert_eq(info.get_base_level(), portal.base_level)
+	assert_eq(info.get_capacity(), 4)
+	assert_eq(info.get_admitted_count(), 1)
+	assert_eq(info.get_player_count(), 1)
+	assert_false(info.get_closed())
+	assert_eq(info.get_seed(), 0, "seed is never listed")
+	r.ws.close()
