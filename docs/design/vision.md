@@ -297,13 +297,17 @@ Each character is created as **Standard** or **Hardcore**. The mode is fixed for
 - **Pending:** everything picked up or earned outside the Hearth is *pending*. Items carry `pending = true` wherever they are (inventory or equipped). Currency goes into the character's pending wallet. Equipping a pending item is allowed, and it stays pending.
 - **Banking event:** the moment the character's position enters the Hearth zone (portal exit, instance collapse, walking in, or reconnecting into the Hearth), the server clears every pending flag and moves pending currency into the account's banked wallet for that mode. This is one ledger transaction. Trading, salvage, the vendor and the stash exist only in the Hearth, so they only ever touch banked assets.
 - **XP is never pending.** XP is kept the moment it's credited, even if you die later.
+- **Hearth arrivals:** these all land in the Hearth: fresh joins, Standard respawn (§7.2), dungeon exit portals, instance collapse (§6.1 rule 8), the return after linger (§7.3), a reconnect after linger, and different-class joins (content-v0.1 §1). The Hearth connects to the Wilds by a two-way walk-through gate on the Wilds' south edge (content-v0.1 §2.1). Every arrival is a banking event.
 
 ### 7.2 Standard death (soft)
 The server applies these steps in order, in one transaction:
 1. Pending items, equipped or not, are tombstoned with reason `DEATH_PENDING`. Banked items (equipped or in inventory) are kept.
 2. Pending currency moves to the sink.
-3. A respawn fee of `20 × m(Lp)` Glint (real level, not synced) is taken from the banked wallet. If the balance is lower, the fee is the balance, so it never goes below 0.
-4. The character respawns in the Hearth with full HP. Level and XP are kept.
+3. A respawn fee of `20 × m(Lp)` Glint (real level, not synced) is taken from the banked wallet. If the balance is lower, the fee is the balance, so it never goes below 0. The fee is taken once, at the death event, not at respawn.
+4. The character stays dead until it respawns. It respawns in the Hearth with full HP. Level and XP are kept.
+
+- **Join or reconnect while dead:** any join or reconnect of a dead character, whatever the path (token rejoin included), respawns it in the Hearth per step 4 with full HP. It never appears in the Wilds or an instance at full HP. No second fee is taken.
+- **Re-entry:** rule 9 re-entry (§6.1) still works from the Hearth portal board after that respawn.
 
 ### 7.3 Hardcore (permadeath)
 - **Separate realm:** hardcore characters have their own Glint, Echo Dust and Riftstone wallets, their own stash, their own ledger accounts (§8.2) and their own trading pool.
