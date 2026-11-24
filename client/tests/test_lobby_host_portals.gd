@@ -2224,6 +2224,40 @@ func _lingering_setup() -> Array:
 	return [portal, a, p, dsim]
 
 
+func test_class_change_rejoin_while_lingering_never_refills_or_switches() -> void:
+	_host = _new_host()
+	var r := _lingering_setup()
+	var a: int = r[1]
+	var p: LobbyHost.HostPlayer = r[2]
+	var dsim: LocalSim = r[3]
+	var body := dsim.get_player(p.sim_id)
+	var cls := body.class_id
+	var other := "gleamwright" if cls != "gleamwright" else "thornguard"
+	body.hp = maxi(1, body.hp / 2)
+	var hp := body.hp
+	var cd := dsim.ability_cooldown_ticks(p.sim_id)
+	var focus := dsim.focus(p.sim_id)
+	var stamp := body.last_activity_tick
+	var token := _host.remove_local_player(a)
+	assert_true(p.is_lingering())
+	assert_eq(_host.add_local_player(other, token), -1, "no class change in an instance")
+	assert_true(p.is_lingering(), "the linger goes on")
+	body = dsim.get_player(p.sim_id)
+	assert_eq(body.class_id, cls, "class not changed in place")
+	assert_eq(body.hp, hp)
+	assert_eq(dsim.ability_cooldown_ticks(p.sim_id), cd)
+	assert_almost_eq(dsim.focus(p.sim_id), focus, 1e-6)
+	assert_eq(_host.players.size(), 1, "no second body or seat")
+	assert_eq(_host.add_local_player(null, token), a, "same class resumes")
+	body = dsim.get_player(p.sim_id)
+	assert_eq(body.class_id, cls)
+	assert_eq(body.hp, hp, "no HP refill")
+	assert_eq(dsim.ability_cooldown_ticks(p.sim_id), cd, "no cooldown refill")
+	assert_almost_eq(dsim.focus(p.sim_id), focus, 1e-6, "no Focus refill")
+	assert_eq(int(dsim._boss_damage_by.get(p.sim_id, 0)), 42)
+	assert_eq(body.last_activity_tick, stamp)
+
+
 func test_linger_keeps_body_still_in_the_instance() -> void:
 	_host = _new_host()
 	var r := _lingering_setup()
