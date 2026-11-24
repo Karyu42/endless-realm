@@ -238,9 +238,22 @@ func test_p2_and_p3_thresholds() -> void:
 
 
 func _hold_fire(sim: LocalSim, pid: int, seq: int) -> void:
+	_pulse_fire(sim, pid, seq, true)
+
+
+func _pulse_fire(sim: LocalSim, pid: int, seq: int, fire_held: bool) -> void:
 	var p := sim.get_player(pid)
 	var aim: float = p.aim if p != null else 0.0
-	sim.apply_input(pid, InputIntent.from_raw(seq, 0.0, 0.0, aim, true))
+	sim.apply_input(pid, InputIntent.from_raw(seq, 0.0, 0.0, aim, fire_held))
+
+
+func _idle_steps(sim: LocalSim, steps: int, keep_alive: Array = []) -> void:
+	for _i in range(steps):
+		for id in keep_alive:
+			var occupant := sim.get_player(int(id))
+			if occupant != null:
+				occupant.hp = maxi(occupant.hp, 200)
+		sim.step()
 
 
 func _add_at(sim: LocalSim, x: float, y: float) -> int:
@@ -315,13 +328,13 @@ func test_boss_loot_follows_rule_7() -> void:
 	var pid := _pid(sim)
 	var w := _warden(sim)
 	# A nearby fighter who damages the Warden but stays idle is not eligible.
-	for _i in range(8):
-		sim.step()
+	# The join seed counts as activity, so wait past the 600-tick window.
+	_idle_steps(sim, LocalSim.ACTIVITY_WINDOW_TICKS + 2, [pid])
 	sim.hurt_enemy(w.id, 200, pid)
 	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid)
 	sim.step()
 	assert_true(sim.boss_defeated())
-	assert_eq(sim.snapshot().pending_glint, 0, "damage without recent non-idle input is not enough")
+	assert_eq(sim.snapshot().pending_glint, 0, "damage without recent activity is not enough")
 	assert_eq(sim.snapshot().pending_riftstone, 0)
 	assert_eq(sim.snapshot().ground_drops.size(), 0)
 
@@ -612,15 +625,17 @@ func test_rule_7_activity_tracks_received_input_frames() -> void:
 	sim.step()
 	var w := _warden(sim)
 	assert_not_null(w)
-	# One received frame from A, then silence. B keeps sending frames.
+	# One fire rising edge from A, then silence. B keeps pulsing fire
+	# (a rising edge every other tick) so held fire alone is not what
+	# keeps B eligible.
 	_hold_fire(sim, pid_a, 1)
-	_hold_fire(sim, pid_b, 1)
+	_pulse_fire(sim, pid_b, 1, true)
 	sim.step()
 	sim.hurt_enemy(w.id, 200, pid_a)
 	sim.hurt_enemy(w.id, 200, pid_b)
-	var window: int = LocalSim.NON_IDLE_WINDOW_TICKS
+	var window: int = LocalSim.ACTIVITY_WINDOW_TICKS
 	for i in range(window + 2):
-		_hold_fire(sim, pid_b, i + 2)
+		_pulse_fire(sim, pid_b, i + 2, i % 2 == 0)
 		sim.step()
 		var pa := sim.get_player(pid_a)
 		var pb := sim.get_player(pid_b)
@@ -628,7 +643,7 @@ func test_rule_7_activity_tracks_received_input_frames() -> void:
 			pa.hp = maxi(pa.hp, 200)
 		if pb != null:
 			pb.hp = maxi(pb.hp, 200)
-	_hold_fire(sim, pid_b, window + 20)
+	_pulse_fire(sim, pid_b, window + 20, true)
 	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid_b)
 	sim.step()
 	assert_true(sim.boss_defeated())
@@ -926,3 +941,143 @@ func test_same_tick_remove_then_add_player_into_a_sealed_arena_lands_outside_the
 	assert_true(sim.player_ids().has(pid), "the same-tick leave is cancelled")
 	assert_true(_in_wick_kennels(sim.get_player(partner)))
 	_assert_sealed_placement_outside(sim, sim.get_player(pid), 2, max_hp, hp)
+
+
+func test_held_fire_for_thirty_seconds_is_idle() -> void:
+	var sim := _vault()
+	var pid := _pid(sim)
+	var w := _warden(sim)
+	_hold_fire(sim, pid, 1)
+	sim.step()
+	sim.hurt_enemy(w.id, 200, pid)
+	# Keep fire held (no rising edge) past the 30 s window.
+	for i in range(LocalSim.ACTIVITY_WINDOW_TICKS + 2):
+		_hold_fire(sim, pid, i + 2)
+		var p := sim.get_player(pid)
+		if p != null:
+			p.hp = maxi(p.hp, 200)
+		sim.step()
+	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid)
+	sim.step()
+	assert_true(sim.boss_defeated())
+	assert_eq(sim.get_player(pid).pending_glint, 0, "held fire alone is idle")
+	assert_eq(sim.get_player(pid).pending_riftstone, 0)
+
+
+func test_aim_change_of_nine_degrees_is_idle_and_ten_is_active() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 5.0, 5.0, _catalog())
+	var pid := _pid(sim)
+	assert_eq(sim.get_player(pid).last_activity_tick, 0)
+	sim.apply_input(pid, InputIntent.from_raw(1, 0.0, 0.0, deg_to_rad(9.0), false))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, 0, "9° is idle")
+	sim.apply_input(pid, InputIntent.from_raw(2, 0.0, 0.0, deg_to_rad(10.0), false))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, 1, "10° is active")
+
+
+func test_aim_wrap_from_359_to_9_counts_as_ten_degrees() -> void:
+	# A fire rising edge stamps and records 359° as the aim reference
+	# (359° is only 1° from the 0 seed the short way).
+	var sim := LocalSim.new(SimConfig.new(), 5.0, 5.0, _catalog())
+	var pid := _pid(sim)
+	sim.apply_input(pid, InputIntent.from_raw(1, 0.0, 0.0, deg_to_rad(359.0), true))
+	sim.step()
+	assert_almost_eq(sim.get_player(pid).activity_aim_ref, deg_to_rad(359.0), 1e-6)
+	sim.apply_input(pid, InputIntent.from_raw(2, 0.0, 0.0, deg_to_rad(9.0), true))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, 1, "359° to 9° is 10°")
+
+
+func test_walking_into_a_wall_is_idle() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 11.0 - SimConstants.MOVE_EPS, 8.5, _catalog())
+	var pid := _pid(sim)
+	sim.set_blocking_tile(11, 8, true)
+	var p := sim.get_player(pid)
+	var x0: float = p.x
+	var stamped: int = p.last_activity_tick
+	for i in range(20):
+		sim.apply_input(pid, InputIntent.from_raw(i + 1, 1.0, 0.0, 0.0, false))
+		sim.step()
+	p = sim.get_player(pid)
+	assert_almost_eq(p.x, x0, 1e-6, "blocked by the wall")
+	assert_eq(p.last_activity_tick, stamped, "a wall push does not stamp")
+	assert_lt(p.activity_path, 1.0)
+
+
+func test_small_steps_adding_up_to_one_tile_are_active() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 5.0, 5.0, _catalog())
+	var pid := _pid(sim)
+	# 5 tiles/s at 20 Hz is 0.25 tiles/tick; three steps are 0.75, four reach 1.
+	for i in range(3):
+		sim.apply_input(pid, InputIntent.from_raw(i + 1, 1.0, 0.0, 0.0, false))
+		sim.step()
+		assert_eq(sim.get_player(pid).last_activity_tick, 0, "under 1 tile is idle")
+	sim.apply_input(pid, InputIntent.from_raw(4, 1.0, 0.0, 0.0, false))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, 3, "1 tile of actual path stamps")
+
+
+func test_fire_rising_edge_is_active() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 5.0, 5.0, _catalog())
+	var pid := _pid(sim)
+	sim.apply_input(pid, InputIntent.from_raw(1, 0.0, 0.0, 0.0, true))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, 0, "released to pressed stamps")
+	sim.apply_input(pid, InputIntent.from_raw(2, 0.0, 0.0, 0.0, true))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, 0, "held fire does not stamp again")
+	sim.apply_input(pid, InputIntent.from_raw(3, 0.0, 0.0, 0.0, false))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, 0, "release does not stamp")
+	sim.apply_input(pid, InputIntent.from_raw(4, 0.0, 0.0, 0.0, true))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, 3, "a later rising edge stamps")
+
+
+func test_refused_ability_is_idle() -> void:
+	var sim := LocalSim.new(SimConfig.new(), 5.0, 5.0, _catalog())
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, "thornguard"))
+	sim.step()
+	# Accepted cast stamps.
+	sim.apply_input(pid, InputIntent.from_raw(1, 0.0, 0.0, 0.0, false, false, 0, 0, true))
+	sim.step()
+	var stamped: int = sim.get_player(pid).last_activity_tick
+	assert_gt(stamped, 0)
+	# Still on cooldown: the press is refused and must not stamp.
+	sim.apply_input(pid, InputIntent.from_raw(2, 0.0, 0.0, 0.0, false, false, 0, 0, true))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, stamped, "a refused ability is idle")
+	# Interact alone does not stamp.
+	sim.apply_input(pid, InputIntent.from_raw(3, 0.0, 0.0, 0.0, false, true))
+	sim.step()
+	assert_eq(sim.get_player(pid).last_activity_tick, stamped, "interact does not stamp")
+
+
+func test_activity_window_is_inclusive_at_kill_tick_minus_600() -> void:
+	var sim := _vault()
+	var pid := _pid(sim)
+	var w := _warden(sim)
+	sim.hurt_enemy(w.id, 200, pid)
+	var p := sim.get_player(pid)
+	var kill_tick: int = sim._tick
+	p.last_activity_tick = kill_tick - LocalSim.ACTIVITY_WINDOW_TICKS
+	sim.hurt_enemy(w.id, sim.get_enemy(w.id).hp, pid)
+	sim.step()
+	assert_true(sim.boss_defeated())
+	assert_eq(p.pending_glint, 30, "exactly kill_tick - 600 is eligible")
+	assert_eq(p.pending_riftstone, 4)
+
+	var sim2 := _vault()
+	var pid2 := _pid(sim2)
+	var w2 := _warden(sim2)
+	sim2.hurt_enemy(w2.id, 200, pid2)
+	var p2 := sim2.get_player(pid2)
+	var kill2: int = sim2._tick
+	p2.last_activity_tick = kill2 - LocalSim.ACTIVITY_WINDOW_TICKS - 1
+	sim2.hurt_enemy(w2.id, sim2.get_enemy(w2.id).hp, pid2)
+	sim2.step()
+	assert_true(sim2.boss_defeated())
+	assert_eq(p2.pending_glint, 0, "kill_tick - 601 is not eligible")
+	assert_eq(p2.pending_riftstone, 0)

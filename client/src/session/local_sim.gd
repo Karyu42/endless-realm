@@ -27,12 +27,14 @@ const BOSS_AIM_SEED_DOMAIN: int = 0x4241494D
 const BOSS_POOL_SEED_DOMAIN: int = 0x42504F4C
 ## vision §3.5 "in range" for Wilds packs and dungeon-room doorway shots, tiles.
 const N_PEAK_RANGE_TILES: float = 12.0
-## vision §6.1 rule 7: proximity and non-idle window.
+## vision §6.1 rule 7: proximity and activity window (30 s at 20 Hz).
 const BOSS_PROXIMITY_TILES: float = 12.0
-const NON_IDLE_WINDOW_TICKS: int = 600
+const ACTIVITY_WINDOW_TICKS: int = 600
+const NON_IDLE_WINDOW_TICKS: int = ACTIVITY_WINDOW_TICKS
+## Aim delta, in degrees, that stamps activity. Wrap-around smallest angle.
+const ACTIVITY_AIM_DEG: float = 10.0
 ## vision §6.1 rule 6a: after an empty-arena reset the boss is untouched for 5 s.
 const BOSS_RESET_UNTOUCHED_TICKS: int = 100
-const NON_IDLE_AIM_RAD: float = 0.017453292519943295  # 1 degree
 
 var _config: SimConfig
 var _catalog: DataCatalog
@@ -230,6 +232,10 @@ func remove_player(id: int) -> void:
 
 ## Store the latest intent for this player. Nothing is applied until step().
 ## The host calls this at most once per player per tick.
+## `is_new_frame` is kept for API compatibility (the host passes it). Rule 7
+## activity no longer depends on it: a replayed held input produces no fire
+## rising edge and no aim or position change, so it cannot stamp
+## last_activity_tick.
 func apply_input(id: int, intent: InputIntent, is_new_frame: bool = true) -> void:
 	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
 	if p == null or intent == null:
@@ -243,9 +249,9 @@ func apply_input(id: int, intent: InputIntent, is_new_frame: bool = true) -> voi
 		p.intent.ability_pressed = true
 	if p.intent.interact_target_id == 0 and pending_target != 0:
 		p.intent.interact_target_id = pending_target
-	# rule 7 activity tracks received input frames
-	if is_new_frame:
-		_note_non_idle(p, _tick)
+	# is_new_frame is accepted and ignored: activity is stamped in step()
+	# from aim, actual path, an accepted ability, or a fire rising edge.
+	var _is_new_frame: bool = is_new_frame
 
 
 ## Solo / existing WorldSource path: apply to the default player (id 1, or
@@ -309,6 +315,7 @@ func _make_player(id: int, x: float, y: float, character: Variant) -> SimPlayerS
 	# Covers add_player({x,y}) and a default spawn; a sealed-arena point is
 	# relocated before the player enters the roster.
 	_set_placed_position(p, p.x, p.y)
+	_seed_activity(p)
 	return p
 
 
@@ -524,7 +531,8 @@ func step() -> void:
 		if p.flash_ticks > 0:
 			p.flash_ticks -= 1
 		_apply_movement(p)
-		_apply_ability(id, p.intent, sim_tick)
+		var accepted_ability: bool = _apply_ability(id, p.intent, sim_tick)
+		_note_activity(p, accepted_ability, sim_tick)
 		_apply_fire(p, sim_tick)
 	for e in _enemies:
 		if e.flash_ticks > 0:
@@ -1546,6 +1554,7 @@ func configure_dungeon(
 		_spawn_boss_placeholders(def)
 	for id in _sorted_ids:
 		_remember_entry_persistent(_players[id])
+		_seed_activity(_players[id])
 
 
 ## Copy a character into this instance at (x, y) after a portal transfer.
@@ -1584,6 +1593,7 @@ func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
 		st.ally_ability_heals = carry.ability.ally_ability_heals
 		st.reseed(_world_seed, p.id)
 	_remember_entry_persistent(p)
+	_seed_activity(p)
 
 
 func player_max_hp() -> int:
@@ -1901,25 +1911,25 @@ func _tick_ability_clocks() -> void:
 		st.tick_clocks()
 
 
-func _apply_ability(player_id: int, intent: InputIntent, _sim_tick: int) -> void:
+func _apply_ability(player_id: int, intent: InputIntent, _sim_tick: int) -> bool:
 	if intent == null or not intent.ability_pressed:
-		return
+		return false
 	# seq 0 is never applied (host-api rejects it; game_session skips 0 on wrap).
 	if intent.seq == 0:
-		return
+		return false
 	var st := _ability_of(player_id)
 	if intent.seq == st.last_ability_seq:
-		return
+		return false
 	st.last_ability_seq = intent.seq
 	if st.ability_def == null:
-		return
+		return false
 	var caster: SimPlayerState = _players.get(player_id, null) as SimPlayerState
 	if caster != null and caster.hp <= 0:
-		return
+		return false
 	if st.cooldown_ticks > 0:
-		return
+		return false
 	if st.focus + 1e-9 < float(st.ability_def.focus_cost):
-		return
+		return false
 	st.focus -= float(st.ability_def.focus_cost)
 	st.cooldown_ticks = st.ability_def.cooldown_ticks
 	var aid: String = st.ability_def.id
@@ -1932,6 +1942,7 @@ func _apply_ability(player_id: int, intent: InputIntent, _sim_tick: int) -> void
 	elif aid == "slipstep":
 		_apply_slipstep(player_id, st)
 		st.invuln_ticks = st.ability_def.invuln_ticks
+	return true
 
 
 func _apply_kindle_pulse(player_id: int, st: PlayerAbilityState) -> void:
@@ -2797,25 +2808,47 @@ func _is_boss_eligible(e: EnemyState, player_id: int, sim_tick: int) -> bool:
 	if not contributed:
 		return false
 	var p: SimPlayerState = _players.get(player_id, null) as SimPlayerState
-	if p == null or p.last_non_idle_tick < 0:
+	if p == null:
 		return false
-	return sim_tick - p.last_non_idle_tick <= NON_IDLE_WINDOW_TICKS
+	# Inclusive window: last_activity_tick >= kill_tick - 600.
+	return p.last_activity_tick >= sim_tick - ACTIVITY_WINDOW_TICKS
 
 
-func _note_non_idle(p: SimPlayerState, sim_tick: int) -> void:
-	var intent: InputIntent = p.intent
-	var non_idle: bool = intent.fire_held or intent.ability_pressed or intent.interact_pressed
-	if p.idle_sample_ready:
-		if intent.move_x != p.idle_move_x or intent.move_y != p.idle_move_y:
-			non_idle = true
-		if absf(angle_difference(intent.aim, p.idle_aim)) >= NON_IDLE_AIM_RAD:
-			non_idle = true
-	p.idle_move_x = intent.move_x
-	p.idle_move_y = intent.move_y
-	p.idle_aim = intent.aim
-	p.idle_sample_ready = true
-	if non_idle:
-		p.last_non_idle_tick = sim_tick
+## Seed the rule 7 activity stamp on sim join or instance entry. The stamp
+## itself is never unset; the aim reference and accumulated path start at 0.
+func _seed_activity(p: SimPlayerState) -> void:
+	if p == null:
+		return
+	p.last_activity_tick = _tick
+	p.activity_aim_ref = 0.0
+	p.activity_path = 0.0
+	p.activity_fire_held = false
+
+
+func _stamp_activity(p: SimPlayerState, sim_tick: int) -> void:
+	p.last_activity_tick = sim_tick
+	p.activity_aim_ref = p.aim
+	p.activity_path = 0.0
+
+
+## Smallest aim delta in degrees, with wrap-around: min(|a-b|, 360-|a-b|).
+func _aim_delta_degrees(from_rad: float, to_rad: float) -> float:
+	return absf(rad_to_deg(angle_difference(from_rad, to_rad)))
+
+
+## Stamp last_activity_tick when this tick has a qualifying event. Held fire,
+## a wall push, interact, a sub-10° aim change, and a refused ability do not.
+func _note_activity(p: SimPlayerState, accepted_ability: bool, sim_tick: int) -> void:
+	var dx: float = p.x - p.prev_x
+	var dy: float = p.y - p.prev_y
+	p.activity_path += sqrt(dx * dx + dy * dy)
+	var fire_edge: bool = (not p.activity_fire_held) and p.intent.fire_held
+	p.activity_fire_held = p.intent.fire_held
+	if accepted_ability or fire_edge or p.activity_path >= 1.0:
+		_stamp_activity(p, sim_tick)
+		return
+	if _aim_delta_degrees(p.activity_aim_ref, p.aim) >= ACTIVITY_AIM_DEG - 1e-6:
+		_stamp_activity(p, sim_tick)
 
 
 func _pattern_id_for_fire(e: EnemyState) -> String:
