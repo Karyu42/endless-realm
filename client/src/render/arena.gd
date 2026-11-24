@@ -57,6 +57,7 @@ var _portal_free: Array[Polygon2D] = []
 var _loot_btn: Button
 var _prompt: Label
 var _lobby_ui: LobbyUiSettings
+var _instance_list: ItemList
 var _ability: Label
 var _floats: Node2D
 var _last_player_hp: int = -1
@@ -193,6 +194,11 @@ func _ready() -> void:
 	vbox.add_child(_ability)
 	vbox.add_child(_prompt)
 	vbox.add_child(_loot_btn)
+	_instance_list = ItemList.new()
+	_instance_list.name = "InstanceList"
+	_instance_list.visible = false
+	_instance_list.custom_minimum_size = Vector2(0, 72)
+	vbox.add_child(_instance_list)
 	margin.add_child(vbox)
 	layer.add_child(margin)
 	add_child(layer)
@@ -600,7 +606,7 @@ func _nearest_prompt_interactable_id() -> int:
 			best_d = d
 			best_id = bag.id
 	for portal in snap.portals:
-		if not portal.is_interactable():
+		if not portal.is_interactable() or not portal.appears_open():
 			continue
 		var d: float = SimConstants.interact_distance(snap.player_x, snap.player_y, portal.x, portal.y)
 		if GameSession.catalog.scaling.in_prompt_range(d) and d <= best_d:
@@ -618,6 +624,22 @@ func _nearest_portal() -> PortalSnapshot:
 		if portal.id == id and portal.is_interactable():
 			return portal
 	return null
+
+
+func _nearest_portal_for_prompt() -> PortalSnapshot:
+	var snap := GameSession.curr_snapshot
+	if snap == null:
+		return null
+	var best: PortalSnapshot = null
+	var best_d: float = INF
+	for portal in snap.portals:
+		if not portal.is_interactable():
+			continue
+		var d: float = SimConstants.interact_distance(snap.player_x, snap.player_y, portal.x, portal.y)
+		if GameSession.catalog.scaling.in_prompt_range(d) and d < best_d:
+			best_d = d
+			best = portal
+	return best
 
 
 func _bag_in_range() -> bool:
@@ -663,12 +685,17 @@ func _update_hud() -> void:
 		_ability.set_meta("cooldown_frac", _cd_frac)
 	else:
 		_ability.text = "%s  Ready  Focus %d / %d" % [ability_name, focus_show, snap.player_focus_max]
-	var portal := _nearest_portal()
+	var portal := _nearest_portal_for_prompt()
 	var err_text: String = GameSession.portal_error_text
 	if portal != null:
 		var m_label: String = "×%.2f" % (float(portal.m100) / 100.0)
 		if portal.kind == PortalSnapshot.KIND_ENTER:
-			_prompt.text = "E to enter %s  ·  E%d  %s" % [portal.dungeon_name, portal.content_level, m_label]
+			if portal.appears_full() and _lobby_ui != null and _lobby_ui.is_valid():
+				_prompt.text = _lobby_ui.text("portal_full")
+			elif not portal.appears_open() and _lobby_ui != null and _lobby_ui.is_valid():
+				_prompt.text = _lobby_ui.text("portal_closed")
+			else:
+				_prompt.text = "E to enter %s  ·  E%d  %s" % [portal.dungeon_name, portal.content_level, m_label]
 			_loot_btn.text = "Enter"
 		else:
 			_prompt.text = "E to leave %s" % portal.dungeon_name
@@ -686,6 +713,21 @@ func _update_hud() -> void:
 		_loot_btn.text = "Loot"
 	_loot_btn.visible = false
 	_sticks.interact_available = _sticks.using_touch and _bag_in_range()
+	_refresh_instance_list()
+
+
+func _refresh_instance_list() -> void:
+	if _instance_list == null:
+		return
+	_instance_list.clear()
+	var client: LobbyClient = GameSession.lobby_client
+	if client == null or client.instances.is_empty() or _lobby_ui == null or not _lobby_ui.is_valid():
+		_instance_list.visible = false
+		return
+	for info in client.instances:
+		if info is Dictionary:
+			_instance_list.add_item(InstanceRowFormat.format(info, _lobby_ui))
+	_instance_list.visible = _instance_list.item_count > 0
 
 
 func _bag_color(kind: String) -> Color:
@@ -750,6 +792,8 @@ func _update_portal_views() -> void:
 			color = EXIT_COLOR
 		elif kind == PortalSnapshot.KIND_PLACEHOLDER:
 			color = PLACEHOLDER_COLOR
+		elif kind == PortalSnapshot.KIND_ENTER and not portal.appears_open():
+			color = Color(color.r, color.g, color.b, 0.4)
 		var view := _acquire_view(_portals, _portal_views, _portal_free, id, color, r, kind)
 		view.position = Vector2(portal.x * SimConstants.TILE_PX, portal.y * SimConstants.TILE_PX)
 		if kind == PortalSnapshot.KIND_PLACEHOLDER:
