@@ -2743,3 +2743,41 @@ func test_practice_class_change_arrival_keeps_the_entry_hp() -> void:
 	assert_eq(_sp(a).class_id, "gleamwright")
 	assert_eq(_sp(a).hp, 7, "practice restores entry HP before the class-change arrival")
 	assert_eq(_host.death_events, 1)
+
+
+func _fire_at_neighbour(a: int, b: int) -> int:
+	var pa := _host._find_player(a)
+	var psim: LocalSim = pa.instance.sim
+	var sa := _sp(a)
+	psim.place_player(_host._find_player(b).sim_id, sa.x + 2.0, sa.y)
+	psim.set_focus(pa.sim_id, float(psim.focus_max(pa.sim_id)))
+	psim.set_ability_cooldown_ticks(pa.sim_id, 0)
+	var hp_b := _sp(b).hp
+	var shots := 0
+	var seq0 := pa.seq + 1
+	for i in range(40):
+		_host.submit_local_input(a, InputIntent.from_raw(seq0 + i, 0.0, 0.0, 0.0, true, false, 0, 0, i == 0))
+		_host.run_tick()
+		for s in psim.projectiles():
+			if s.owner_id == pa.sim_id:
+				shots += 1
+	assert_gt(shots, 0, "the shots were actually fired")
+	assert_eq(_sp(b).hp, hp_b, "player fire and abilities never damage players")
+	return shots
+
+
+func test_no_pvp_in_the_wilds_or_a_dungeon() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	var b := _join_near_portal(portal)
+	_ticks(2)
+	_fire_at_neighbour(a, b)
+	_place_in_wilds(a, portal.x + 0.5, portal.y)
+	_place_in_wilds(b, portal.x + 0.5, portal.y)
+	_enter(a, portal, _host._find_player(a).seq + 1)
+	_enter(b, portal, _host._find_player(b).seq + 1)
+	_ticks(2)
+	assert_true(_instance_of(a).is_dungeon())
+	assert_same(_instance_of(a), _instance_of(b))
+	_fire_at_neighbour(a, b)
