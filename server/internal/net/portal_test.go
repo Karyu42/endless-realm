@@ -70,8 +70,8 @@ func TestOpenPortalWireValidation(t *testing.T) {
 			if err == nil {
 				t.Fatalf("want Error (harness has no portal runtime), got %#v", msg.Payload)
 			}
-			if err.GetCode() == protocolv1.ErrorCode_INVALID_MULTIPLIER {
-				t.Fatalf("valid m100 %d rejected as INVALID_MULTIPLIER: %s", m, err.GetReason())
+			if err.GetCode() != protocolv1.ErrorCode_COMMAND_NOT_ALLOWED {
+				t.Fatalf("valid m100 %d: want COMMAND_NOT_ALLOWED, got %v: %s", m, err.GetCode(), err.GetReason())
 			}
 		})
 	}
@@ -87,6 +87,32 @@ func TestOpenPortalWireValidation(t *testing.T) {
 			err := msg.GetError()
 			if err == nil || err.GetCode() != protocolv1.ErrorCode_INVALID_MULTIPLIER {
 				t.Fatalf("m100=%d: want INVALID_MULTIPLIER, got %#v", m, msg.Payload)
+			}
+		})
+	}
+}
+
+func TestReservedInstanceCommandsNotAllowed(t *testing.T) {
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	clk := clock.NewFake(time.Unix(1, 0))
+	hs, inst, _ := startTestServer(t, clk, 1, 100)
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go inst.Run(runCtx)
+	clk.BlockUntilWaiters(1)
+
+	cases := map[string]*protocolv1.ClientMessage{
+		"join":  {Payload: &protocolv1.ClientMessage_JoinInstance{JoinInstance: &protocolv1.JoinInstance{Instance: 2}}},
+		"leave": {Payload: &protocolv1.ClientMessage_LeaveInstance{LeaveInstance: &protocolv1.LeaveInstance{}}},
+	}
+	for name, cm := range cases {
+		t.Run(name, func(t *testing.T) {
+			conn := handshakeConn(t, ctx, hs.URL)
+			writeClient(t, ctx, conn, cm)
+			msg := readIgnoringSnapshots(t, ctx, conn)
+			if e := msg.GetError(); e == nil || e.GetCode() != protocolv1.ErrorCode_COMMAND_NOT_ALLOWED {
+				t.Fatalf("%s: want COMMAND_NOT_ALLOWED, got %#v", name, msg.Payload)
 			}
 		})
 	}

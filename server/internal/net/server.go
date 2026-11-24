@@ -22,9 +22,13 @@ import (
 
 const handshakeTimeout = 5 * time.Second
 
-// errPortalRuntime is returned for valid portal commands. The Go process is
-// a test harness; portal runtime lives in the Godot host.
+// errPortalRuntime is returned for ListInstances. The Go process is a test
+// harness; portal runtime lives in the Godot host.
 var errPortalRuntime = fmt.Errorf("portal runtime is not implemented on the Go test harness")
+
+// errCommandNotAllowed is returned for reserved commands that are refused by
+// design (vision §6.1 rule 11): OpenPortal, JoinInstance and LeaveInstance.
+var errCommandNotAllowed = errors.New("command is not allowed")
 
 // Server is the HTTP + WebSocket front door to the process-default instance.
 type Server struct {
@@ -262,10 +266,11 @@ func (s *Server) handleClient(id uint64, cm *protocolv1.ClientMessage) (*protoco
 		if err := instance.ValidateM100U32(p.OpenPortal.GetM100()); err != nil {
 			return nil, err
 		}
-		return nil, errPortalRuntime
+		return nil, errCommandNotAllowed
 	case *protocolv1.ClientMessage_JoinInstance,
-		*protocolv1.ClientMessage_LeaveInstance,
-		*protocolv1.ClientMessage_ListInstances:
+		*protocolv1.ClientMessage_LeaveInstance:
+		return nil, errCommandNotAllowed
+	case *protocolv1.ClientMessage_ListInstances:
 		return nil, errPortalRuntime
 	default:
 		return nil, fmt.Errorf("expected input or portal command after handshake")
@@ -338,6 +343,8 @@ func errorMsg(err error) *protocolv1.ServerMessage {
 	reason := err.Error()
 	if errors.Is(err, instance.ErrInvalidMultiplier) {
 		code = protocolv1.ErrorCode_INVALID_MULTIPLIER
+	} else if errors.Is(err, errCommandNotAllowed) {
+		code = protocolv1.ErrorCode_COMMAND_NOT_ALLOWED
 	}
 	return &protocolv1.ServerMessage{
 		Payload: &protocolv1.ServerMessage_Error{Error: &protocolv1.ErrorReply{Code: code, Reason: reason}},
