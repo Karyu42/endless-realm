@@ -113,6 +113,10 @@ class HostConn:
 ## Each has its own LocalSim, ticked once per host tick.
 class HostInstance:
 	extends RefCounted
+	enum Kind { WILDS, HEARTH, DUNGEON }
+	var kind: Kind = Kind.WILDS
+	## Stable lobby id -> sim id mapping for the public Hearth instance.
+	var sim_ids: Dictionary = {}
 	var index: int = 0
 	var sim: LocalSim
 	var dungeon_id: String = ""
@@ -130,7 +134,11 @@ class HostInstance:
 	var capacity: int = 0
 	var admitted: Dictionary = {}  # lobby player id -> true
 	func is_overworld() -> bool:
-		return portal_key == ""
+		return kind == Kind.WILDS
+	func is_hearth() -> bool:
+		return kind == Kind.HEARTH
+	func is_dungeon() -> bool:
+		return kind == Kind.DUNGEON
 
 
 ## Admission history outlives the running sim. A closed entrance id never
@@ -264,6 +272,13 @@ const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
 var _portal_records: Dictionary = {}  # source instance / entrance -> PortalRecord
 var _next_instance_index: int = 1
+var hearth: HostInstance
+var _wilds_gate_id: int = 0
+var _hearth_gate_id: int = 0
+const GATE_RADIUS := 1.0
+const HEARTH_SIZE := 16.0
+const HEARTH_GATE := Vector2(8.0, 2.0)
+const HEARTH_ARRIVAL := Vector2(8.0, 4.0)
 var _instance_by_portal: Dictionary = {}  # portal_key -> HostInstance
 var portal_rejections: int = 0
 var catalog: DataCatalog
@@ -343,6 +358,7 @@ func _init(config: SimConfig = null) -> void:
 	ow.grants_persistent = true  # the overworld keeps what players earn
 	instances.append(ow)
 	_configure_sim()
+	_create_hearth()
 	interact_validator.resolver = _resolve_bag
 	on_interact = _forward_interact
 	# Replaced in start(); lets a not-yet-listening host tick local players.
@@ -353,6 +369,99 @@ func _configure_sim() -> void:
 	sim.set_bounds(0.0, 0.0, arena_size, arena_size)
 	sim.set_world_seed(instance_seed)
 	sim.set_lobby_settings(_settings)
+	if _wilds_gate_id != 0:
+		var gate := sim.portal_by_id(_wilds_gate_id)
+		gate.x = arena_size * 0.5
+		gate.y = arena_size - GATE_RADIUS
+
+
+## A permanent safe zone, separate from both the Wilds and dungeon slices.
+## No combat content is configured here. Automatic arrival paths and banking
+## are separate follow-ups; only the gate and test hook enter it in this PR.
+func _create_hearth() -> void:
+	hearth = HostInstance.new()
+	hearth.kind = HostInstance.Kind.HEARTH
+	hearth.index = _next_instance_index
+	_next_instance_index += 1
+	hearth.grants_persistent = true
+	hearth.sim = LocalSim.new(_config, HEARTH_ARRIVAL.x, HEARTH_ARRIVAL.y, catalog)
+	hearth.sim.remove_player(1)
+	var floor_ok := hearth.sim.set_id_floor(hearth.index * INSTANCE_ID_BLOCK)
+	assert(floor_ok, "the Hearth id block fits the entity id range")
+	hearth.sim.configure_zone(LocalSim.ZONE_HEARTH)
+	hearth.sim.set_bounds(0.0, 0.0, HEARTH_SIZE, HEARTH_SIZE)
+	hearth.sim.set_lobby_settings(_settings)
+	# The Wilds gate id is taken from the top of the overworld id block so it
+	# never shifts the shared allocator that issues lobby player ids.
+	_wilds_gate_id = _add_zone_gate(sim, Vector2(arena_size * 0.5, arena_size - GATE_RADIUS), INSTANCE_ID_BLOCK - 1)
+	_hearth_gate_id = _add_zone_gate(hearth.sim, HEARTH_GATE, hearth.sim.alloc_player_id())
+
+
+## Dungeons and the Wilds stay in `instances` (index order, teardown and
+## load-test spread); the permanent Hearth is stepped and listed with them.
+func _all_instances() -> Array[HostInstance]:
+	var out: Array[HostInstance] = instances.duplicate()
+	if hearth != null:
+		out.append(hearth)
+	return out
+
+
+static func _add_zone_gate(psim: LocalSim, at: Vector2, id: int) -> int:
+	var gate := PortalSnapshot.new()
+	gate.id = id
+	gate.x = at.x
+	gate.y = at.y
+	gate.radius = GATE_RADIUS
+	# Reuse the public EXIT shape; host routing distinguishes this exact
+	# portal id and source instance. No protocol or dungeon admission change.
+	gate.kind = PortalSnapshot.KIND_EXIT
+	gate.persistent = true
+	gate.grants_persistent = true
+	psim.add_portal(gate)
+	return gate.id
+
+
+## Test hook: arrivals used by joins, deaths, exits and class changes have
+## intentionally not been changed yet.
+func place_in_hearth_for_test(player_id: int) -> bool:
+	var p := _find_player(player_id)
+	return p != null and not p.is_lingering() and _enter_hearth(p)
+
+
+func _enter_hearth(p: HostPlayer) -> bool:
+	if p.instance == hearth:
+		return false
+	if not hearth.sim_ids.has(p.id):
+		hearth.sim_ids[p.id] = hearth.sim.alloc_player_id()
+	return _move_player(p, hearth, int(hearth.sim_ids[p.id]), HEARTH_ARRIVAL.x, HEARTH_ARRIVAL.y)
+
+
+func _is_zone_gate(source: HostInstance, portal_id: int) -> bool:
+	return (source.is_overworld() and portal_id == _wilds_gate_id) \
+			or (source == hearth and portal_id == _hearth_gate_id)
+
+
+func _walk_zone_gates() -> void:
+	for p in players:
+		if p.is_lingering() or not p.in_sim:
+			continue
+		var gate_id := _wilds_gate_id if p.instance.is_overworld() else _hearth_gate_id
+		if not _is_zone_gate(p.instance, gate_id):
+			continue
+		var gate := p.instance.sim.portal_by_id(gate_id)
+		var sp := p.instance.sim.get_player(p.sim_id)
+		if gate == null or sp == null or sp.hp <= 0:
+			continue
+		if Vector2(sp.x, sp.y).distance_to(Vector2(gate.x, gate.y)) <= gate.radius:
+			_cross_zone_gate(p)
+
+
+func _cross_zone_gate(p: HostPlayer) -> void:
+	if p.instance == hearth:
+		# Arrive clear of the walk-through trigger, so it cannot bounce.
+		_move_player(p, instances[0], p.id, arena_size * 0.5, arena_size - 3.0 * GATE_RADIUS)
+	elif p.instance.is_overworld():
+		_enter_hearth(p)
 
 
 func start() -> Error:
@@ -402,7 +511,7 @@ func apply_settings(s: LobbySettings) -> Error:
 	if next.join_code == "":
 		next.join_code = _settings.join_code if _settings.join_code != "" else LobbySettings.generate_join_code()
 	_settings = next
-	for inst in instances:
+	for inst in _all_instances():
 		inst.sim.set_lobby_settings(_settings)
 	settings_changed.emit(_settings.duplicate_settings())
 	return OK
@@ -1084,6 +1193,7 @@ func _end_linger(p: HostPlayer) -> void:
 	p.linger_until_tick = -1
 	p.linger_identity = ""
 	p.instance.sim.remove_player(p.sim_id)
+	hearth.sim_ids.erase(p.id)
 	players.erase(p)
 	_prune_issued_id(p.id)
 
@@ -1272,7 +1382,7 @@ func _step_sim() -> Array[PackedFloat64Array]:
 		# rule 7 activity tracks received input frames
 		psim.apply_input(p.sim_id, intent, p.seq != p.fed_seq)
 		p.fed_seq = p.seq
-	var stepped: Array[HostInstance] = instances.duplicate()
+	var stepped: Array[HostInstance] = _all_instances()
 	for inst in stepped:
 		inst.sim.step()
 	var shots: Array[PackedFloat64Array] = []
@@ -1310,6 +1420,7 @@ func _step_sim() -> Array[PackedFloat64Array]:
 		_spread_loadtest_players()
 	if loadtest_distinct_admitted:
 		_admit_loadtest_players()
+	_walk_zone_gates()
 	_teardown_empty_instances()
 	# Stand-in bullets live in the overworld only.
 	var ow: Array[HostPlayer] = []
@@ -1505,6 +1616,16 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 			break
 	if p == null:
 		return  # left during the step
+	if _is_zone_gate(source, xfer.portal_id):
+		# The pair is host-owned and accepts only its real source portal.
+		var gate := source.sim.portal_by_id(xfer.portal_id)
+		var sp := source.sim.get_player(p.sim_id)
+		if not p.is_lingering() and sp != null and sp.hp > 0 and gate != null \
+				and source.sim.scaling().in_accept_range(SimConstants.interact_distance(sp.x, sp.y, gate.x, gate.y)):
+			_cross_zone_gate(p)
+		return
+	if source == hearth:
+		return  # the Hearth has no dungeon entrances or other exits
 	if xfer.kind == PortalTransfer.KIND_EXIT:
 		# TODO(portal lifetime): Hearth routing, seal and re-entry rules;
 		# for now an exit returns to the overworld.
@@ -1573,6 +1694,7 @@ func _create_dungeon_instance(xfer: PortalTransfer, grants_persistent: bool = fa
 	if _next_instance_index <= 0 or _next_instance_index >= LocalSim.MAX_ENTITY_ID / INSTANCE_ID_BLOCK:
 		return null
 	var inst := HostInstance.new()
+	inst.kind = HostInstance.Kind.DUNGEON
 	inst.index = _next_instance_index
 	_next_instance_index += 1
 	inst.dungeon_id = xfer.dungeon_id
@@ -1944,6 +2066,8 @@ func _dest_id_issued(p: HostPlayer, dest: HostInstance, dest_id: int) -> bool:
 			return false
 	if dest.is_overworld():
 		return dest_id == p.id
+	if dest == hearth:
+		return int(hearth.sim_ids.get(p.id, 0)) == dest_id
 	for record: PortalRecord in _portal_records.values():
 		if record.instance == dest and int(record.sim_ids.get(p.id, 0)) == dest_id:
 			return true
@@ -2057,9 +2181,9 @@ static func _wrap_snapshot(body: PackedByteArray) -> PackedByteArray:
 func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
 	var msg = PB.ServerMessage.new()
 	var listing = msg.new_instance_list()
-	for inst in instances:
+	for inst in _all_instances():
 		var record: PortalRecord = _portal_records.get(inst.portal_key)
-		if not inst.is_overworld() and inst != viewer.instance:
+		if inst.is_dungeon() and inst != viewer.instance:
 			if record == null or (record.source != viewer.instance and not record.admitted.has(viewer.id)):
 				continue
 		var info = listing.add_instances()
@@ -2126,7 +2250,7 @@ func _encode_portal(out, portal: PortalSnapshot, inst: HostInstance) -> void:
 ## owner_id -> Array[GroundDrop].
 func _bags_by_owner() -> Dictionary:
 	var out := {}
-	for inst in instances:
+	for inst in _all_instances():
 		for bag in inst.sim.ground_drops():
 			if bag.item == null or bag.item.state != ItemState.STATE_LIVE:
 				continue
