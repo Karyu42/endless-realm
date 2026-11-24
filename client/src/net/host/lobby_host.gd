@@ -944,6 +944,10 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		if sim.add_player(p.id, rec) == false:
 			_rollback_seat(p, takes_builtin)
 			return null
+	# The host's class record always follows the sim's body.
+	var joined := sim.get_player(p.id)
+	if joined != null:
+		p.class_id = joined.class_id
 	if saved_usable:
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
