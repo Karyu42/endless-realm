@@ -322,3 +322,117 @@ func test_host_encoded_snapshot_decodes_on_the_client() -> void:
 	assert_eq(found.expire_tick, int(st.get_expire_tick()))
 	client.free()
 
+
+func test_portal_cap_keeps_exits_and_admitted_entrances() -> void:
+	var s = PB.Snapshot.new()
+	s.set_tick(4)
+	var cap: int = SnapshotDecode.MAX_PORTALS_PER_SNAPSHOT
+	for i in range(cap):
+		var st = s.add_portals()
+		st.set_id(i + 1)
+		st.set_kind(PB.PortalKind.ENTER)
+		st.set_dungeon_id("hollowmere_vault")
+	var leave = s.add_portals()
+	leave.set_id(200)
+	leave.set_kind(PB.PortalKind.EXIT)
+	leave.set_dungeon_id("hollowmere_vault")
+	var admitted = s.add_portals()
+	admitted.set_id(300)
+	admitted.set_kind(PB.PortalKind.ENTER)
+	admitted.set_dungeon_id("hollowmere_vault")
+	admitted.set_closed(true)
+	s.add_admitted_portal_ids(300)
+	var snap := WorldSnapshot.new()
+	SnapshotDecode.fill_world(snap, s, _catalog)
+	assert_eq(snap.portals.size(), cap)
+	var ids: Array[int] = []
+	for portal in snap.portals:
+		ids.append(portal.id)
+	assert_eq(ids[0], 200, "exit is kept first")
+	assert_eq(ids[1], 300, "admitted entrance is kept next")
+	assert_eq(ids[2], 1)
+	assert_eq(ids[cap - 1], cap - 2, "lowest-priority extras are dropped")
+	assert_false(ids.has(cap - 1))
+	assert_false(ids.has(cap))
+	var kept_admitted: PortalSnapshot = snap.portals[1]
+	assert_true(kept_admitted.admitted_for_me)
+	assert_true(kept_admitted.appears_open())
+	assert_push_error("SnapshotDecode: extra portals dropped")
+
+
+func test_host_encoded_snapshot_includes_admitted_portal_ids() -> void:
+	_host = LobbyHost.new(SimConfig.new())
+	_host.port = 0
+	var settings := LobbySettings.new()
+	settings.max_players = 4
+	assert_eq(_host.apply_settings(settings), OK)
+	var portal: PortalSnapshot = _host.sim.portal_by_id(_host.sim.spawn_practice_portal("hollowmere_vault"))
+	assert_not_null(portal)
+	# Off the packed practice position so the entrance is not persistent and
+	# can list this viewer in admitted_portal_ids.
+	portal.x += 1.0
+	portal.persistent = false
+	_host._sync_portal_records()
+	var viewer: int = _host.add_local_player()
+	_host.run_tick()
+	var inst: LobbyHost.HostInstance = _host.instances[0]
+	var rec: LobbyHost.PortalRecord = _host._portal_records[_host._portal_key(inst, portal.id)]
+	assert_not_null(rec)
+	rec.admitted[viewer] = true
+	var other: int = _host.add_local_player()
+	_host.run_tick()
+	var admitted_bytes: PackedByteArray = _host._encode_snapshot_for([], inst, viewer)
+	var other_bytes: PackedByteArray = _host._encode_snapshot_for([], inst, other)
+	var admitted_msg = PB.ServerMessage.new()
+	assert_eq(admitted_msg.from_bytes(admitted_bytes), PB.PB_ERR.NO_ERRORS)
+	var other_msg = PB.ServerMessage.new()
+	assert_eq(other_msg.from_bytes(other_bytes), PB.PB_ERR.NO_ERRORS)
+	var admitted_proto = admitted_msg.get_snapshot()
+	var other_proto = other_msg.get_snapshot()
+	assert_eq(admitted_proto.get_admitted_portal_ids(), [portal.id] as Array[int])
+	assert_eq(other_proto.get_admitted_portal_ids().size(), 0)
+	var client := LobbyClient.new()
+	client.last_snapshot = admitted_proto
+	client.last_tick = admitted_proto.get_tick()
+	var src := ClientWorldSource.new(client, _catalog)
+	src.last_tick = client.last_tick
+	var snap: WorldSnapshot = src.snapshot()
+	var found: PortalSnapshot = null
+	for p in snap.portals:
+		if p.id == portal.id:
+			found = p
+			break
+	assert_not_null(found)
+	assert_true(found.admitted_for_me)
+	assert_true(found.appears_open())
+	client.last_snapshot = other_proto
+	client.last_tick = other_proto.get_tick()
+	src.last_tick = client.last_tick
+	var other_snap: WorldSnapshot = src.snapshot()
+	var other_found: PortalSnapshot = null
+	for p in other_snap.portals:
+		if p.id == portal.id:
+			other_found = p
+			break
+	assert_not_null(other_found)
+	assert_false(other_found.admitted_for_me)
+	client.free()
+
+
+func test_session_stop_resets_unknown_id_log_limits() -> void:
+	for i in range(SnapshotDecode.UNKNOWN_ID_LOG_CAP):
+		var snap := WorldSnapshot.new()
+		SnapshotDecode.fill_world(snap, _unknown_snapshot("unknown_%d" % i, i + 1), _catalog)
+	var extra := WorldSnapshot.new()
+	SnapshotDecode.fill_world(extra, _unknown_snapshot("unknown_past_cap", 99), _catalog)
+	var again := WorldSnapshot.new()
+	SnapshotDecode.fill_world(again, _unknown_snapshot("unknown_past_cap_2", 100), _catalog)
+	var client := LobbyClient.new()
+	client.stop()
+	var after := WorldSnapshot.new()
+	SnapshotDecode.fill_world(after, _unknown_snapshot("after_stop", 101), _catalog)
+	assert_eq(after.portals[0].dungeon_name, "")
+	assert_push_error("DataCatalog: further unknown ids suppressed")
+	assert_push_error("DataCatalog: unknown id after_stop")
+	assert_push_error_count(SnapshotDecode.UNKNOWN_ID_LOG_CAP + 2)
+	client.free()

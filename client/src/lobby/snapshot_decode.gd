@@ -19,9 +19,15 @@ static var _portal_overflow_logged: bool = false
 
 
 static func reset_log_limits() -> void:
+	reset_unknown_id_logs()
+	_portal_overflow_logged = false
+
+
+## Clears the per-id log-once set and the suppression flag. Called when a
+## lobby session ends so a later host's unknown ids are logged again.
+static func reset_unknown_id_logs() -> void:
 	_logged_unknown_ids.clear()
 	_unknown_suppressed = false
-	_portal_overflow_logged = false
 
 
 static func fill_world(snap: WorldSnapshot, proto_snap, catalog: DataCatalog) -> void:
@@ -32,14 +38,35 @@ static func fill_world(snap: WorldSnapshot, proto_snap, catalog: DataCatalog) ->
 	for pid in proto_snap.get_admitted_portal_ids():
 		admitted[int(pid)] = true
 	var states = proto_snap.get_portals()
-	var n: int = states.size()
-	if n > MAX_PORTALS_PER_SNAPSHOT:
-		n = MAX_PORTALS_PER_SNAPSHOT
+	if states.size() > MAX_PORTALS_PER_SNAPSHOT:
 		_log_portal_overflow()
 	var portals: Array[PortalSnapshot] = []
-	for i in range(n):
-		portals.append(portal_from_state(states[i], admitted, catalog))
+	for state in _trimmed_portal_states(states, admitted):
+		portals.append(portal_from_state(state, admitted, catalog))
 	snap.portals = portals
+
+
+## When a snapshot has more portals than the cap, keep exits and this
+## viewer's admitted entrances first, then the rest, all in host order.
+static func _trimmed_portal_states(states, admitted: Dictionary) -> Array:
+	if states.size() <= MAX_PORTALS_PER_SNAPSHOT:
+		return states
+	var exits: Array = []
+	var admitted_enters: Array = []
+	var rest: Array = []
+	for state in states:
+		var kind: String = kind_from_proto(state.get_kind())
+		if kind == PortalSnapshot.KIND_EXIT:
+			exits.append(state)
+		elif kind == PortalSnapshot.KIND_ENTER and admitted.has(int(state.get_id())):
+			admitted_enters.append(state)
+		else:
+			rest.append(state)
+	var ordered: Array = []
+	ordered.append_array(exits)
+	ordered.append_array(admitted_enters)
+	ordered.append_array(rest)
+	return ordered.slice(0, MAX_PORTALS_PER_SNAPSHOT)
 
 
 static func _log_portal_overflow() -> void:
