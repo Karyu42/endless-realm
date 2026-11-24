@@ -268,7 +268,13 @@ Whoever opens a portal (a dungeon instance; a whole server instance or shard is 
    - an ability cast the sim accepts (Focus spent and effect applied). A press that fails or is blocked (on cooldown, not enough Focus, silenced and so on) doesn't count;
    - fire goes from released to pressed.
 
+   **Dead characters:** while a character's `hp ≤ 0`, no input stamps activity: aim, fire edge, ability or movement.
+
    **Window:** the player is active for the kill if `last_activity_tick ≥ kill_tick − W`, where `W` is 30 s of host sim time, **600 ticks** at the 20 Hz tick (`SimConstants.TICK_HZ`). Both edges are inclusive, and activity on the kill tick itself counts.
+
+   **Payout:** the boss reward requires both `hp > 0` on the kill tick and an active stamp under the window above, on top of (a), (b) or (c).
+
+   **Reconnect:** a leave cancelled by reconnecting within linger (§7.3) keeps the player's boss contribution and stamp. A reconnect after linger has ended is a fresh entry: it seeds a new stamp and carries no boss credit, the same as rule 9 re-entry.
 
    Holding fire alone doesn't count. Holding fire with a fixed aim and no movement is idle; holding one direction while actually moving is active. (#65 implements an earlier per-input-frame check; a GE follow-up is needed to match this rule.)
 8. **Lifetimes:**
