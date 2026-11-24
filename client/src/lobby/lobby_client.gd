@@ -21,11 +21,12 @@ var last_error_code: int = 0
 var last_tick: int = 0
 var last_snapshot = null
 var instances: Array = [] # dictionaries from InstanceInfo
+var instances_seq: int = 0
 var connected: bool = false
 var hello_sent: bool = false
 var lobbies: Array[Dictionary] = [] # decoded beacons plus "ip"
 
-const INSTANCE_LIST_INTERVAL := 0.5
+const INSTANCE_LIST_INTERVAL := 0.75
 
 var _ws: WebSocketPeer
 var _list_wait: float = 0.0
@@ -125,6 +126,7 @@ func _on_packet(buf: PackedByteArray) -> void:
 		snapshot_received.emit(last_tick)
 	elif msg.has_instance_list():
 		instances = SnapshotDecode.instances_from_list(msg.get_instance_list())
+		instances_seq += 1
 		instances_received.emit()
 	elif msg.has_error():
 		last_error_code = msg.get_error().get_code()
@@ -198,6 +200,7 @@ func stop() -> void:
 	hello_sent = false
 	last_snapshot = null
 	instances = []
+	instances_seq += 1
 	_list_wait = 0.0
 	if _udp_ready:
 		_udp.close()

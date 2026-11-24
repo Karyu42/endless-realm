@@ -5,6 +5,24 @@ extends RefCounted
 
 const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
 
+## Upper bound on portals applied from one snapshot, and on unique unknown
+## ids logged from this decoder.
+const MAX_PORTALS_PER_SNAPSHOT: int = 64
+const UNKNOWN_ID_LOG_CAP: int = 64
+
+const PORTAL_OVERFLOW_LOG := "SnapshotDecode: extra portals dropped (limit %d)"
+const UNKNOWN_ID_SUPPRESSED_LOG := "DataCatalog: further unknown ids suppressed"
+
+static var _logged_unknown_ids: Dictionary = {}
+static var _unknown_suppressed: bool = false
+static var _portal_overflow_logged: bool = false
+
+
+static func reset_log_limits() -> void:
+	_logged_unknown_ids.clear()
+	_unknown_suppressed = false
+	_portal_overflow_logged = false
+
 
 static func fill_world(snap: WorldSnapshot, proto_snap, catalog: DataCatalog) -> void:
 	if snap == null or proto_snap == null:
@@ -13,10 +31,36 @@ static func fill_world(snap: WorldSnapshot, proto_snap, catalog: DataCatalog) ->
 	var admitted: Dictionary = {}
 	for pid in proto_snap.get_admitted_portal_ids():
 		admitted[int(pid)] = true
+	var states = proto_snap.get_portals()
+	var n: int = states.size()
+	if n > MAX_PORTALS_PER_SNAPSHOT:
+		n = MAX_PORTALS_PER_SNAPSHOT
+		_log_portal_overflow()
 	var portals: Array[PortalSnapshot] = []
-	for state in proto_snap.get_portals():
-		portals.append(portal_from_state(state, admitted, catalog))
+	for i in range(n):
+		portals.append(portal_from_state(states[i], admitted, catalog))
 	snap.portals = portals
+
+
+static func _log_portal_overflow() -> void:
+	if _portal_overflow_logged:
+		return
+	_portal_overflow_logged = true
+	push_error(PORTAL_OVERFLOW_LOG % MAX_PORTALS_PER_SNAPSHOT)
+
+
+static func report_unknown_id(id: String) -> void:
+	if id == "":
+		return
+	if _logged_unknown_ids.has(id):
+		return
+	if _logged_unknown_ids.size() >= UNKNOWN_ID_LOG_CAP:
+		if not _unknown_suppressed:
+			_unknown_suppressed = true
+			push_error(UNKNOWN_ID_SUPPRESSED_LOG)
+		return
+	_logged_unknown_ids[id] = true
+	DataCatalog.report_unknown_id(id)
 
 
 static func portal_from_state(state, admitted: Dictionary, catalog: DataCatalog) -> PortalSnapshot:
@@ -59,21 +103,21 @@ static func kind_from_proto(kind) -> String:
 static func fill_names(portal: PortalSnapshot, catalog: DataCatalog) -> void:
 	if portal == null:
 		return
-	# Names come only from packed data. Unknown ids are logged; no fallbacks.
+	# Names come only from packed data. Unknown ids are logged once; no fallbacks.
 	if portal.dungeon_id != "":
 		var def: DungeonDef = catalog.dungeon(portal.dungeon_id) if catalog != null else null
 		if def == null:
-			DataCatalog.report_unknown_id(portal.dungeon_id)
+			report_unknown_id(portal.dungeon_id)
 		else:
 			portal.dungeon_name = def.name
 			if portal.marker_id != "":
 				var marker_name: String = _marker_name(def, portal.marker_id)
 				if marker_name == "":
-					DataCatalog.report_unknown_id("%s.%s" % [portal.dungeon_id, portal.marker_id])
+					report_unknown_id("%s.%s" % [portal.dungeon_id, portal.marker_id])
 				else:
 					portal.marker_name = marker_name
 	elif portal.marker_id != "":
-		DataCatalog.report_unknown_id(portal.marker_id)
+		report_unknown_id(portal.marker_id)
 
 
 static func _marker_name(def: DungeonDef, marker_id: String) -> String:

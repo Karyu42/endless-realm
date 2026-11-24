@@ -7,17 +7,37 @@ const PB := preload("res://src/net/proto/protocol_v1_pb.gd")
 
 var _catalog: DataCatalog
 var _ui: LobbyUiSettings
+var _host: LobbyHost
 
 
 func before_each() -> void:
+	SnapshotDecode.reset_log_limits()
 	_catalog = DataCatalog.load_default()
 	_ui = LobbyUiSettings.load_default()
+
+
+func after_each() -> void:
+	if _host != null:
+		_host.stop()
+		_host = null
 
 
 func _enter_portal() -> PortalSnapshot:
 	var p := PortalSnapshot.new()
 	p.kind = PortalSnapshot.KIND_ENTER
 	return p
+
+
+func _unknown_snapshot(dungeon_id: String, portal_id: int = 1) -> Variant:
+	var s = PB.Snapshot.new()
+	s.set_tick(1)
+	var st = s.add_portals()
+	st.set_id(portal_id)
+	st.set_kind(PB.PortalKind.ENTER)
+	st.set_dungeon_id(dungeon_id)
+	return s
+
+
 
 
 func test_decode_round_trips_every_portal_field() -> void:
@@ -199,3 +219,106 @@ func test_client_world_source_fills_portals_from_the_last_snapshot() -> void:
 	assert_eq(snap.portals[0].dungeon_name, "the Hollowmere Vault")
 	assert_true(snap.portals[0].appears_open())
 	client.free()
+
+func test_repeated_snapshot_logs_an_unknown_id_once() -> void:
+	var client := LobbyClient.new()
+	client.last_snapshot = _unknown_snapshot("no_such_dungeon")
+	client.last_tick = 1
+	var src := ClientWorldSource.new(client, _catalog)
+	src.last_tick = 1
+	for _i in range(5):
+		var snap: WorldSnapshot = src.snapshot()
+		assert_eq(snap.portals.size(), 1)
+		assert_eq(snap.portals[0].dungeon_name, "")
+	assert_push_error_count(1)
+	client.free()
+
+
+func test_unknown_id_log_cap_emits_one_suppression_line() -> void:
+	for i in range(SnapshotDecode.UNKNOWN_ID_LOG_CAP):
+		var snap := WorldSnapshot.new()
+		SnapshotDecode.fill_world(snap, _unknown_snapshot("unknown_%d" % i, i + 1), _catalog)
+	var extra := WorldSnapshot.new()
+	SnapshotDecode.fill_world(extra, _unknown_snapshot("unknown_past_cap", 99), _catalog)
+	assert_eq(extra.portals[0].dungeon_name, "")
+	var again := WorldSnapshot.new()
+	SnapshotDecode.fill_world(again, _unknown_snapshot("unknown_past_cap_2", 100), _catalog)
+	assert_push_error("DataCatalog: further unknown ids suppressed")
+	assert_push_error_count(SnapshotDecode.UNKNOWN_ID_LOG_CAP + 1)
+
+
+func test_portal_count_cap_is_enforced() -> void:
+	var s = PB.Snapshot.new()
+	s.set_tick(3)
+	var total: int = SnapshotDecode.MAX_PORTALS_PER_SNAPSHOT + 5
+	for i in range(total):
+		var st = s.add_portals()
+		st.set_id(i + 1)
+		st.set_kind(PB.PortalKind.ENTER)
+		st.set_dungeon_id("hollowmere_vault")
+		st.set_x(float(i))
+	var snap := WorldSnapshot.new()
+	SnapshotDecode.fill_world(snap, s, _catalog)
+	assert_eq(snap.portals.size(), SnapshotDecode.MAX_PORTALS_PER_SNAPSHOT)
+	assert_eq(snap.portals[0].id, 1)
+	assert_eq(snap.portals[SnapshotDecode.MAX_PORTALS_PER_SNAPSHOT - 1].id, SnapshotDecode.MAX_PORTALS_PER_SNAPSHOT)
+	assert_push_error("SnapshotDecode: extra portals dropped")
+	# Applying an oversized snapshot again does not log a second time.
+	var snap2 := WorldSnapshot.new()
+	SnapshotDecode.fill_world(snap2, s, _catalog)
+	assert_eq(snap2.portals.size(), SnapshotDecode.MAX_PORTALS_PER_SNAPSHOT)
+	assert_push_error_count(1)
+
+
+func test_host_encoded_snapshot_decodes_on_the_client() -> void:
+	_host = LobbyHost.new(SimConfig.new())
+	_host.port = 0
+	var settings := LobbySettings.new()
+	settings.max_players = 4
+	assert_eq(_host.apply_settings(settings), OK)
+	assert_eq(_host.start(), OK)
+	var portal_id: int = _host.sim.spawn_practice_portal("hollowmere_vault")
+	assert_gt(portal_id, 0)
+	_host.run_tick()
+	var bytes: PackedByteArray = _host._encode_snapshot_for([])
+	var msg = PB.ServerMessage.new()
+	assert_eq(msg.from_bytes(bytes), PB.PB_ERR.NO_ERRORS)
+	assert_true(msg.has_snapshot())
+	var proto_snap = msg.get_snapshot()
+	var client := LobbyClient.new()
+	client.last_snapshot = proto_snap
+	client.last_tick = proto_snap.get_tick()
+	var world_src := ClientWorldSource.new(client, _catalog)
+	world_src.last_tick = client.last_tick
+	var snap: WorldSnapshot = world_src.snapshot()
+	assert_eq(snap.portals.size(), proto_snap.get_portals().size())
+	assert_gt(snap.portals.size(), 0)
+	var found: PortalSnapshot = null
+	for portal in snap.portals:
+		if portal.id == portal_id:
+			found = portal
+			break
+	assert_not_null(found)
+	var st = null
+	for p in proto_snap.get_portals():
+		if int(p.get_id()) == portal_id:
+			st = p
+			break
+	assert_not_null(st)
+	assert_eq(found.kind, PortalSnapshot.KIND_ENTER)
+	assert_eq(found.dungeon_id, String(st.get_dungeon_id()))
+	assert_eq(found.dungeon_name, "the Hollowmere Vault")
+	assert_almost_eq(found.x, float(st.get_x()), 0.0001)
+	assert_almost_eq(found.y, float(st.get_y()), 0.0001)
+	assert_almost_eq(found.radius, float(st.get_radius()), 0.0001)
+	assert_eq(found.m100, int(st.get_m100()))
+	assert_eq(found.base_level, int(st.get_base_level()))
+	assert_eq(found.content_level, int(st.get_content_level()))
+	assert_eq(found.capacity, int(st.get_capacity()))
+	assert_eq(found.admitted_count, int(st.get_admitted_count()))
+	assert_eq(found.closed, bool(st.get_closed()))
+	assert_eq(found.persistent, bool(st.get_persistent()))
+	assert_eq(found.grants_persistent, bool(st.get_grants_persistent()))
+	assert_eq(found.expire_tick, int(st.get_expire_tick()))
+	client.free()
+

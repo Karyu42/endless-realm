@@ -58,6 +58,7 @@ var _loot_btn: Button
 var _prompt: Label
 var _lobby_ui: LobbyUiSettings
 var _instance_list: ItemList
+var _instances_seq: int = -1
 var _ability: Label
 var _floats: Node2D
 var _last_player_hp: int = -1
@@ -719,8 +720,12 @@ func _update_hud() -> void:
 func _refresh_instance_list() -> void:
 	if _instance_list == null:
 		return
-	_instance_list.clear()
 	var client: LobbyClient = GameSession.lobby_client
+	var seq: int = client.instances_seq if client != null else -1
+	if seq == _instances_seq:
+		return
+	_instances_seq = seq
+	_instance_list.clear()
 	if client == null or client.instances.is_empty() or _lobby_ui == null or not _lobby_ui.is_valid():
 		_instance_list.visible = false
 		return
