@@ -150,6 +150,8 @@ func test_hearth_viewer_snapshot_and_listing() -> void:
 		if info.get_instance() == _host.hearth.index:
 			found = true
 			assert_false(info.get_is_default())
+			assert_eq(info.get_player_count(), 1, "Wilds viewers see the Hearth's counts")
+			assert_eq(info.get_capacity(), _host.max_players)
 	assert_true(found, "the Hearth is listed for a Wilds viewer")
 
 

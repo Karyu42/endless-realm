@@ -287,9 +287,6 @@ var loadtest_entrances: int = 0
 var loadtest_distinct_admitted: bool = false
 var _loadtest_admitted: Dictionary = {}  # lobby player id -> true
 const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
-## Stand-in for the Hearth (town) placement in the overworld until the real
-## Hearth zone exists: where deaths and resets land.
-const HEARTH_STAND_IN := Vector2(16.0, 16.0)
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
 var _portal_records: Dictionary = {}  # source instance / entrance -> PortalRecord
@@ -1979,16 +1976,15 @@ func _is_equipped(inv: PlayerInventory, it: ItemState) -> bool:
 	return false
 
 
-## Practice instances: a player who dies leaves for the overworld (the
-## Hearth stand-in) with the same restore as any other way out.
-## TODO(§7 Hearth): route to the Hearth once it exists.
+## Practice instances: a player who dies leaves for the Hearth with the
+## same restore as any other way out (their entry state, never a refill).
 func _route_practice_deaths(inst: HostInstance) -> void:
 	for p in players.duplicate():
 		if p.instance != inst:
 			continue
 		var sp := inst.sim.get_player(p.sim_id)
 		if sp != null and sp.hp <= 0:
-			_move_player(p, instances[0], p.id, HEARTH_STAND_IN.x, HEARTH_STAND_IN.y)
+			_enter_hearth(p)
 
 
 ## Deep inventory snapshot, preserving equipment/slot references within it.
@@ -2068,7 +2064,7 @@ func _no_living_player_inside(inst: HostInstance) -> bool:
 ## Rebuilds a reset-when-empty instance in place: same instance id and id
 ## block, a fresh slice (rooms, boss, exit) from the creation transfer, and
 ## entity ids that keep counting up. Any remaining (dead) occupants are sent
-## to the overworld with their entry state, never revived inside.
+## to the Hearth with their entry state, never revived inside.
 func _reset_instance(record: PortalRecord) -> bool:
 	var inst := record.instance
 	var def: DungeonDef = catalog.dungeon(inst.dungeon_id) if catalog != null else null
@@ -2083,7 +2079,7 @@ func _reset_instance(record: PortalRecord) -> bool:
 		return false
 	for p in players.duplicate():
 		if p.instance == inst:
-			_move_player(p, instances[0], p.id, HEARTH_STAND_IN.x, HEARTH_STAND_IN.y)
+			_enter_hearth(p)
 	record.sim_ids.clear()
 	inst.sim = fresh
 	record.cleared = false
@@ -2381,7 +2377,7 @@ func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
 		info.set_is_default(inst.is_overworld())
 		info.set_base_level(inst.created_from.base_level if inst.created_from != null else 0)
 		info.set_closed(_entrance_closed(record) if record != null else false)
-		var admitted: bool = inst.is_overworld() or inst == viewer.instance \
+		var admitted: bool = inst.is_overworld() or inst.is_hearth() or inst == viewer.instance \
 				or (record != null and record.admitted.has(viewer.id))
 		if admitted:
 			info.set_player_count(_occupants(inst, -1))

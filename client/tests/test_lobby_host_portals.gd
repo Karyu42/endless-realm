@@ -1301,7 +1301,7 @@ func test_practice_no_reset_under_living_or_lingering_player() -> void:
 	var pb := _host._find_player(b)
 	inst.sim.get_player(pb.sim_id).hp = 0
 	_host.run_tick()
-	assert_true(_instance_of(b).is_overworld())
+	assert_true(_instance_of(b).is_hearth())
 	_host.sim.place_player(c, portal.x + 0.5, portal.y)
 	_enter(c, portal, 6)
 	assert_ne(inst.sim, sim1)
@@ -1474,7 +1474,7 @@ func test_practice_no_duplicate_after_any_exit_path() -> void:
 	_sp(b).inventory.add(inv.take_slot(inv.slots.find(inv.live_items()[0])))
 	_sp(a).hp = 0
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld())
+	assert_true(_instance_of(a).is_hearth())
 	_assert_unique(_all_item_ids())
 	# Disconnect from inside.
 	_host.run_tick()
@@ -1497,9 +1497,9 @@ func test_practice_death_restores() -> void:
 	_grant_inside(a)
 	_sp(a).hp = 0
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld(), "death leaves the practice instance")
+	assert_true(_instance_of(a).is_hearth(), "death leaves the practice instance for the Hearth")
 	assert_eq(_progress(a), before)
-	assert_gt(_host.sim.get_player(a).hp, 0)
+	assert_gt(_sp(a).hp, 0)
 	assert_true(_ids_of(a).has("a-ring"))
 
 
@@ -1571,8 +1571,8 @@ func test_death_inside_practice_goes_to_hearth_with_entry_state() -> void:
 	_grant_inside(a)
 	_inside(a).hp = 0
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld())
-	var sp := _host.sim.get_player(a)
+	assert_true(_instance_of(a).is_hearth())
+	var sp := _sp(a)
 	assert_eq(sp.hp, 7, "entry HP, not full and not dead")
 	assert_eq(_progress(a), before)
 
@@ -1587,8 +1587,8 @@ func test_dead_occupant_at_reset_is_not_revived() -> void:
 	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
 	_inside(a).hp = 0
 	assert_true(_host._reset_instance(rec))
-	assert_true(_instance_of(a).is_overworld(), "dead occupant leaves")
-	assert_eq(_host.sim.get_player(a).hp, 6)
+	assert_true(_instance_of(a).is_hearth(), "dead occupant leaves for the Hearth")
+	assert_eq(_sp(a).hp, 6)
 	for p in _host.players:
 		assert_ne(p.instance, inst, "no one revived inside")
 
