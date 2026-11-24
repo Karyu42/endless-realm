@@ -236,6 +236,8 @@ class HostPlayer:
 	var linger_until_tick: int = -1
 	## Rejoin key saved at the leave ("" = none), for the linger's end.
 	var linger_identity: String = ""
+	## First tick the Hearth gate pair accepts this character again.
+	var gate_ready_tick: int = 0
 	func is_lingering() -> bool:
 		return linger_until_tick >= 0
 	## Ability state to apply right after the step that adds this player:
@@ -316,6 +318,8 @@ var death_events: int = 0
 var hearth_entries: int = 0
 var respawns: int = 0
 var collapses: int = 0
+## After any crossing, either gate refuses that character for this long.
+const GATE_COOLDOWN_TICKS: int = 5 * SimConstants.TICK_HZ
 var _instance_by_portal: Dictionary = {}  # portal_key -> HostInstance
 var portal_rejections: int = 0
 var catalog: DataCatalog
@@ -544,12 +548,46 @@ func _walk_zone_gates() -> void:
 			_cross_zone_gate(p)
 
 
+## Crosses the gate pair, unless this character crossed it less than
+## GATE_COOLDOWN_TICKS ago (either direction). A refusal leaves the player
+## where they are.
 func _cross_zone_gate(p: HostPlayer) -> void:
+	if tick < p.gate_ready_tick:
+		return
+	var from := p.instance
 	if p.instance == hearth:
 		# Arrive clear of the walk-through trigger, so it cannot bounce.
 		_move_player(p, instances[0], p.id, arena_size * 0.5, arena_size - 3.0 * GATE_RADIUS)
 	elif p.instance.is_overworld():
 		_enter_hearth(p)
+	if p.instance != from:
+		p.gate_ready_tick = tick + GATE_COOLDOWN_TICKS
+
+
+## The Hearth does no damage to players from any source (and v0.1 has no
+## PvP anywhere). Fire and abilities are still allowed there and still spend
+## Focus and cooldown; only HP lost during a Hearth step is put back, never
+## more than the body had before the step.
+func _hearth_hp_before_step() -> Dictionary:
+	var before: Dictionary = {}
+	for id in hearth.sim.player_ids():
+		var sp := hearth.sim.get_player(id)
+		if sp != null:
+			before[id] = [sp.hp, sp.flash_ticks]
+	return before
+
+
+## Puts back HP lost during the Hearth step and the hurt flash the hit set
+## (as if no hit landed: the pre-step flash, one tick further along). HP is
+## set directly, so a body the step took to 0 is restored without a
+## placement and its interpolation state is left alone.
+func _undo_hearth_damage(before: Dictionary) -> void:
+	for id in before:
+		var sp := hearth.sim.get_player(int(id))
+		var was: Array = before[id]
+		if sp != null and sp.hp < int(was[0]):
+			sp.hp = int(was[0])
+			sp.flash_ticks = maxi(0, int(was[1]) - 1)
 
 
 func start() -> Error:
@@ -1061,8 +1099,8 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
 	# The class stays with the character on every rejoin: no class change
-	# while the body is lingering or held for a rejoin (there is no town or
-	# Hearth sim yet, and the Wilds lock the class like a dungeon).
+	# while the body is lingering or held for a rejoin, since the Wilds lock
+	# the class like a dungeon and only the Hearth is town.
 	var locked_class := _locked_class_for(identity, saved)
 	# A different class is applied only on arrival in the Hearth (the only
 	# town): after the linger if the body still lingers, else right away.
@@ -1115,6 +1153,9 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		p.restore_hp = int(saved.get("hp", -1))
 		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
 				"left_tick": int(saved["left_tick"])}
+		# The gate cooldown belongs to the character: an absolute deadline
+		# tick, so time offline counts toward it.
+		p.gate_ready_tick = int(saved.get("gate_ready_tick", 0))
 	elif takes_builtin:
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
@@ -1329,7 +1370,8 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 			# Progression is filled in when the body leaves the sim.
 			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"],
 					"left_tick": saved["left_tick"], "progression": {}, "class_id": p.class_id,
-					"hp": maxi(0, leaving.hp) if leaving != null else -1})
+					"hp": maxi(0, leaving.hp) if leaving != null else -1,
+					"gate_ready_tick": p.gate_ready_tick})
 	if lingers:
 		p.linger_until_tick = tick + LINGER_TICKS
 		p.linger_identity = identity
@@ -1351,10 +1393,6 @@ func _end_linger(p: HostPlayer) -> void:
 	if p.pending_class_id != "" and _class_change_arrival(p):
 		return
 	var leaving := p.instance.sim.get_player(p.sim_id)
-	if leaving != null and p.linger_identity != "":
-		var held: Dictionary = _ability_stash.get(p.linger_identity, {})
-		if int(held.get("id", 0)) == p.id:
-			held["hp"] = maxi(0, leaving.hp)  # HP after any damage taken while lingering
 	# The whole character is saved for the Hearth arrival of a later rejoin
 	# (practice entries restore their entry state first).
 	if leaving != null and p.linger_identity != "":
@@ -1363,6 +1401,10 @@ func _end_linger(p: HostPlayer) -> void:
 		var saved: Dictionary = _ability_stash.get(p.linger_identity, {})
 		if int(saved.get("id", 0)) == p.id:
 			saved["progression"] = _progression_fields(carry)
+			# HP after any damage taken while lingering, read after the
+			# practice entry state is restored (a practice death leaves with
+			# its entry HP, never as a respawn).
+			saved["hp"] = maxi(0, carry.hp)
 	# Persistent entrances admit by occupancy, so per-player entries of
 	# players who left the lobby are dropped to keep them bounded.
 	for record: PortalRecord in _portal_records.values():
@@ -1390,7 +1432,9 @@ func _class_change_arrival(p: HostPlayer) -> bool:
 		return false
 	p.linger_until_tick = -1
 	p.linger_identity = ""
-	return _enter_hearth(p, body.hp <= 0, cls)
+	# Only a death outside practice is a Standard respawn; a practice
+	# death leaves with its entry state (_move_player restores it).
+	return _enter_hearth(p, body.hp <= 0 and p.instance.grants_persistent, cls)
 
 
 ## Ends lingers that ran out, or whose body died or is gone (a dead body
@@ -1578,8 +1622,10 @@ func _step_sim() -> Array[PackedFloat64Array]:
 		psim.apply_input(p.sim_id, intent, p.seq != p.fed_seq)
 		p.fed_seq = p.seq
 	var stepped: Array[HostInstance] = _all_instances()
+	var hearth_hp := _hearth_hp_before_step()
 	for inst in stepped:
 		inst.sim.step()
+	_undo_hearth_damage(hearth_hp)
 	var shots: Array[PackedFloat64Array] = []
 	for inst in stepped:
 		var done: int = inst.sim.tick()
@@ -2212,7 +2258,7 @@ func _collapse_expired_instances() -> void:
 				continue
 			var body: SimPlayerState = inst.sim.get_player(p.sim_id)
 			if body != null:
-				_enter_hearth(p, body.hp <= 0)
+				_enter_hearth(p, body.hp <= 0 and inst.grants_persistent)
 		if _occupants(inst, -1) > 0:
 			continue  # preserve a remaining linger, or retry a failed move
 		record.instance = null

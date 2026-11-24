@@ -2706,3 +2706,40 @@ func test_collapse_waits_for_the_lifetime_and_spares_the_practice_door() -> void
 	assert_same(_instance_of(b), inst, "not before 30 min")
 	_ticks(2)
 	assert_true(_instance_of(b).is_hearth(), "collapses at 30 min")
+
+
+func test_practice_linger_end_keeps_the_entry_hp() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_host.sim.get_player(a).hp = 7
+	_enter(a, portal)
+	var p := _host._find_player(a)
+	var token := _host.remove_local_player(a)
+	_host.run_tick()
+	p.instance.sim.get_player(p.sim_id).hp = 0
+	_host.run_tick()
+	assert_null(_host._find_player(a))
+	assert_eq(_host.add_local_player(null, token), a)
+	_host.run_tick()
+	assert_true(_instance_of(a).is_hearth())
+	assert_eq(_sp(a).hp, 7, "practice restores entry HP on the linger path too")
+	assert_eq(_host.death_events, 1)
+
+
+func test_practice_class_change_arrival_keeps_the_entry_hp() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_host.sim.get_player(a).hp = 7
+	_enter(a, portal)
+	var p := _host._find_player(a)
+	var token := _host.remove_local_player(a)
+	assert_eq(_host.add_local_player("gleamwright", token), a)
+	_host.run_tick()
+	p.instance.sim.get_player(p.sim_id).hp = 0
+	_host.run_tick()
+	assert_true(_instance_of(a).is_hearth())
+	assert_eq(_sp(a).class_id, "gleamwright")
+	assert_eq(_sp(a).hp, 7, "practice restores entry HP before the class-change arrival")
+	assert_eq(_host.death_events, 1)
