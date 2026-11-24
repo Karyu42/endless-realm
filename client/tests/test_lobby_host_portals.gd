@@ -981,7 +981,7 @@ func _grant_inside(id: int) -> ItemState:
 
 
 func _progress(id: int) -> Dictionary:
-	var sp := _host.sim.get_player(id)
+	var sp := _sp(id)
 	return {"level": sp.level, "xp": sp.xp_tenths, "glint": sp.pending_glint,
 			"items": sp.inventory.live_items().size(), "riftstone": sp.pending_riftstone}
 
@@ -1301,7 +1301,7 @@ func test_practice_no_reset_under_living_or_lingering_player() -> void:
 	var pb := _host._find_player(b)
 	inst.sim.get_player(pb.sim_id).hp = 0
 	_host.run_tick()
-	assert_true(_instance_of(b).is_overworld())
+	assert_true(_instance_of(b).is_hearth())
 	_host.sim.place_player(c, portal.x + 0.5, portal.y)
 	_enter(c, portal, 6)
 	assert_ne(inst.sim, sim1)
@@ -1474,7 +1474,7 @@ func test_practice_no_duplicate_after_any_exit_path() -> void:
 	_sp(b).inventory.add(inv.take_slot(inv.slots.find(inv.live_items()[0])))
 	_sp(a).hp = 0
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld())
+	assert_true(_instance_of(a).is_hearth())
 	_assert_unique(_all_item_ids())
 	# Disconnect from inside.
 	_host.run_tick()
@@ -1497,9 +1497,9 @@ func test_practice_death_restores() -> void:
 	_grant_inside(a)
 	_sp(a).hp = 0
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld(), "death leaves the practice instance")
+	assert_true(_instance_of(a).is_hearth(), "death leaves the practice instance for the Hearth")
 	assert_eq(_progress(a), before)
-	assert_gt(_host.sim.get_player(a).hp, 0)
+	assert_gt(_sp(a).hp, 0)
 	assert_true(_ids_of(a).has("a-ring"))
 
 
@@ -1571,8 +1571,8 @@ func test_death_inside_practice_goes_to_hearth_with_entry_state() -> void:
 	_grant_inside(a)
 	_inside(a).hp = 0
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld())
-	var sp := _host.sim.get_player(a)
+	assert_true(_instance_of(a).is_hearth())
+	var sp := _sp(a)
 	assert_eq(sp.hp, 7, "entry HP, not full and not dead")
 	assert_eq(_progress(a), before)
 
@@ -1587,8 +1587,8 @@ func test_dead_occupant_at_reset_is_not_revived() -> void:
 	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
 	_inside(a).hp = 0
 	assert_true(_host._reset_instance(rec))
-	assert_true(_instance_of(a).is_overworld(), "dead occupant leaves")
-	assert_eq(_host.sim.get_player(a).hp, 6)
+	assert_true(_instance_of(a).is_hearth(), "dead occupant leaves for the Hearth")
+	assert_eq(_sp(a).hp, 6)
 	for p in _host.players:
 		assert_ne(p.instance, inst, "no one revived inside")
 
@@ -2228,7 +2228,7 @@ func _lingering_setup() -> Array:
 	return [portal, a, p, dsim]
 
 
-func test_class_change_rejoin_while_lingering_never_refills_or_switches() -> void:
+func test_class_change_rejoin_while_lingering_waits_for_the_hearth() -> void:
 	_host = _new_host()
 	var r := _lingering_setup()
 	var a: int = r[1]
@@ -2242,25 +2242,31 @@ func test_class_change_rejoin_while_lingering_never_refills_or_switches() -> voi
 	var cd := dsim.ability_cooldown_ticks(p.sim_id)
 	var focus := dsim.focus(p.sim_id)
 	var stamp := body.last_activity_tick
+	var arrived := [-1]
+	_host.hearth_entered.connect(func(_id: int) -> void: arrived[0] = _host.tick)
 	var token := _host.remove_local_player(a)
 	assert_true(p.is_lingering())
-	assert_eq(_host.add_local_player(other, token), -1, "no class change in an instance")
+	assert_eq(_host.add_local_player(other, token), a, "held until the linger resolves")
 	assert_true(p.is_lingering(), "the linger goes on")
 	body = dsim.get_player(p.sim_id)
-	assert_eq(body.class_id, cls, "class not changed in place")
+	assert_eq(body.class_id, cls, "class not changed in an instance")
 	assert_eq(body.hp, hp)
 	assert_eq(dsim.ability_cooldown_ticks(p.sim_id), cd)
 	assert_almost_eq(dsim.focus(p.sim_id), focus, 1e-6)
+	assert_eq(body.last_activity_tick, stamp)
 	assert_eq(_host.players.size(), 1, "no second body or seat")
 	assert_eq(p.class_id, cls, "host class record follows the sim")
-	assert_eq(_host.add_local_player(null, token), a, "same class resumes")
-	body = dsim.get_player(p.sim_id)
-	assert_eq(body.class_id, cls)
-	assert_eq(body.hp, hp, "no HP refill")
-	assert_eq(dsim.ability_cooldown_ticks(p.sim_id), cd, "no cooldown refill")
-	assert_almost_eq(dsim.focus(p.sim_id), focus, 1e-6, "no Focus refill")
-	assert_eq(int(dsim._boss_damage_by.get(p.sim_id, 0)), 42)
-	assert_eq(body.last_activity_tick, stamp)
+	_ticks(LobbyHost.LINGER_TICKS + 1)
+	assert_same(p.instance, _host.hearth, "arrives in the Hearth")
+	var sp := _sp(a)
+	assert_eq(sp.class_id, other)
+	assert_lte(sp.hp, hp)
+	assert_gt(sp.hp, 0)
+	var hs := _host.hearth.sim
+	assert_almost_eq(hs.focus(p.sim_id), hs.focus_regen_per_s(p.sim_id) * float(_host.tick - arrived[0]) * SimConstants.TICK_DT, 1e-6,
+			"0 Focus at arrival, then normal regen")
+	assert_false(_host.hearth.sim._boss_damage_by.has(p.sim_id), "no boss credit carried")
+	assert_eq(_host.hearth_entries, 1)
 
 
 func test_linger_keeps_body_still_in_the_instance() -> void:
@@ -2330,7 +2336,7 @@ func test_linger_end_then_rejoin_starts_fresh() -> void:
 	var back := _host.add_local_player(null, token)
 	assert_eq(back, a)
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld(), "a later rejoin lands in town")
+	assert_true(_instance_of(a).is_hearth(), "a later rejoin lands in the Hearth")
 	assert_false(_host.sim._boss_damage_by.has(a), "no carried boss credit")
 
 
@@ -2351,7 +2357,8 @@ func test_linger_death_ends_it() -> void:
 	var back := _host.add_local_player(null, token)
 	assert_eq(back, a)
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld(), "no resume into a dead body")
+	assert_true(_instance_of(a).is_hearth(), "no resume into a dead body: Hearth respawn")
+	assert_eq(_sp(a).hp, _host.hearth.sim._current_max_hp(_sp(a)), "full HP")
 
 
 func test_lingering_body_holds_the_instance() -> void:
@@ -2401,7 +2408,7 @@ func test_practice_linger_death_and_expiry_keep_no_gains() -> void:
 		assert_null(_host._find_player(a))
 		assert_eq(_host.add_local_player(null, token), a)
 		_host.run_tick()
-		assert_true(_instance_of(a).is_overworld())
+		assert_true(_instance_of(a).is_hearth())
 		assert_eq(_progress(a), before, "no practice gains kept (dies=%s)" % dies)
 		assert_true(_ids_of(a).has("a-ring"))
 		_assert_unique(_all_item_ids())
@@ -2530,3 +2537,40 @@ func test_viewer_body_empty_without_own_fields() -> void:
 	_host._sync_portal_records()
 	_host.run_tick()
 	assert_eq(_host._viewer_snapshot_body(_host.instances[0], [], a).size(), 0)
+
+
+func test_practice_linger_end_keeps_the_entry_hp() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_host.sim.get_player(a).hp = 7
+	_enter(a, portal)
+	var p := _host._find_player(a)
+	var token := _host.remove_local_player(a)
+	_host.run_tick()
+	p.instance.sim.get_player(p.sim_id).hp = 0
+	_host.run_tick()
+	assert_null(_host._find_player(a))
+	assert_eq(_host.add_local_player(null, token), a)
+	_host.run_tick()
+	assert_true(_instance_of(a).is_hearth())
+	assert_eq(_sp(a).hp, 7, "practice restores entry HP on the linger path too")
+	assert_eq(_host.death_events, 1)
+
+
+func test_practice_class_change_arrival_keeps_the_entry_hp() -> void:
+	_host = _new_host()
+	var portal := _open_portal(true)
+	var a := _join_near_portal(portal)
+	_host.sim.get_player(a).hp = 7
+	_enter(a, portal)
+	var p := _host._find_player(a)
+	var token := _host.remove_local_player(a)
+	assert_eq(_host.add_local_player("gleamwright", token), a)
+	_host.run_tick()
+	p.instance.sim.get_player(p.sim_id).hp = 0
+	_host.run_tick()
+	assert_true(_instance_of(a).is_hearth())
+	assert_eq(_sp(a).class_id, "gleamwright")
+	assert_eq(_sp(a).hp, 7, "practice restores entry HP before the class-change arrival")
+	assert_eq(_host.death_events, 1)

@@ -95,6 +95,16 @@ signal settings_changed(s: LobbySettings)
 signal ticked(tick: int)
 ## A portal entry the host refused (code is a proto ErrorCode).
 signal portal_rejected(player_id: int, code: int, reason: String)
+## vision §7.2: a death event, raised once per body when it reaches 0 HP,
+## wherever it is (including while lingering). The respawn fee and the
+## pending-loot steps belong here, at the death itself, never at respawn,
+## reconnect or rejoin. `persistent` is false for practice instances.
+## TODO(§7.2 steps 1-3): needs a banked wallet and ledger (see _on_death_event).
+signal death_event(player_id: int, instance_index: int, persistent: bool)
+## vision §7.1: every actual entry into the Hearth zone, whatever the path,
+## raised once after the body is placed there. One banking transaction
+## belongs here. TODO(§7.1): needs a banked wallet and ledger.
+signal hearth_entered(player_id: int)
 
 
 class HostConn:
@@ -178,6 +188,15 @@ class HostPlayer:
 	var restore_progression: Dictionary = {}
 	## HP of the body this rejoin continues (-1 = none kept).
 	var restore_hp: int = -1
+	## Steps to finish right after the step that seats this player in the
+	## Hearth: {"hp": int} (cap to max; a respawn asks for full), {"class_id":
+	## String} (the class-change arrival), {"hearth_entry": true}.
+	var arrival: Dictionary = {}
+	## Class a rejoin asked for while the old body still lingered where the
+	## class is locked: applied by the Hearth arrival when the linger ends.
+	var pending_class_id: String = ""
+	## Tick of the death event already raised for the current body (-1 alive).
+	var death_event_tick: int = -1
 	var seq: int = 0
 	## Last seq handed to LocalSim.apply_input. rule 7 activity tracks
 	## received input frames: is_new_frame is true only when seq advanced
@@ -270,9 +289,6 @@ var loadtest_entrances: int = 0
 var loadtest_distinct_admitted: bool = false
 var _loadtest_admitted: Dictionary = {}  # lobby player id -> true
 const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
-## Stand-in for the Hearth (town) placement in the overworld until the real
-## Hearth zone exists: where deaths and resets land.
-const HEARTH_STAND_IN := Vector2(16.0, 16.0)
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
 var _portal_records: Dictionary = {}  # source instance / entrance -> PortalRecord
@@ -284,6 +300,10 @@ const GATE_RADIUS := 1.0
 const HEARTH_SIZE := 16.0
 const HEARTH_GATE := Vector2(8.0, 2.0)
 const HEARTH_ARRIVAL := Vector2(8.0, 4.0)
+## Asked-for HP on a Standard respawn; the sim caps it at the body's max.
+const FULL_HP := 1 << 30
+var death_events: int = 0
+var hearth_entries: int = 0
 ## After any crossing, either gate refuses that character for this long.
 const GATE_COOLDOWN_TICKS: int = 5 * SimConstants.TICK_HZ
 var _instance_by_portal: Dictionary = {}  # portal_key -> HostInstance
@@ -383,8 +403,10 @@ func _configure_sim() -> void:
 
 
 ## A permanent safe zone, separate from both the Wilds and dungeon slices.
-## No combat content is configured here. Automatic arrival paths and banking
-## are separate follow-ups; only the gate and test hook enter it in this PR.
+## No combat content is configured here. Rejoins (_seat_in_hearth),
+## class-change arrivals (_class_change_arrival), practice deaths and
+## practice resets arrive here; fresh joins, dungeon exits and collapse
+## still land in the Wilds for now.
 func _create_hearth() -> void:
 	hearth = HostInstance.new()
 	hearth.kind = HostInstance.Kind.HEARTH
@@ -428,19 +450,68 @@ static func _add_zone_gate(psim: LocalSim, at: Vector2, id: int) -> int:
 	return gate.id
 
 
-## Test hook: arrivals used by joins, deaths, exits and class changes have
-## intentionally not been changed yet.
+## Test hook: places a connected, non-lingering player in the Hearth.
 func place_in_hearth_for_test(player_id: int) -> bool:
 	var p := _find_player(player_id)
 	return p != null and not p.is_lingering() and _enter_hearth(p)
 
 
-func _enter_hearth(p: HostPlayer) -> bool:
+## Moves a body into the Hearth, carrying the character. `respawn` is the
+## Standard respawn (vision §7.2 step 4: full HP); `class_id` applies the
+## class-change arrival there. Raises the Hearth entry once on success.
+func _enter_hearth(p: HostPlayer, respawn: bool = false, class_id: String = "") -> bool:
 	if p.instance == hearth:
 		return false
 	if not hearth.sim_ids.has(p.id):
 		hearth.sim_ids[p.id] = hearth.sim.alloc_player_id()
-	return _move_player(p, hearth, int(hearth.sim_ids[p.id]), HEARTH_ARRIVAL.x, HEARTH_ARRIVAL.y)
+	if not _move_player(p, hearth, int(hearth.sim_ids[p.id]), HEARTH_ARRIVAL.x, HEARTH_ARRIVAL.y,
+			false, respawn):
+		return false
+	_finish_arrival(p, {"hp": FULL_HP if respawn else -1, "class_id": class_id, "hearth_entry": true})
+	return true
+
+
+## Completes a Hearth arrival on a body that is already in the Hearth sim:
+## HP (capped at max, never reviving), the class-change arrival, then the
+## entry event. Order matters: the class change caps the restored HP.
+func _finish_arrival(p: HostPlayer, steps: Dictionary) -> void:
+	var hs: LocalSim = p.instance.sim
+	var body := hs.get_player(p.sim_id)
+	if body == null:
+		return
+	var hp := int(steps.get("hp", -1))
+	if hp > 0 and body.hp > 0:
+		hs.place_player(p.sim_id, body.x, body.y, hp)
+	var cls := String(steps.get("class_id", ""))
+	if cls != "" and cls != body.class_id:
+		hs.apply_class_change_arrival(p.sim_id, cls)
+		if hp >= FULL_HP and body.hp > 0:
+			hs.place_player(p.sim_id, body.x, body.y, FULL_HP)  # respawn: the new class's max
+	p.class_id = body.class_id
+	_sync_position(p, hs, p.sim_id)
+	if steps.get("hearth_entry", false) and p.instance == hearth:
+		_on_hearth_entry(p)
+
+
+## vision §7.1 banking event. Idempotent by design: a later ledger call
+## must bank pending assets in one transaction and be a no-op when nothing
+## is pending (for example right after a Standard respawn).
+## Missing today: a banked wallet per mode (Glint, Echo Dust, Riftstone),
+## a pending Echo Dust field, ledger accounts and transactions, the mode.
+## Present: ItemState.pending, pending_glint and pending_riftstone.
+func _on_hearth_entry(p: HostPlayer) -> void:
+	hearth_entries += 1
+	hearth_entered.emit(p.id)
+
+
+## vision §7.2 steps 1-3, at the death event. Nothing is taken yet: the fee
+## (20 x m(Lp) Glint from the banked wallet, floored at the balance) needs a
+## banked wallet and ledger, and the pending steps (tombstone pending items,
+## pending currency to the sink) belong in the same transaction. A rejoin or
+## respawn after this never takes a second fee.
+func _on_death_event(p: HostPlayer) -> void:
+	death_events += 1
+	death_event.emit(p.id, p.instance.index, p.instance.grants_persistent)
 
 
 func _is_zone_gate(source: HostInstance, portal_id: int) -> bool:
@@ -484,22 +555,25 @@ func _cross_zone_gate(p: HostPlayer) -> void:
 ## Focus and cooldown; only HP lost during a Hearth step is put back, never
 ## more than the body had before the step.
 func _hearth_hp_before_step() -> Dictionary:
-	var hp: Dictionary = {}
+	var before: Dictionary = {}
 	for id in hearth.sim.player_ids():
 		var sp := hearth.sim.get_player(id)
 		if sp != null:
-			hp[id] = sp.hp
-	return hp
+			before[id] = [sp.hp, sp.flash_ticks]
+	return before
 
 
+## Puts back HP lost during the Hearth step and the hurt flash the hit set
+## (as if no hit landed: the pre-step flash, one tick further along). HP is
+## set directly, so a body the step took to 0 is restored without a
+## placement and its interpolation state is left alone.
 func _undo_hearth_damage(before: Dictionary) -> void:
 	for id in before:
 		var sp := hearth.sim.get_player(int(id))
-		if sp != null and sp.hp < int(before[id]):
-			if sp.hp <= 0:
-				sp.hp = 1  # place_player never revives; this was a Hearth hit
-			# Capped at the body's current max HP by the sim.
-			hearth.sim.place_player(int(id), sp.x, sp.y, int(before[id]))
+		var was: Array = before[id]
+		if sp != null and sp.hp < int(was[0]):
+			sp.hp = int(was[0])
+			sp.flash_ticks = maxi(0, int(was[1]) - 1)
 
 
 func start() -> Error:
@@ -1011,21 +1085,40 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
 	# The class stays with the character on every rejoin: no class change
-	# while the body is lingering or held for a rejoin (there is no town or
-	# Hearth sim yet, and the Wilds lock the class like a dungeon).
+	# while the body is lingering or held for a rejoin, since the Wilds lock
+	# the class like a dungeon and only the Hearth is town.
 	var locked_class := _locked_class_for(identity, saved)
+	# A different class is applied only on arrival in the Hearth (the only
+	# town): after the linger if the body still lingers, else right away.
+	var arrival_class := ""
 	if locked_class != "":
 		var requested_class: Variant = _requested_class_id(character)
 		if requested_class == null or String(requested_class) == "":
 			character = _with_class(character, locked_class)
 		elif String(requested_class) != locked_class:
-			return null
+			if not _catalog_has_class(String(requested_class)):
+				return null
+			var lingering := _lingering_for_identity(identity)
+			if lingering != null:
+				return _hold_class_change(lingering, identity, character, String(requested_class))
+			if int(saved.get("hp", -1)) > 0:
+				# A living body arrives as itself, then changes class.
+				arrival_class = String(requested_class)
+				character = _with_class(character, locked_class)
 	var resumed := _resume_lingering(identity, character)
 	if resumed != null:
 		return resumed
 	var saved_unusable: bool = not saved.is_empty() and (
 			not _stash_id_issued_here(saved) or _find_player(int(saved["id"])) != null)
 	var saved_usable: bool = not saved.is_empty() and not saved_unusable
+	# vision §7.1 / §7.3: a rejoin whose body has left the world arrives in
+	# the Hearth: living with its own state, dead as a Standard respawn.
+	var saved_hp: int = int(saved.get("hp", -1)) if saved_usable else -1
+	var to_hearth: bool = saved_usable and saved_hp >= 0 and (
+			sim.get_player(int(saved["id"])) == null or sim.get_player(int(saved["id"])).hp <= 0)
+	if not to_hearth and (arrival_class != "" or (saved_hp == 0 and locked_class != ""
+			and _requested_class_id(character) != null and String(_requested_class_id(character)) != locked_class)):
+		return null  # a class change never applies outside the Hearth
 	# Class is checked before any id is issued or a seat is appended, and
 	# before a snapshot is consumed.
 	takes_builtin = not saved_usable and _sim_has_builtin_player()
@@ -1046,13 +1139,18 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		p.restore_hp = int(saved.get("hp", -1))
 		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
 				"left_tick": int(saved["left_tick"])}
+		# The gate cooldown belongs to the character: an absolute deadline
+		# tick, so time offline counts toward it.
+		p.gate_ready_tick = int(saved.get("gate_ready_tick", 0))
 	elif takes_builtin:
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
 	else:
 		p.id = sim.alloc_player_id()
 	_issued_player_ids[p.id] = true
-	p.instance = instances[0]  # every join lands in the overworld
+	if to_hearth:
+		return _seat_in_hearth(p, character, class_id, saved, identity, arrival_class)
+	p.instance = instances[0]  # every other join lands in the overworld
 	p.sim_id = p.id
 	# Spread spawns over the arena deterministically by id.
 	var a: float = float(p.id) * 2.399963
@@ -1101,6 +1199,58 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		_ability_stash_order.erase(identity)
 	p.join_tick = tick
 	players.append(p)
+	return p
+
+
+## A rejoin's Hearth arrival (living after the linger, or a respawn of a
+## character that died). The body is added to the Hearth sim; its saved
+## progression, HP, Focus and cooldown (adjusted only for the time since)
+## are restored after the step that adds it, then the class-change arrival
+## and the Hearth entry follow (_finish_arrival).
+func _seat_in_hearth(p: HostPlayer, character: Variant, class_id: String, saved: Dictionary,
+		identity: String, arrival_class: String) -> HostPlayer:
+	var dead := int(saved.get("hp", -1)) == 0
+	var sid := hearth.sim.alloc_player_id()
+	var rec := _sim_character(character, HEARTH_ARRIVAL.x, HEARTH_ARRIVAL.y)
+	rec["class_id"] = class_id
+	rec["x"] = HEARTH_ARRIVAL.x
+	rec["y"] = HEARTH_ARRIVAL.y
+	rec.erase("hp")  # set after the progression restore, which can raise max
+	if hearth.sim.add_player(sid, rec) == false:
+		_rollback_seat(p, false)
+		return null
+	if dead and class_id != String(saved.get("class_id", class_id)):
+		p.restore_ability = CONSERVATIVE  # the old class's cooldown does not carry
+	p.arrival = {"hp": FULL_HP if dead else p.restore_hp, "class_id": arrival_class, "hearth_entry": true}
+	p.restore_hp = -1
+	hearth.sim_ids[p.id] = sid
+	p.instance = hearth
+	p.sim_id = sid
+	p.character = character
+	p.class_id = class_id
+	p.x = HEARTH_ARRIVAL.x
+	p.y = HEARTH_ARRIVAL.y
+	_ability_stash.erase(identity)
+	_ability_stash_order.erase(identity)
+	p.join_tick = tick
+	players.append(p)
+	return p
+
+
+## A rejoin asking for another class while its body still lingers in the
+## Wilds or a dungeon (where class_change_allowed is false): the seat and
+## body stay as they are, still lingering, and the class applies on the
+## Hearth arrival when the linger resolves (_class_change_arrival).
+func _hold_class_change(p: HostPlayer, identity: String, character: Variant, class_id: String) -> HostPlayer:
+	if p.instance.sim.get_player(p.sim_id) == null:
+		return null
+	_ability_stash.erase(identity)
+	_ability_stash_order.erase(identity)
+	p.pending_class_id = class_id
+	p.linger_identity = ""  # nothing else can resume this body now
+	p.seq = 0
+	p.fed_seq = 0
+	p.character = character
 	return p
 
 
@@ -1178,7 +1328,8 @@ func _sim_has_builtin_player() -> bool:
 func _leave(p: HostPlayer, identity: String = "") -> void:
 	interact_validator.forget_player(p.id)
 	var leaving := p.instance.sim.get_player(p.sim_id)
-	var lingers: bool = leaving != null and leaving.hp > 0
+	# vision §7.3: a logout inside the Hearth is instant (no linger).
+	var lingers: bool = leaving != null and leaving.hp > 0 and p.instance != hearth
 	if identity != "":
 		var isim: LocalSim = p.instance.sim
 		var sid: int = p.sim_id
@@ -1193,7 +1344,8 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 			# Progression is filled in when the body leaves the sim.
 			_stash_ability(identity, {"id": p.id, "cooldown": saved["cooldown"], "focus": saved["focus"],
 					"left_tick": saved["left_tick"], "progression": {}, "class_id": p.class_id,
-					"hp": leaving.hp if leaving != null else -1})
+					"hp": maxi(0, leaving.hp) if leaving != null else -1,
+					"gate_ready_tick": p.gate_ready_tick})
 	if lingers:
 		p.linger_until_tick = tick + LINGER_TICKS
 		p.linger_identity = identity
@@ -1212,17 +1364,21 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 ## of a linger, or a leave with nothing to linger. Restores practice entry
 ## progression into the saved rejoin state (never onto a live body).
 func _end_linger(p: HostPlayer) -> void:
+	if p.pending_class_id != "" and _class_change_arrival(p):
+		return
 	var leaving := p.instance.sim.get_player(p.sim_id)
+	# The whole character is saved for the Hearth arrival of a later rejoin
+	# (practice entries restore their entry state first).
 	if leaving != null and p.linger_identity != "":
-		var held: Dictionary = _ability_stash.get(p.linger_identity, {})
-		if int(held.get("id", 0)) == p.id:
-			held["hp"] = leaving.hp  # HP after any damage taken while lingering
-	if leaving != null and not p.progression_entries.is_empty() and p.linger_identity != "":
 		var carry := PlayerCarry.from_sim(leaving, p.instance.sim.ability_state(p.sim_id))
 		_restore_entry_progression(p, carry)
 		var saved: Dictionary = _ability_stash.get(p.linger_identity, {})
 		if int(saved.get("id", 0)) == p.id:
 			saved["progression"] = _progression_fields(carry)
+			# HP after any damage taken while lingering, read after the
+			# practice entry state is restored (a practice death leaves with
+			# its entry HP, never as a respawn).
+			saved["hp"] = maxi(0, carry.hp)
 	# Persistent entrances admit by occupancy, so per-player entries of
 	# players who left the lobby are dropped to keep them bounded.
 	for record: PortalRecord in _portal_records.values():
@@ -1235,6 +1391,24 @@ func _end_linger(p: HostPlayer) -> void:
 	hearth.sim_ids.erase(p.id)
 	players.erase(p)
 	_prune_issued_id(p.id)
+
+
+## content-v0.1 §1 class lock: the linger has resolved for a player who
+## rejoined asking for another class. A survivor arrives in the Hearth with
+## its own HP, Focus and cooldown, then gets the class-change arrival; a body
+## that died there respawns in the Hearth at full HP in the new class.
+## False if there is no body to carry (the player then leaves as usual).
+func _class_change_arrival(p: HostPlayer) -> bool:
+	var cls := p.pending_class_id
+	p.pending_class_id = ""
+	var body := p.instance.sim.get_player(p.sim_id)
+	if body == null:
+		return false
+	p.linger_until_tick = -1
+	p.linger_identity = ""
+	# Only a death outside practice is a Standard respawn; a practice
+	# death leaves with its entry state (_move_player restores it).
+	return _enter_hearth(p, body.hp <= 0 and p.instance.grants_persistent, cls)
 
 
 ## Ends lingers that ran out, or whose body died or is gone (a dead body
@@ -1444,9 +1618,19 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			if not p.restore_ability.is_empty():
 				# Before any input of theirs is applied (see above).
 				_restore_ability(p)
+			if not p.arrival.is_empty():
+				var steps := p.arrival
+				p.arrival = {}
+				_finish_arrival(p, steps)
 			p.x = sp.x
 			p.y = sp.y
 			p.aim_applied = sp.aim
+			if sp.hp <= 0:
+				if p.death_event_tick < 0:
+					p.death_event_tick = tick
+					_on_death_event(p)
+			else:
+				p.death_event_tick = -1
 	_step_lingering()
 	for inst in stepped:
 		if not inst.grants_persistent:
@@ -1839,16 +2023,15 @@ func _is_equipped(inv: PlayerInventory, it: ItemState) -> bool:
 	return false
 
 
-## Practice instances: a player who dies leaves for the overworld (the
-## Hearth stand-in) with the same restore as any other way out.
-## TODO(§7 Hearth): route to the Hearth once it exists.
+## Practice instances: a player who dies leaves for the Hearth with the
+## same restore as any other way out (their entry state, never a refill).
 func _route_practice_deaths(inst: HostInstance) -> void:
 	for p in players.duplicate():
 		if p.instance != inst:
 			continue
 		var sp := inst.sim.get_player(p.sim_id)
 		if sp != null and sp.hp <= 0:
-			_move_player(p, instances[0], p.id, HEARTH_STAND_IN.x, HEARTH_STAND_IN.y)
+			_enter_hearth(p)
 
 
 ## Deep inventory snapshot, preserving equipment/slot references within it.
@@ -1928,7 +2111,7 @@ func _no_living_player_inside(inst: HostInstance) -> bool:
 ## Rebuilds a reset-when-empty instance in place: same instance id and id
 ## block, a fresh slice (rooms, boss, exit) from the creation transfer, and
 ## entity ids that keep counting up. Any remaining (dead) occupants are sent
-## to the overworld with their entry state, never revived inside.
+## to the Hearth with their entry state, never revived inside.
 func _reset_instance(record: PortalRecord) -> bool:
 	var inst := record.instance
 	var def: DungeonDef = catalog.dungeon(inst.dungeon_id) if catalog != null else null
@@ -1943,7 +2126,7 @@ func _reset_instance(record: PortalRecord) -> bool:
 		return false
 	for p in players.duplicate():
 		if p.instance == inst:
-			_move_player(p, instances[0], p.id, HEARTH_STAND_IN.x, HEARTH_STAND_IN.y)
+			_enter_hearth(p)
 	record.sim_ids.clear()
 	inst.sim = fresh
 	record.cleared = false
@@ -1954,7 +2137,7 @@ func _reset_instance(record: PortalRecord) -> bool:
 ## inventory, HP and ability state (Focus and cooldown exactly as they are,
 ## never refreshed). Removal from the old sim takes effect at its next step.
 func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: float,
-		issued_now: bool = false) -> bool:
+		issued_now: bool = false, respawn: bool = false) -> bool:
 	var src: LocalSim = p.instance.sim
 	var from := src.get_player(p.sim_id)
 	if from == null or dest == p.instance:
@@ -1969,6 +2152,8 @@ func _move_player(p: HostPlayer, dest: HostInstance, dest_id: int, x: float, y: 
 		# The practice copy must not mutate the source inventory or entry copy.
 		carry.inventory = _copy_inventory(carry.inventory)
 	carry.player_id = dest_id
+	if respawn:
+		carry.hp = FULL_HP  # Standard respawn only; capped at max by the sim
 	dest.sim.place_player(dest_id, x, y)
 	dest.sim.apply_carried_player(carry, x, y)
 	# The source copy is gone at its next step; it holds no items meanwhile.
@@ -2239,7 +2424,7 @@ func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
 		info.set_is_default(inst.is_overworld())
 		info.set_base_level(inst.created_from.base_level if inst.created_from != null else 0)
 		info.set_closed(_entrance_closed(record) if record != null else false)
-		var admitted: bool = inst.is_overworld() or inst == viewer.instance \
+		var admitted: bool = inst.is_overworld() or inst.is_hearth() or inst == viewer.instance \
 				or (record != null and record.admitted.has(viewer.id))
 		if admitted:
 			info.set_player_count(_occupants(inst, -1))

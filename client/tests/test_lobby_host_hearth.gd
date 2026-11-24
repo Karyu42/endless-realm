@@ -81,6 +81,7 @@ func test_walking_through_the_gate_crosses_both_ways() -> void:
 	_stand_on(_host.sim, a, _host._wilds_gate_id)
 	_host.run_tick()
 	assert_eq(p.instance, _host.hearth, "walked into the Hearth")
+	assert_eq(_host.hearth_entries, 1, "one Hearth entry (banking event) per walk-in")
 	assert_ne(p.sim_id, a, "own id inside the Hearth sim")
 	assert_gte(p.sim_id, _host.hearth.index * LobbyHost.INSTANCE_ID_BLOCK)
 	assert_lt(p.sim_id, (_host.hearth.index + 1) * LobbyHost.INSTANCE_ID_BLOCK)
@@ -105,6 +106,7 @@ func test_walking_through_the_gate_crosses_both_ways() -> void:
 	_stand_on(_host.sim, a, _host._wilds_gate_id)
 	_host.run_tick()
 	assert_eq(p.sim_id, hearth_id, "the same Hearth id on re-entry")
+	assert_eq(_host.hearth_entries, 2, "walking back in is another entry")
 
 
 func test_dead_or_lingering_players_do_not_cross() -> void:
@@ -157,10 +159,12 @@ func test_hearth_viewer_snapshot_and_listing() -> void:
 		if info.get_instance() == _host.hearth.index:
 			found = true
 			assert_false(info.get_is_default())
+			assert_eq(info.get_player_count(), 1, "Wilds viewers see the Hearth's counts")
+			assert_eq(info.get_capacity(), _host.max_players)
 	assert_true(found, "the Hearth is listed for a Wilds viewer")
 
 
-func test_leave_and_linger_in_the_hearth() -> void:
+func test_leave_in_the_hearth_is_instant() -> void:
 	_host = _new_host()
 	_host.add_local_player()
 	var b := _joined()
@@ -169,16 +173,14 @@ func test_leave_and_linger_in_the_hearth() -> void:
 	_host.run_tick()
 	var sid := pb.sim_id
 	var token := _host.remove_local_player(b)
-	assert_true(pb.is_lingering())
-	_host.run_tick()
-	assert_not_null(_host.hearth.sim.get_player(sid), "the body lingers in the Hearth")
-	assert_eq(_host.add_local_player(null, token), b, "resumes in place")
-	assert_eq(pb.instance, _host.hearth)
-	_host.remove_local_player(b)
-	for i in range(LobbyHost.LINGER_TICKS + 2):
-		_host.run_tick()
-	assert_null(_host.hearth.sim.get_player(sid))
+	assert_false(pb.is_lingering(), "a logout inside the Hearth is instant")
+	assert_null(_host._find_player(b))
 	assert_false(_host.hearth.sim_ids.has(b), "mapping dropped when the player leaves")
+	_host.run_tick()
+	assert_null(_host.hearth.sim.get_player(sid))
+	assert_eq(_host.add_local_player(null, token), b, "the rejoin returns to the Hearth")
+	assert_same(_host._find_player(b).instance, _host.hearth)
+	_host.remove_local_player(b)
 	assert_false(_host.place_in_hearth_for_test(b), "no such player")
 
 
@@ -264,8 +266,34 @@ func test_no_damage_to_players_in_the_hearth() -> void:
 	assert_gt(e, 0)
 	for i in range(40):
 		_host.run_tick()
+		assert_eq(hs.get_player(p.sim_id).flash_ticks, 0, "a rolled-back hit leaves no hurt flash")
 	assert_eq(hs.get_player(p.sim_id).hp, hp, "no damage from any source in the Hearth")
 	assert_gt(_host.hearth.sim.player_ids().size(), 0)
+
+
+func test_a_lethal_hearth_hit_is_undone_without_a_placement() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var a := _joined()
+	var p := _host._find_player(a)
+	assert_true(_host.place_in_hearth_for_test(a))
+	_host.run_tick()
+	var hs := _host.hearth.sim
+	var sp := hs.get_player(p.sim_id)
+	sp.hp = 1
+	# Moving, so a placement would show up as prev == current.
+	_host.submit_local_input(a, InputIntent.from_raw(50, 1.0, 0.0, 0.0, false))
+	_host.run_tick()
+	var deaths := _host.death_events
+	hs.spawn_enemy("burrmite", sp.x, sp.y)
+	for i in range(20):
+		_host.submit_local_input(a, InputIntent.from_raw(51 + i, 1.0, 0.0, 0.0, false))
+		_host.run_tick()
+		sp = hs.get_player(p.sim_id)
+		assert_eq(sp.hp, 1, "even a lethal hit is put back")
+		assert_eq(sp.flash_ticks, 0)
+	assert_ne(Vector2(sp.prev_x, sp.prev_y), Vector2(sp.x, sp.y), "interpolation state kept (no snap)")
+	assert_eq(_host.death_events, deaths, "no death event in the Hearth")
 
 
 func test_fire_and_abilities_work_in_the_hearth_and_spend_focus() -> void:
@@ -291,3 +319,33 @@ func test_fire_and_abilities_work_in_the_hearth_and_spend_focus() -> void:
 		_host.submit_local_input(a, InputIntent.from_raw(1 + i, 0.0, 0.0, 0.0, true, false, 0, 0))
 		_host.run_tick()
 	assert_eq(hs.get_player(pb.sim_id).hp, hp_b, "no PvP")
+
+
+func test_gate_cooldown_survives_a_hearth_logout_and_rejoin() -> void:
+	_host = _new_host()
+	var a := _joined()
+	var p := _host._find_player(a)
+	_stand_on(_host.sim, a, _host._wilds_gate_id)
+	_host.run_tick()
+	assert_same(p.instance, _host.hearth)
+	var deadline := p.gate_ready_tick
+	var token := _host.remove_local_player(a)
+	assert_null(_host._find_player(a), "Hearth logout is instant")
+	_host.run_tick()
+	assert_eq(_host.add_local_player(null, token), a)
+	_host.run_tick()
+	p = _host._find_player(a)
+	assert_eq(p.gate_ready_tick, deadline, "same absolute per-character deadline")
+	_stand_on(_host.hearth.sim, p.sim_id, _host._hearth_gate_id)
+	_host.run_tick()
+	assert_same(p.instance, _host.hearth, "still refused during the cooldown")
+	token = _host.remove_local_player(a)
+	assert_null(_host._find_player(a))
+	while _host.tick <= deadline:
+		_host.run_tick()
+	assert_eq(_host.add_local_player(null, token), a)
+	_host.run_tick()
+	p = _host._find_player(a)
+	_stand_on(_host.hearth.sim, p.sim_id, _host._hearth_gate_id)
+	_host.run_tick()
+	assert_true(p.instance.is_overworld(), "offline time counts: free to cross after the deadline")
