@@ -80,6 +80,8 @@ var _entry_persistent: Dictionary = {}
 ## Per-player ability state (id -> PlayerAbilityState). Kept next to
 ## SimPlayerState so class abilities stay keyed by player id.
 var _ability_by_player: Dictionary = {}
+## Class ids already logged through DataCatalog.report_unknown_id this sim.
+var _logged_unknown_class_ids: Dictionary = {}
 ## Test / later dungeon walls: tile (tx, ty) -> true is blocking for Slipstep.
 var _blocking_tiles: Dictionary = {}
 var _portals: Array[PortalSnapshot] = []
@@ -194,6 +196,10 @@ func player_count() -> int:
 ## the pre-spawned player 1). Accepts an id at or below the high-water mark
 ## that is not currently live. Refuses, and logs, an id above the mark or
 ## any live player or entity id.
+## A fresh add with an unknown or empty class is refused (false): the
+## unknown id is logged through DataCatalog, and no player is queued or
+## created. Omitting class entirely is allowed and uses the no-class
+## default path.
 ## Explicit HP must come only from host-built character data, never from
 ## a client-supplied value.
 ## A same-tick re-add of a still-live player who was queued to leave cancels
@@ -211,6 +217,9 @@ func add_player(id: int, character: Variant = null) -> bool:
 		_apply_character_state(live, character, false)
 		return true
 	if not _player_id_accept(id):
+		return false
+	# Refuse before touching pending maps or creating state.
+	if _refuse_fresh_class(character):
 		return false
 	_pending_removes.erase(id)
 	if _players.has(id) or _pending_adds.has(id):
@@ -368,17 +377,41 @@ func _apply_character_state(p: SimPlayerState, character: Variant, fresh: bool) 
 
 
 ## True when a class apply must be skipped: an empty name, or an id that
-## is not in a loaded DataCatalog (logged; no fallback). With no catalog,
-## the id is accepted so the caller can still store it.
+## is not in a loaded DataCatalog (logged once per name; no fallback).
+## With no catalog, the id is accepted so the caller can still store it.
 func _reject_class_apply(class_id: String) -> bool:
 	if class_id == "":
 		return true
 	if _catalog == null:
 		return false
 	if _catalog.class_def(class_id) == null:
-		DataCatalog.report_unknown_id(class_id)
+		if not _logged_unknown_class_ids.has(class_id):
+			_logged_unknown_class_ids[class_id] = true
+			DataCatalog.report_unknown_id(class_id)
 		return true
 	return false
+
+
+## True when a fresh add_player / _make_player must be refused because the
+## caller explicitly set an unknown or empty class. Omitting class is not
+## a refusal.
+func _refuse_fresh_class(character: Variant) -> bool:
+	var class_id := ""
+	var class_set := false
+	if character is String:
+		class_id = String(character)
+		class_set = true
+	elif character is Dictionary:
+		var d: Dictionary = character
+		if d.has("class_id"):
+			class_id = String(d["class_id"])
+			class_set = true
+		elif d.has("class"):
+			class_id = String(d["class"])
+			class_set = true
+	if not class_set:
+		return false
+	return _reject_class_apply(class_id)
 
 
 ## Switch class without refilling HP or resetting ability state. An unknown
@@ -2385,7 +2418,10 @@ func _apply_pending_roster() -> void:
 			if _players.has(pid):
 				continue
 			var rec: Dictionary = _pending_adds[pid]
-			var p := _make_player(pid, 0.0, 0.0, rec.get("character", null))
+			var character: Variant = rec.get("character", null)
+			if _refuse_fresh_class(character):
+				continue
+			var p := _make_player(pid, 0.0, 0.0, character)
 			_players[pid] = p
 			changed = true
 		_pending_adds.clear()

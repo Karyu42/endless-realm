@@ -504,3 +504,59 @@ func test_class_change_and_back_keeps_remaining_cooldown() -> void:
 	assert_eq(sim.get_player(pid).class_id, "thornguard")
 	assert_eq(sim.ability_cooldown_ticks(pid), 150)
 	assert_eq(sim.ally_ability_heals(pid), 3)
+
+
+func test_fresh_add_with_unknown_or_empty_class_is_refused() -> void:
+	# A fresh add_player with an unknown or empty class is refused: nothing
+	# is queued or created, and the allocator and maps stay unchanged.
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	var next_id: int = sim._next_id
+	var ability_keys: Array = sim._ability_by_player.keys()
+	assert_false(sim.add_player(pid, "bogus_class"))
+	assert_push_error("DataCatalog: unknown id bogus_class")
+	assert_eq(sim.get_player(pid), null)
+	assert_false(sim._pending_adds.has(pid))
+	assert_eq(sim._next_id, next_id)
+	assert_eq(sim._ability_by_player.keys(), ability_keys)
+	sim.step()
+	assert_eq(sim.get_player(pid), null)
+	assert_eq(sim._next_id, next_id)
+	assert_eq(sim._ability_by_player.keys(), ability_keys)
+
+	assert_false(sim.add_player(pid, ""))
+	assert_eq(sim.get_player(pid), null)
+	assert_false(sim._pending_adds.has(pid))
+	sim.step()
+	assert_eq(sim.get_player(pid), null)
+
+	assert_false(sim.add_player(pid, {"class_id": "no_such_class", "x": 3.0, "y": 3.0}))
+	assert_push_error("DataCatalog: unknown id no_such_class")
+	assert_eq(sim.get_player(pid), null)
+	assert_false(sim.add_player(pid, {"class": ""}))
+	assert_eq(sim.get_player(pid), null)
+	assert_eq(sim._next_id, next_id)
+	assert_eq(sim._ability_by_player.keys(), ability_keys)
+	# The issued id can still be used with a real class.
+	assert_true(sim.add_player(pid, "thornguard"))
+	sim.step()
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+
+
+func test_fresh_add_with_no_class_still_works() -> void:
+	# Omitting class entirely still joins on the no-class default path.
+	var sim := _new_sim()
+	var none: int = sim.alloc_player_id()
+	assert_true(sim.add_player(none, {"x": 3.0, "y": 3.0}))
+	sim.step()
+	assert_eq(sim.get_player(none).class_id, "")
+	assert_eq(sim.get_player(none).hp, 200)
+	var bare: int = sim.alloc_player_id()
+	assert_true(sim.add_player(bare))
+	sim.step()
+	assert_eq(sim.get_player(bare).class_id, "")
+	assert_eq(sim.get_player(bare).hp, 200)
+	var placed: int = sim.alloc_player_id()
+	sim.place_player(placed, 4.0, 4.0)
+	assert_eq(sim.get_player(placed).class_id, "")
+	assert_eq(sim.get_player(placed).hp, 200)
