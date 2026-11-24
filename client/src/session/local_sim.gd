@@ -35,6 +35,7 @@ const NON_IDLE_WINDOW_TICKS: int = ACTIVITY_WINDOW_TICKS
 const ACTIVITY_AIM_DEG: float = 10.0
 ## vision §6.1 rule 6a: after an empty-arena reset the boss is untouched for 5 s.
 const BOSS_RESET_UNTOUCHED_TICKS: int = 100
+const CLASS_CHANGE_REFUSED_LOG := "LocalSim: class change refused outside town"
 
 var _config: SimConfig
 var _catalog: DataCatalog
@@ -375,10 +376,12 @@ func _apply_character_state(p: SimPlayerState, character: Variant, fresh: bool) 
 	if fresh:
 		_set_player_class_on(p, class_id, fresh_fill)
 	elif class_set and class_id != p.class_id:
-		# Cancelled leave: apply a real class change only. Keep HP, Focus,
-		# cooldown, and the ally-heal support counter. Unknown or empty
-		# names leave the current class unchanged.
-		_adopt_player_class(p, class_id)
+		# Cancelled leave: apply a real class change only in town. In a
+		# dungeon instance the current class is kept and a refusal is
+		# logged. Keep HP, Focus, cooldown, and the ally-heal support
+		# counter. Unknown or empty names leave the current class unchanged.
+		if not _refuse_class_change(p, class_id):
+			_adopt_player_class(p, class_id)
 	if has_hp and not fresh_fill:
 		_apply_placed_hp(p, requested_hp, fresh)
 
@@ -1304,8 +1307,11 @@ func set_player_class_for(player_id: int, class_id: String) -> void:
 	# Ability state is created even if the player is not in _players yet
 	# (place_ally / mid-_make_player). SimPlayerState is updated when present.
 	# An unknown or empty name keeps the current class and ability state.
+	# A different class in a dungeon instance is refused; town is unchanged.
 	var p: SimPlayerState = _players.get(player_id, null) as SimPlayerState
 	if p != null:
+		if _refuse_class_change(p, class_id):
+			return
 		_set_player_class_on(p, class_id, true)
 		return
 	if _reject_class_apply(class_id):
@@ -1315,6 +1321,67 @@ func set_player_class_for(player_id: int, class_id: String) -> void:
 	if cdef != null and cdef.ability_id != "":
 		adef = _catalog.ability(cdef.ability_id)
 	_ability_of(player_id).reset_for_class(cdef, adef)
+
+
+## True when this sim is a town (Hearth) sim. Class changes apply in place
+## only here. A dungeon or practice-vault instance (`configure_dungeon`) is
+## not town.
+func is_town() -> bool:
+	return _dungeon == null
+
+
+## Whether the host can apply `class_id` in place for this player. A same-class
+## rejoin is always allowed. A different class is allowed only in town. The
+## host should run linger and then apply_class_change_arrival when this is
+## false.
+func class_change_allowed(id: int, class_id: String) -> bool:
+	if _reject_class_apply(class_id):
+		return false
+	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
+	if p != null and class_id == p.class_id:
+		return true
+	return is_town()
+
+
+## After-linger town arrival of a class-changed character (content-v0.1
+## class lock). Applies the new class with HP = min(current, new max), 0
+## Focus, the ability on full cooldown, no snapshot carry, and no boss
+## credit, and seeds a fresh activity stamp. Full max HP is only for a
+## fresh spawn with no live or lingering body (add_player).
+## TODO(§7.1): pending loot banking is host / persistence side.
+func apply_class_change_arrival(id: int, class_id: String) -> bool:
+	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
+	if p == null:
+		return false
+	if _reject_class_apply(class_id):
+		return false
+	var current_hp: int = p.hp
+	_set_player_class_on(p, class_id, false)
+	var max_hp: int = _current_max_hp(p)
+	if current_hp > 0:
+		p.hp = mini(current_hp, max_hp)
+	else:
+		# A dead body is not revived. Full max HP is the fresh-add path.
+		p.hp = current_hp
+	var st := _ability_of(id)
+	st.focus = 0.0
+	st.cooldown_ticks = st.ability_def.cooldown_ticks if st.ability_def != null else 0
+	_seed_activity(p)
+	return true
+
+
+## True when a different, known class must be kept off this player because
+## the sim is not town. Logs one refusal. Same class, unknown ids, and town
+## are not refusals here.
+func _refuse_class_change(p: SimPlayerState, class_id: String) -> bool:
+	if p == null or class_id == p.class_id:
+		return false
+	if is_town():
+		return false
+	if _reject_class_apply(class_id):
+		return false
+	push_error(CLASS_CHANGE_REFUSED_LOG)
+	return true
 
 
 func _set_player_class_on(p: SimPlayerState, class_id: String, fill: bool) -> void:
