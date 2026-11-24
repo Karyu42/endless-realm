@@ -195,6 +195,12 @@ func test_instance_row_shows_base_level_capacity_admitted_and_closed() -> void:
 	assert_string_contains(open_text, "E10")
 	assert_string_contains(open_text, "1/4")
 	assert_eq(open_text.find("Closed"), -1)
+	var hidden: Dictionary = open_info.duplicate()
+	hidden.erase("capacity")
+	hidden.erase("admitted_count")
+	var hidden_text: String = InstanceRowFormat.format(hidden, _ui)
+	assert_string_contains(hidden_text, "E10")
+	assert_eq(hidden_text.find("0/0"), -1, "no admitted line without a capacity")
 
 
 func test_client_world_source_fills_portals_from_the_last_snapshot() -> void:
