@@ -76,6 +76,41 @@ message Snapshot {
   // Loot bags visible to the receiving player: only that player's own bags.
   // Each recipient gets its own list; it is empty for most players.
   repeated LootBag bags = 3;
+  // Portals and markers in the receiving player's current instance only.
+  repeated PortalState portals = 4;
+  // Entrances in `portals` this receiving player may still re-enter even
+  // when `closed` (an earlier admission); the only per-viewer portal data.
+  repeated uint64 admitted_portal_ids = 5;
+}
+
+// PortalSnapshot kind; names are packed-data ids, never display names.
+enum PortalKind {
+  PORTAL_KIND_UNSPECIFIED = 0;
+  ENTER = 1;
+  EXIT = 2;
+  PLACEHOLDER = 3;
+}
+
+message PortalState {
+  uint64 id = 1;
+  float x = 2;
+  float y = 3;
+  float radius = 4;
+  PortalKind kind = 5;
+  string dungeon_id = 6;
+  string marker_id = 7;
+  uint32 m100 = 8;
+  uint32 base_level = 9;
+  uint32 content_level = 10;
+  uint32 capacity = 11;
+  uint32 admitted_count = 12;
+  // Closed for new entry: host-closed or past its admission deadline. The
+  // same for every viewer; see Snapshot.admitted_portal_ids for re-entry.
+  bool closed = 13;
+  bool persistent = 14;
+  bool grants_persistent = 15;
+  // Host tick deadline for new admissions; 0 for persistent doors / markers.
+  uint32 expire_tick = 16;
 }
 
 // A personal loot bag on the ground (tile units). Item details stay
@@ -122,6 +157,11 @@ message InstanceInfo {
   uint64 seed = 3;
   uint32 player_count = 4;
   bool is_default = 5;
+  uint32 base_level = 6;
+  uint32 capacity = 7;
+  uint32 admitted_count = 8;
+  // Same meaning as PortalState.closed for the entrance behind it.
+  bool closed = 9;
 }
 
 message OpenPortalOk {

@@ -83,8 +83,14 @@ def run_one(args, clients):
                 "--host", "--port", str(port), "--expect-clients", str(clients),
                 "--emitters", str(args.emitters), "--exit-when-empty",
                 "--run-seconds", str(args.duration + 60)]
+    if args.distinct_admitted and (1 << args.entrances) < clients:
+        raise SystemExit(f"--distinct-admitted needs 2^entrances >= clients ({clients})")
     if args.instances > 1:
         host_cmd.extend(["--loadtest-instances", str(args.instances)])
+    if args.entrances > 0:
+        host_cmd.extend(["--loadtest-entrances", str(args.entrances)])
+    if args.distinct_admitted:
+        host_cmd.append("--loadtest-distinct-admitted")
     # This override is only used by this load-test driver, never normal lobbies.
     if clients > 50:
         host_cmd.extend(["--loadtest-unsafe-max-players", str(clients)])
@@ -149,6 +155,8 @@ def run_one(args, clients):
     window = max(t1 - t0, 1e-9)
     stats.update({
         "clients": clients,
+        "entrances": args.entrances,
+        "distinct_admitted": args.distinct_admitted,
         "bot_exit": bot.returncode,
         "bot_output": bot_out.strip(),
         "host_cpu_pct": round(100 * (cpu1 - cpu0) / window, 1),
@@ -165,15 +173,16 @@ def ms(us):
 
 def table(results):
     rows = ["| clients | live bullets (avg) | tick p50 / p95 / p99 / max (ms) | net-in / sim / encode / send p50 (ms) "
-            "| achieved Hz | skipped ticks | snapshot B/client/s (wire stub) | projected full-state B/client/s "
+            "| achieved Hz | skipped ticks | snapshot B/client/s (wire stub) | per-viewer snapshot B avg / max | projected full-state B/client/s "
             "| host CPU % (of one core) | host RSS MiB (max) | bot ok |",
-            "|---|---|---|---|---|---|---|---|---|---|---|"]
+            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in results:
         t = r["tick_us"]
-        rows.append("| {c} | {b:.0f} | {p50} / {p95} / {p99} / {mx} | {ni} / {si} / {en} / {se} | {hz} | {sk} | {sb:,.0f} | {fb:,.0f} | {cpu} | {rss} | {ok} |".format(
+        rows.append("| {c} | {b:.0f} | {p50} / {p95} / {p99} / {mx} | {ni} / {si} / {en} / {se} | {hz} | {sk} | {sb:,.0f} | {vb} / {vm} | {fb:,.0f} | {cpu} | {rss} | {ok} |".format(
             c=r["clients"], b=r["bullets_avg"], p50=ms(t["p50"]), p95=ms(t["p95"]), p99=ms(t["p99"]), mx=ms(t["max"]),
             ni=ms(r["net_in_us"]["p50"]), si=ms(r["sim_us"]["p50"]), en=ms(r["encode_us"]["p50"]), se=ms(r["send_us"]["p50"]),
             hz=r["achieved_tick_hz"], sk=r["skipped_ticks"], sb=r["snapshot_bytes_per_client_s"],
+            vb=r.get("viewer_snapshot_bytes_avg", "-"), vm=r.get("viewer_snapshot_bytes_max", "-"),
             fb=r["full_state_bytes_per_client_s"], cpu=r["host_cpu_pct"], rss=r["host_rss_mib_max"],
             ok="yes" if r["bot_exit"] == 0 else f"no ({r['bot_exit']})"))
     return "\n".join(rows)
@@ -186,6 +195,11 @@ def main():
     ap.add_argument("--emitters", type=int, default=20)
     ap.add_argument("--instances", type=int, default=0,
                     help="spread clients over the overworld and N-1 dungeon instances")
+    ap.add_argument("--entrances", type=int, default=0,
+                    help="open the practice door plus N normal overworld entrances")
+    ap.add_argument("--distinct-admitted", action="store_true",
+                    help="admit every client to a distinct subset of those entrances "
+                         "(per-viewer worst case; needs 2^N >= clients)")
     ap.add_argument("--max-p99-ms", type=float, default=40, help="fail if host tick p99 exceeds this many ms")
     ap.add_argument("--max-skipped-ticks", type=int, default=0, help="fail if host skips more ticks than this")
     ap.add_argument("--godot", default=os.environ.get("GODOT", "godot"))

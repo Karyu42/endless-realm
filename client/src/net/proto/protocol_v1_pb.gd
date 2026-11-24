@@ -1137,6 +1137,19 @@ class Snapshot:
 		service.func_ref = Callable(self, "add_bags")
 		data[__bags.tag] = service
 		
+		var __portals_default: Array[PortalState] = []
+		__portals = PBField.new("portals", PB_DATA_TYPE.MESSAGE, PB_RULE.REPEATED, 4, true, __portals_default)
+		service = PBServiceField.new()
+		service.field = __portals
+		service.func_ref = Callable(self, "add_portals")
+		data[__portals.tag] = service
+		
+		var __admitted_portal_ids_default: Array[int] = []
+		__admitted_portal_ids = PBField.new("admitted_portal_ids", PB_DATA_TYPE.UINT64, PB_RULE.REPEATED, 5, true, __admitted_portal_ids_default)
+		service = PBServiceField.new()
+		service.field = __admitted_portal_ids
+		data[__admitted_portal_ids.tag] = service
+		
 	var data = {}
 	
 	var __tick: PBField
@@ -1173,6 +1186,348 @@ class Snapshot:
 		var element = LootBag.new()
 		__bags.value.append(element)
 		return element
+	
+	var __portals: PBField
+	func get_portals() -> Array[PortalState]:
+		return __portals.value
+	func clear_portals() -> void:
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__portals.value.clear()
+	func add_portals() -> PortalState:
+		var element = PortalState.new()
+		__portals.value.append(element)
+		return element
+	
+	var __admitted_portal_ids: PBField
+	func get_admitted_portal_ids() -> Array[int]:
+		return __admitted_portal_ids.value
+	func clear_admitted_portal_ids() -> void:
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__admitted_portal_ids.value.clear()
+	func add_admitted_portal_ids(value : int) -> void:
+		__admitted_portal_ids.value.append(value)
+	
+	func _to_string() -> String:
+		return PBPacker.message_to_string(data)
+		
+	func to_bytes() -> PackedByteArray:
+		return PBPacker.pack_message(data)
+		
+	func from_bytes(bytes : PackedByteArray, offset : int = 0, limit : int = -1) -> int:
+		var cur_limit = bytes.size()
+		if limit != -1:
+			cur_limit = limit
+		var result = PBPacker.unpack_message(data, bytes, offset, cur_limit)
+		if result == cur_limit:
+			if PBPacker.check_required(data):
+				if limit == -1:
+					return PB_ERR.NO_ERRORS
+			else:
+				return PB_ERR.REQUIRED_FIELDS
+		elif limit == -1 && result > 0:
+			return PB_ERR.PARSE_INCOMPLETE
+		return result
+	
+enum PortalKind {
+	PORTAL_KIND_UNSPECIFIED = 0,
+	ENTER = 1,
+	EXIT = 2,
+	PLACEHOLDER = 3
+}
+
+class PortalState:
+	func _init():
+		var service
+		
+		__id = PBField.new("id", PB_DATA_TYPE.UINT64, PB_RULE.OPTIONAL, 1, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64])
+		service = PBServiceField.new()
+		service.field = __id
+		data[__id.tag] = service
+		
+		__x = PBField.new("x", PB_DATA_TYPE.FLOAT, PB_RULE.OPTIONAL, 2, true, DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT])
+		service = PBServiceField.new()
+		service.field = __x
+		data[__x.tag] = service
+		
+		__y = PBField.new("y", PB_DATA_TYPE.FLOAT, PB_RULE.OPTIONAL, 3, true, DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT])
+		service = PBServiceField.new()
+		service.field = __y
+		data[__y.tag] = service
+		
+		__radius = PBField.new("radius", PB_DATA_TYPE.FLOAT, PB_RULE.OPTIONAL, 4, true, DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT])
+		service = PBServiceField.new()
+		service.field = __radius
+		data[__radius.tag] = service
+		
+		__kind = PBField.new("kind", PB_DATA_TYPE.ENUM, PB_RULE.OPTIONAL, 5, true, DEFAULT_VALUES_3[PB_DATA_TYPE.ENUM])
+		service = PBServiceField.new()
+		service.field = __kind
+		data[__kind.tag] = service
+		
+		__dungeon_id = PBField.new("dungeon_id", PB_DATA_TYPE.STRING, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.STRING])
+		service = PBServiceField.new()
+		service.field = __dungeon_id
+		data[__dungeon_id.tag] = service
+		
+		__marker_id = PBField.new("marker_id", PB_DATA_TYPE.STRING, PB_RULE.OPTIONAL, 7, true, DEFAULT_VALUES_3[PB_DATA_TYPE.STRING])
+		service = PBServiceField.new()
+		service.field = __marker_id
+		data[__marker_id.tag] = service
+		
+		__m100 = PBField.new("m100", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 8, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __m100
+		data[__m100.tag] = service
+		
+		__base_level = PBField.new("base_level", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 9, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __base_level
+		data[__base_level.tag] = service
+		
+		__content_level = PBField.new("content_level", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 10, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __content_level
+		data[__content_level.tag] = service
+		
+		__capacity = PBField.new("capacity", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 11, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __capacity
+		data[__capacity.tag] = service
+		
+		__admitted_count = PBField.new("admitted_count", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 12, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __admitted_count
+		data[__admitted_count.tag] = service
+		
+		__closed = PBField.new("closed", PB_DATA_TYPE.BOOL, PB_RULE.OPTIONAL, 13, true, DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL])
+		service = PBServiceField.new()
+		service.field = __closed
+		data[__closed.tag] = service
+		
+		__persistent = PBField.new("persistent", PB_DATA_TYPE.BOOL, PB_RULE.OPTIONAL, 14, true, DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL])
+		service = PBServiceField.new()
+		service.field = __persistent
+		data[__persistent.tag] = service
+		
+		__grants_persistent = PBField.new("grants_persistent", PB_DATA_TYPE.BOOL, PB_RULE.OPTIONAL, 15, true, DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL])
+		service = PBServiceField.new()
+		service.field = __grants_persistent
+		data[__grants_persistent.tag] = service
+		
+		__expire_tick = PBField.new("expire_tick", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 16, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __expire_tick
+		data[__expire_tick.tag] = service
+		
+	var data = {}
+	
+	var __id: PBField
+	func has_id() -> bool:
+		if __id.value != null:
+			return true
+		return false
+	func get_id() -> int:
+		return __id.value
+	func clear_id() -> void:
+		data[1].state = PB_SERVICE_STATE.UNFILLED
+		__id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT64]
+	func set_id(value : int) -> void:
+		__id.value = value
+	
+	var __x: PBField
+	func has_x() -> bool:
+		if __x.value != null:
+			return true
+		return false
+	func get_x() -> float:
+		return __x.value
+	func clear_x() -> void:
+		data[2].state = PB_SERVICE_STATE.UNFILLED
+		__x.value = DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT]
+	func set_x(value : float) -> void:
+		__x.value = value
+	
+	var __y: PBField
+	func has_y() -> bool:
+		if __y.value != null:
+			return true
+		return false
+	func get_y() -> float:
+		return __y.value
+	func clear_y() -> void:
+		data[3].state = PB_SERVICE_STATE.UNFILLED
+		__y.value = DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT]
+	func set_y(value : float) -> void:
+		__y.value = value
+	
+	var __radius: PBField
+	func has_radius() -> bool:
+		if __radius.value != null:
+			return true
+		return false
+	func get_radius() -> float:
+		return __radius.value
+	func clear_radius() -> void:
+		data[4].state = PB_SERVICE_STATE.UNFILLED
+		__radius.value = DEFAULT_VALUES_3[PB_DATA_TYPE.FLOAT]
+	func set_radius(value : float) -> void:
+		__radius.value = value
+	
+	var __kind: PBField
+	func has_kind() -> bool:
+		if __kind.value != null:
+			return true
+		return false
+	func get_kind():
+		return __kind.value
+	func clear_kind() -> void:
+		data[5].state = PB_SERVICE_STATE.UNFILLED
+		__kind.value = DEFAULT_VALUES_3[PB_DATA_TYPE.ENUM]
+	func set_kind(value) -> void:
+		__kind.value = value
+	
+	var __dungeon_id: PBField
+	func has_dungeon_id() -> bool:
+		if __dungeon_id.value != null:
+			return true
+		return false
+	func get_dungeon_id() -> String:
+		return __dungeon_id.value
+	func clear_dungeon_id() -> void:
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__dungeon_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.STRING]
+	func set_dungeon_id(value : String) -> void:
+		__dungeon_id.value = value
+	
+	var __marker_id: PBField
+	func has_marker_id() -> bool:
+		if __marker_id.value != null:
+			return true
+		return false
+	func get_marker_id() -> String:
+		return __marker_id.value
+	func clear_marker_id() -> void:
+		data[7].state = PB_SERVICE_STATE.UNFILLED
+		__marker_id.value = DEFAULT_VALUES_3[PB_DATA_TYPE.STRING]
+	func set_marker_id(value : String) -> void:
+		__marker_id.value = value
+	
+	var __m100: PBField
+	func has_m100() -> bool:
+		if __m100.value != null:
+			return true
+		return false
+	func get_m100() -> int:
+		return __m100.value
+	func clear_m100() -> void:
+		data[8].state = PB_SERVICE_STATE.UNFILLED
+		__m100.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_m100(value : int) -> void:
+		__m100.value = value
+	
+	var __base_level: PBField
+	func has_base_level() -> bool:
+		if __base_level.value != null:
+			return true
+		return false
+	func get_base_level() -> int:
+		return __base_level.value
+	func clear_base_level() -> void:
+		data[9].state = PB_SERVICE_STATE.UNFILLED
+		__base_level.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_base_level(value : int) -> void:
+		__base_level.value = value
+	
+	var __content_level: PBField
+	func has_content_level() -> bool:
+		if __content_level.value != null:
+			return true
+		return false
+	func get_content_level() -> int:
+		return __content_level.value
+	func clear_content_level() -> void:
+		data[10].state = PB_SERVICE_STATE.UNFILLED
+		__content_level.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_content_level(value : int) -> void:
+		__content_level.value = value
+	
+	var __capacity: PBField
+	func has_capacity() -> bool:
+		if __capacity.value != null:
+			return true
+		return false
+	func get_capacity() -> int:
+		return __capacity.value
+	func clear_capacity() -> void:
+		data[11].state = PB_SERVICE_STATE.UNFILLED
+		__capacity.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_capacity(value : int) -> void:
+		__capacity.value = value
+	
+	var __admitted_count: PBField
+	func has_admitted_count() -> bool:
+		if __admitted_count.value != null:
+			return true
+		return false
+	func get_admitted_count() -> int:
+		return __admitted_count.value
+	func clear_admitted_count() -> void:
+		data[12].state = PB_SERVICE_STATE.UNFILLED
+		__admitted_count.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_admitted_count(value : int) -> void:
+		__admitted_count.value = value
+	
+	var __closed: PBField
+	func has_closed() -> bool:
+		if __closed.value != null:
+			return true
+		return false
+	func get_closed() -> bool:
+		return __closed.value
+	func clear_closed() -> void:
+		data[13].state = PB_SERVICE_STATE.UNFILLED
+		__closed.value = DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL]
+	func set_closed(value : bool) -> void:
+		__closed.value = value
+	
+	var __persistent: PBField
+	func has_persistent() -> bool:
+		if __persistent.value != null:
+			return true
+		return false
+	func get_persistent() -> bool:
+		return __persistent.value
+	func clear_persistent() -> void:
+		data[14].state = PB_SERVICE_STATE.UNFILLED
+		__persistent.value = DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL]
+	func set_persistent(value : bool) -> void:
+		__persistent.value = value
+	
+	var __grants_persistent: PBField
+	func has_grants_persistent() -> bool:
+		if __grants_persistent.value != null:
+			return true
+		return false
+	func get_grants_persistent() -> bool:
+		return __grants_persistent.value
+	func clear_grants_persistent() -> void:
+		data[15].state = PB_SERVICE_STATE.UNFILLED
+		__grants_persistent.value = DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL]
+	func set_grants_persistent(value : bool) -> void:
+		__grants_persistent.value = value
+	
+	var __expire_tick: PBField
+	func has_expire_tick() -> bool:
+		if __expire_tick.value != null:
+			return true
+		return false
+	func get_expire_tick() -> int:
+		return __expire_tick.value
+	func clear_expire_tick() -> void:
+		data[16].state = PB_SERVICE_STATE.UNFILLED
+		__expire_tick.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_expire_tick(value : int) -> void:
+		__expire_tick.value = value
 	
 	func _to_string() -> String:
 		return PBPacker.message_to_string(data)
@@ -1566,6 +1921,26 @@ class InstanceInfo:
 		service.field = __is_default
 		data[__is_default.tag] = service
 		
+		__base_level = PBField.new("base_level", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 6, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __base_level
+		data[__base_level.tag] = service
+		
+		__capacity = PBField.new("capacity", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 7, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __capacity
+		data[__capacity.tag] = service
+		
+		__admitted_count = PBField.new("admitted_count", PB_DATA_TYPE.UINT32, PB_RULE.OPTIONAL, 8, true, DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32])
+		service = PBServiceField.new()
+		service.field = __admitted_count
+		data[__admitted_count.tag] = service
+		
+		__closed = PBField.new("closed", PB_DATA_TYPE.BOOL, PB_RULE.OPTIONAL, 9, true, DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL])
+		service = PBServiceField.new()
+		service.field = __closed
+		data[__closed.tag] = service
+		
 	var data = {}
 	
 	var __instance: PBField
@@ -1632,6 +2007,58 @@ class InstanceInfo:
 		__is_default.value = DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL]
 	func set_is_default(value : bool) -> void:
 		__is_default.value = value
+	
+	var __base_level: PBField
+	func has_base_level() -> bool:
+		if __base_level.value != null:
+			return true
+		return false
+	func get_base_level() -> int:
+		return __base_level.value
+	func clear_base_level() -> void:
+		data[6].state = PB_SERVICE_STATE.UNFILLED
+		__base_level.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_base_level(value : int) -> void:
+		__base_level.value = value
+	
+	var __capacity: PBField
+	func has_capacity() -> bool:
+		if __capacity.value != null:
+			return true
+		return false
+	func get_capacity() -> int:
+		return __capacity.value
+	func clear_capacity() -> void:
+		data[7].state = PB_SERVICE_STATE.UNFILLED
+		__capacity.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_capacity(value : int) -> void:
+		__capacity.value = value
+	
+	var __admitted_count: PBField
+	func has_admitted_count() -> bool:
+		if __admitted_count.value != null:
+			return true
+		return false
+	func get_admitted_count() -> int:
+		return __admitted_count.value
+	func clear_admitted_count() -> void:
+		data[8].state = PB_SERVICE_STATE.UNFILLED
+		__admitted_count.value = DEFAULT_VALUES_3[PB_DATA_TYPE.UINT32]
+	func set_admitted_count(value : int) -> void:
+		__admitted_count.value = value
+	
+	var __closed: PBField
+	func has_closed() -> bool:
+		if __closed.value != null:
+			return true
+		return false
+	func get_closed() -> bool:
+		return __closed.value
+	func clear_closed() -> void:
+		data[9].state = PB_SERVICE_STATE.UNFILLED
+		__closed.value = DEFAULT_VALUES_3[PB_DATA_TYPE.BOOL]
+	func set_closed(value : bool) -> void:
+		__closed.value = value
 	
 	func _to_string() -> String:
 		return PBPacker.message_to_string(data)
