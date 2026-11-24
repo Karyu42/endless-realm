@@ -353,35 +353,51 @@ func _apply_character_state(p: SimPlayerState, character: Variant, fresh: bool) 
 		if d.has("x") or d.has("y"):
 			_set_placed_position(p, p.x, p.y)
 	# A fresh add treats HP <= 0 as omitted and fills to max, so it never
-	# creates a 0-HP player. place_player uses the same rule.
+	# creates a 0-HP player. A cancelled leave and place_player treat
+	# HP <= 0 as omitted and keep the current HP.
 	var fresh_fill: bool = fresh and (not has_hp or requested_hp <= 0)
 	if fresh:
 		_set_player_class_on(p, class_id, fresh_fill)
 	elif class_set and class_id != p.class_id:
 		# Cancelled leave: apply a real class change only. Keep HP, Focus,
-		# cooldown, and the ally-heal support counter.
+		# cooldown, and the ally-heal support counter. Unknown or empty
+		# names leave the current class unchanged.
 		_adopt_player_class(p, class_id)
 	if has_hp and not fresh_fill:
 		_apply_placed_hp(p, requested_hp, fresh)
 
 
-## Switch class without refilling HP or resetting ability state.
+## True when a class apply must be skipped: an empty name, or an id that
+## is not in a loaded DataCatalog (logged; no fallback). With no catalog,
+## the id is accepted so the caller can still store it.
+func _reject_class_apply(class_id: String) -> bool:
+	if class_id == "":
+		return true
+	if _catalog == null:
+		return false
+	if _catalog.class_def(class_id) == null:
+		DataCatalog.report_unknown_id(class_id)
+		return true
+	return false
+
+
+## Switch class without refilling HP or resetting ability state. An unknown
+## or empty name keeps the current class, cooldown, and Focus.
 func _adopt_player_class(p: SimPlayerState, class_id: String) -> void:
-	if p == null or p.class_id == class_id:
+	if p == null or class_id == p.class_id:
+		return
+	if _reject_class_apply(class_id):
 		return
 	p.class_id = class_id
-	p.class_def = null
+	p.class_def = _catalog.class_def(class_id) if _catalog != null else null
 	var adef: AbilityDef = null
-	if _catalog != null and class_id != "":
-		p.class_def = _catalog.class_def(class_id)
-		if p.class_def != null and p.class_def.ability_id != "":
-			adef = _catalog.ability(p.class_def.ability_id)
+	if p.class_def != null and p.class_def.ability_id != "":
+		adef = _catalog.ability(p.class_def.ability_id)
 	var st := _ability_of(p.id)
 	st.class_def = p.class_def
 	st.ability_def = adef
-	var cd_max: int = adef.cooldown_ticks if adef != null else 0
-	if st.cooldown_ticks > cd_max:
-		st.cooldown_ticks = cd_max
+	# Remaining cooldown is kept as-is, even if it is longer than the new
+	# ability's max. The HUD clamps its display fraction to 1.
 	var max_hp: int = _current_max_hp(p)
 	if p.hp > max_hp:
 		p.hp = max_hp
@@ -392,15 +408,17 @@ func _adopt_player_class(p: SimPlayerState, class_id: String) -> void:
 
 ## Character-dict / place_player HP sanitizing. Values below 0 are ignored:
 ## the current HP is kept, or max HP is used on a fresh add. On a fresh
-## add_player, HP <= 0 is also ignored and uses max. Values above max are
-## capped. A dead player (hp <= 0) is not brought back to life.
+## add_player, HP <= 0 is also ignored and uses max. On a cancelled leave
+## or place_player of an existing player, HP <= 0 keeps the current HP.
+## Values above max are capped. A dead player (hp <= 0) is not brought
+## back to life.
 ## Explicit HP must come only from host-built character data, never from
 ## a client-supplied value.
 func _apply_placed_hp(p: SimPlayerState, requested: int, fresh: bool) -> void:
 	if p == null:
 		return
 	var max_hp: int = _current_max_hp(p)
-	if requested < 0:
+	if requested <= 0:
 		if fresh:
 			p.hp = max_hp
 		return
@@ -1244,32 +1262,36 @@ func set_player_class(class_id: String) -> void:
 func set_player_class_for(player_id: int, class_id: String) -> void:
 	# Ability state is created even if the player is not in _players yet
 	# (place_ally / mid-_make_player). SimPlayerState is updated when present.
+	# An unknown or empty name keeps the current class and ability state.
 	var p: SimPlayerState = _players.get(player_id, null) as SimPlayerState
 	if p != null:
 		_set_player_class_on(p, class_id, true)
 		return
-	var st := _ability_of(player_id)
-	var cdef: ClassDef = null
+	if _reject_class_apply(class_id):
+		return
+	var cdef: ClassDef = _catalog.class_def(class_id) if _catalog != null else null
 	var adef: AbilityDef = null
-	if _catalog != null and class_id != "":
-		cdef = _catalog.class_def(class_id)
-		if cdef != null and cdef.ability_id != "":
-			adef = _catalog.ability(cdef.ability_id)
-	st.reset_for_class(cdef, adef)
+	if cdef != null and cdef.ability_id != "":
+		adef = _catalog.ability(cdef.ability_id)
+	_ability_of(player_id).reset_for_class(cdef, adef)
 
 
 func _set_player_class_on(p: SimPlayerState, class_id: String, fill: bool) -> void:
 	if p == null:
 		return
-	p.class_id = class_id
-	p.class_def = null
-	var adef: AbilityDef = null
-	if _catalog != null and class_id != "":
-		p.class_def = _catalog.class_def(class_id)
+	if class_id != "":
+		if _reject_class_apply(class_id):
+			# Unknown name: keep the current class, cooldown, and Focus.
+			return
+		p.class_id = class_id
+		p.class_def = _catalog.class_def(class_id) if _catalog != null else null
+		var adef: AbilityDef = null
 		if p.class_def != null and p.class_def.ability_id != "":
 			adef = _catalog.ability(p.class_def.ability_id)
-	var st := _ability_of(p.id)
-	st.reset_for_class(p.class_def, adef)
+		_ability_of(p.id).reset_for_class(p.class_def, adef)
+	elif p.class_id != "":
+		# Empty name: keep the current class, cooldown, and Focus.
+		return
 	_recompute_player_stats(p, fill)
 
 

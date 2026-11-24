@@ -314,7 +314,8 @@ func test_character_dict_hp_is_sanitized() -> void:
 	assert_eq(sim.get_player(readd).hp, 200)
 	sim.remove_player(readd)
 	assert_true(sim.add_player(readd, {"hp": 0}))
-	assert_eq(sim.get_player(readd).hp, 0)
+	assert_eq(sim.get_player(readd).hp, 200, "cancelled leave keeps current HP when HP is 0")
+	sim.get_player(readd).hp = 0
 	sim.remove_player(readd)
 	assert_true(sim.add_player(readd, {"hp": 80}))
 	assert_eq(sim.get_player(readd).hp, 0, "cancelled leave does not revive a dead player")
@@ -426,27 +427,80 @@ func test_place_player_non_positive_hp_matches_add_player() -> void:
 	assert_eq(sim.get_player(existing).hp, 120)
 
 
-func test_class_change_clamps_cooldown_to_the_new_ability_max() -> void:
-	# Thorn Ward is 160 ticks; Kindle Pulse is 120. A leftover cooldown
-	# longer than the new max is clamped; a shorter one is kept.
+func test_cancelled_leave_non_positive_hp_keeps_current() -> void:
+	# Cancelled-leave add_player with HP <= 0 keeps the current HP, matching
+	# place_player of an existing player.
 	var sim := _new_sim()
-	var over: int = sim.alloc_player_id()
-	assert_true(sim.add_player(over, "thornguard"))
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, {"x": 3.0, "y": 3.0}))
 	sim.step()
-	sim.set_ability_cooldown_ticks(over, 150)
-	sim.ability_state(over).ally_ability_heals = 3
-	sim.get_player(over).hp = 80
-	sim.remove_player(over)
-	assert_true(sim.add_player(over, "gleamwright"))
-	assert_eq(sim.get_player(over).class_id, "gleamwright")
-	assert_eq(sim.ability_cooldown_ticks(over), 120)
-	assert_eq(sim.get_player(over).hp, 80)
-	assert_eq(sim.ally_ability_heals(over), 3)
+	sim.get_player(pid).hp = 120
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, {"hp": 0}))
+	assert_eq(sim.get_player(pid).hp, 120)
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, {"hp": -5}))
+	assert_eq(sim.get_player(pid).hp, 120)
 
-	var under: int = sim.alloc_player_id()
-	assert_true(sim.add_player(under, "thornguard"))
+
+func test_unknown_or_empty_class_keeps_current_class_and_ability_state() -> void:
+	# An unknown or empty class name keeps the current class, cooldown, and
+	# Focus. The unknown id is logged through DataCatalog.
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, "thornguard"))
 	sim.step()
-	sim.set_ability_cooldown_ticks(under, 40)
-	sim.remove_player(under)
-	assert_true(sim.add_player(under, "gleamwright"))
-	assert_eq(sim.ability_cooldown_ticks(under), 40)
+	sim.set_ability_cooldown_ticks(pid, 150)
+	sim.ability_state(pid).focus = 5.0
+	sim.ability_state(pid).ally_ability_heals = 3
+	sim.get_player(pid).hp = 80
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, "bogus_class"))
+	assert_push_error("DataCatalog: unknown id bogus_class")
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
+	assert_eq(sim.ally_ability_heals(pid), 3)
+	assert_eq(sim.get_player(pid).hp, 80)
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, ""))
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
+	sim.set_player_class_for(pid, "no_such_class")
+	assert_push_error("DataCatalog: unknown id no_such_class")
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
+	sim.set_player_class_for(pid, "")
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
+
+
+func test_class_change_and_back_keeps_remaining_cooldown() -> void:
+	# Thorn Ward is 160 ticks; Kindle Pulse is 120. A leftover cooldown is
+	# kept across a class change, even when it is longer than the new
+	# ability's max. Swapping to another class and back leaves it unchanged.
+	# The HUD display fraction is clamped to 1.
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, "thornguard"))
+	sim.step()
+	sim.set_ability_cooldown_ticks(pid, 150)
+	sim.ability_state(pid).ally_ability_heals = 3
+	sim.get_player(pid).hp = 80
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, "gleamwright"))
+	assert_eq(sim.get_player(pid).class_id, "gleamwright")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	var view := sim.world_view(pid)
+	assert_eq(view.ability_cooldown_max, 120)
+	assert_almost_eq(view.ability_cooldown_frac(), 1.0, 1e-6)
+	assert_eq(sim.get_player(pid).hp, 80)
+	assert_eq(sim.ally_ability_heals(pid), 3)
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, "thornguard"))
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_eq(sim.ally_ability_heals(pid), 3)
