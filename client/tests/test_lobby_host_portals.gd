@@ -617,7 +617,11 @@ func test_remote_join_floor_reject_carries_join_refused() -> void:
 	portal.base_level = 10
 	portal.content_level = 10
 	_host.sim.add_portal(portal)
-	assert_true(_host._resolve_bag(portal.id, p.id).is_empty())
+	var frame = PB.ClientMessage.new()
+	var inp = frame.new_input()
+	inp.set_seq(1)
+	inp.set_interact_target_id(portal.id)
+	ws.send(frame.to_bytes())  # a real network Interact press
 	var code := [-1]
 	assert_true(pump.call(func() -> bool:
 		while ws.get_available_packet_count() > 0:
@@ -2069,3 +2073,19 @@ func test_remote_list_instances() -> void:
 	assert_false(info.get_closed())
 	assert_eq(info.get_seed(), 0, "seed is never listed")
 	r.ws.close()
+
+
+
+func test_join_requirement_unknown_player_fails_closed() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	var p := _host._find_player(a)
+	var ghost := LobbyHost.HostPlayer.new()
+	ghost.id = a + 1000
+	ghost.sim_id = p.sim_id + 1000  # not in the sim
+	ghost.instance = p.instance
+	var r: Array = _host._enter_refusal(ghost, portal)
+	assert_eq(r[0], PB.ErrorCode.INSTANCE_NOT_FOUND, "fails closed with a specific code")
+	assert_ne(String(r[1]), "")
+	assert_eq(_host._enter_refusal(p, portal)[1], "", "a known player may enter")
