@@ -1000,20 +1000,36 @@ func test_aim_wrap_from_359_to_9_counts_as_ten_degrees() -> void:
 
 
 func test_walking_into_a_wall_is_idle() -> void:
-	# Requested travel is 5 tiles/s * 0.05 s * 40 ticks = 10 tiles, well over
-	# the 1-tile path threshold, but the body does not move.
-	var sim := LocalSim.new(SimConfig.new(), 11.0 - SimConstants.MOVE_EPS, 8.5, _catalog())
+	# Pressed into a corner, alternating into the east wall and along the
+	# blocked north wall. Requested travel is well over the 1-tile path
+	# threshold, but the body does not move. A pre-#83 intent-change rule
+	# would have stamped on the direction change; actual path does not.
+	var sim := LocalSim.new(SimConfig.new(), 11.0 - SimConstants.MOVE_EPS, 9.0 - SimConstants.MOVE_EPS, _catalog())
 	var pid := _pid(sim)
 	sim.set_blocking_tile(11, 8, true)
+	sim.set_blocking_tile(11, 9, true)
+	sim.set_blocking_tile(10, 9, true)
 	var p := sim.get_player(pid)
 	var x0: float = p.x
+	var y0: float = p.y
 	var stamped: int = p.last_activity_tick
 	var wall_ticks: int = 40
+	var prev_mx := 0.0
+	var prev_my := 0.0
+	var intent_changes := 0
 	for i in range(wall_ticks):
-		sim.apply_input(pid, InputIntent.from_raw(i + 1, 1.0, 0.0, 0.0, false))
+		var mx: float = 1.0 if i % 2 == 0 else 0.0
+		var my: float = 0.0 if i % 2 == 0 else 1.0
+		if absf(mx - prev_mx) > SimConstants.MOVE_EPS or absf(my - prev_my) > SimConstants.MOVE_EPS:
+			intent_changes += 1
+		prev_mx = mx
+		prev_my = my
+		sim.apply_input(pid, InputIntent.from_raw(i + 1, mx, my, 0.0, false))
 		sim.step()
 	p = sim.get_player(pid)
 	assert_almost_eq(p.x, x0, 1e-6, "blocked by the wall")
+	assert_almost_eq(p.y, y0, 1e-6, "blocked by the corner")
+	assert_gt(intent_changes, 1, "direction changes would stamp on pre-#83 intent-change logic")
 	assert_eq(p.last_activity_tick, stamped, "a wall push does not stamp")
 	assert_lt(p.activity_path, 1.0)
 	assert_gt(float(wall_ticks) * 5.0 * SimConstants.TICK_DT, 1.0)

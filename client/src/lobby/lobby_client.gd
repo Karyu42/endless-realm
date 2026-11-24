@@ -193,6 +193,7 @@ func _maybe_request_instance_list(delta: float) -> void:
 
 
 func stop() -> void:
+	SnapshotDecode.reset_unknown_id_logs()
 	if _ws != null:
 		_ws.close()
 		_ws = null
