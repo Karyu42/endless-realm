@@ -297,13 +297,23 @@ Each character is created as **Standard** or **Hardcore**. The mode is fixed for
 - **Pending:** everything picked up or earned outside the Hearth is *pending*. Items carry `pending = true` wherever they are (inventory or equipped). Currency goes into the character's pending wallet. Equipping a pending item is allowed, and it stays pending.
 - **Banking event:** the moment the character's position enters the Hearth zone (portal exit, instance collapse, walking in, or reconnecting into the Hearth), the server clears every pending flag and moves pending currency into the account's banked wallet for that mode. This is one ledger transaction. Trading, salvage, the vendor and the stash exist only in the Hearth, so they only ever touch banked assets.
 - **XP is never pending.** XP is kept the moment it's credited, even if you die later.
+- **Hearth arrivals:** these all land in the Hearth:
+  - **Fresh join:** starts per content-v0.1 §1 (fresh conservative join).
+  - **Standard respawn (§7.2):** the only arrival at full HP.
+  - **Living arrivals:** a dungeon exit portal, instance collapse (§6.1 rule 8), or the reconnect of a character that survived linger (§7.3). These keep the character's current HP, Focus and cooldown, adjusted only for elapsed time per the content-v0.1 §1 join-state rules. A character that survives linger while disconnected is placed in the Hearth when it reconnects, not at linger expiry.
+  - **Different-class join:** arrives with `HP = min(current HP, new class max HP)`, per content-v0.1 §1.
+
+  The Hearth connects to the Wilds by a two-way walk-through gate on the Wilds' south edge (content-v0.1 §2.1). Each Hearth arrival is exactly one banking event, and banking is idempotent.
 
 ### 7.2 Standard death (soft)
-The server applies these steps in order, in one transaction:
+At the death event, before any respawn, the server applies steps 1–3 in order, in one transaction. Step 4 follows.
 1. Pending items, equipped or not, are tombstoned with reason `DEATH_PENDING`. Banked items (equipped or in inventory) are kept.
 2. Pending currency moves to the sink.
-3. A respawn fee of `20 × m(Lp)` Glint (real level, not synced) is taken from the banked wallet. If the balance is lower, the fee is the balance, so it never goes below 0.
-4. The character respawns in the Hearth with full HP. Level and XP are kept.
+3. A respawn fee of `20 × m(Lp)` Glint (real level, not synced) is taken from the banked wallet. If the balance is lower, the fee is the balance, so it never goes below 0. The fee is taken once, at the death event, not at respawn. It applies to a death during linger or while disconnected too.
+4. The character stays dead until it respawns. It respawns in the Hearth with full HP. Level and XP are kept. The respawn's banking event (§7.1) is then a no-op.
+
+- **Join or reconnect while dead:** any join or reconnect of a dead character, whatever the path (token rejoin included), respawns it in the Hearth per step 4 with full HP. It never appears in the Wilds or an instance at full HP. No second fee is taken.
+- **Re-entry:** rule 9 re-entry (§6.1) still works from the Hearth portal board after that respawn.
 
 ### 7.3 Hardcore (permadeath)
 - **Separate realm:** hardcore characters have their own Glint, Echo Dust and Riftstone wallets, their own stash, their own ledger accounts (§8.2) and their own trading pool.
@@ -313,7 +323,8 @@ The server applies these steps in order, in one transaction:
 - **Disconnect rule (both modes; it matters most for hardcore):**
   - **Link lost:** the client sends a heartbeat every 1 s. The link counts as lost on a socket close, or after **5 s** with no packet.
   - **Linger:** for the next **5 s** the character stays in the world. It stops moving, can't fire or use abilities, takes damage normally and can die.
-  - **After linger:** if it survives, the character is removed from the instance. On reconnect it appears in the Hearth, and its pending loot banks (§7.1).
+  - **After linger:** if it survives, the character is removed from the instance. On reconnect it appears in the Hearth, and its pending loot banks then, once (§7.1), not at linger expiry.
+  - **Lobby slot:** a lingering body stays in the world, still takes damage and can die. It holds its lobby slot until its linger resolves normally: death if it dies during linger, otherwise the after-linger outcome above. No linger can be evicted. A join into a full lobby is refused with the existing packed lobby-full copy (`lobby_full` in `data/lobby_ui.json`, #72), and no lingering body is evicted to make room.
   - **Logout:** a voluntary logout or quit outside the Hearth uses the same 5 s linger. A logout inside the Hearth is instant.
   - **Incident windows:** these protect players from server faults.
     - **⚠ Hosting:** "on-call" below means the lobby's **host admin** (§11.6).
@@ -534,7 +545,7 @@ Set by the host when the lobby starts. Fields marked *live* can change while it 
 | Lobby name | 3–32 characters | "<host name>'s lobby" | Shown in the browser |
 | Password | optional, 0–64 characters | none | Shown as a lock icon. The password is never listed |
 | Mode | Standard or Hardcore | Standard | One mode per lobby. Hardcore lobbies are the separate realm of §7.3 |
-| **Max players** | **1–50** | **50** (desktop / `--headless`) | The ceiling of 50 is **provisional** until the 50-player load test passes (`stack.md`); if it fails, the ceiling drops to the tested value; Android is join-only for v0.1 (later CoS ruling, D29), with no Android-host default. *Live:* lowering it never kicks anyone, it only blocks new joins. It also caps every portal instance (§6.1 rule 5) |
+| **Max players** | **1–50** | **50** (desktop / `--headless`) | The ceiling of 50 is **provisional** until the 50-player load test passes (`stack.md`); if it fails, the ceiling drops to the tested value; Android is join-only for v0.1 (later CoS ruling, D29), with no Android-host default. *Live:* lowering it never kicks anyone, it only blocks new joins. Lingering bodies hold their slots, and a join into a full lobby is refused (§7.3). It also caps every portal instance (§6.1 rule 5) |
 | **Allow imported characters** | on / off | on | *Live.* Whether characters created elsewhere (another lobby or offline solo) can be imported into this lobby (§11.5) |
 | **Allow Offline-flagged characters** | on / off | on | *Live.* Applies to imports whose `played_offline` flag is set. Only matters while imports are on. Turning it off blocks new imports of flagged characters; flagged characters already in the lobby stay |
 | **Allowed multiplier range** | `M_min` to `M_max` in hundredths, each in `[50, 150]`, step 5, `M_min ≤ 100 ≤ M_max` | 50 to 150 (the full v0.1 range) | *Live* for new portals. Validate the global step/range first (`INVALID_MULTIPLIER`), then the host range (`MULTIPLIER_NOT_ALLOWED`). The latter is an **additive protocol enum value**, not a renumbering; old peers must not treat it as a success. 1.00 must stay in range, because found portals (§6) are always M = 1.00 |

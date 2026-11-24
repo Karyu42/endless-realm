@@ -196,7 +196,7 @@ With vision §3.5 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 ## 2. Wilds enemies
 
 ### 2.1 Layout of the Wilds
-- The Wilds are a circle of radius 120 tiles. The Hearth gate sits on the south edge.
+- The Wilds are a circle of radius 120 tiles. The Hearth gate sits on the south edge; it is a two-way walk-through gate between the Wilds and the Hearth.
 - Enemy level depends on distance `r` from the center: `E = clamp(20 − floor(r / 6), 1, 20)`.
 - Rings are half-open intervals, so every point belongs to exactly one ring. The boundary `r = 90` is in ring 1 (E 5), and `r = 89.9` is in ring 2 (E 6).
 
