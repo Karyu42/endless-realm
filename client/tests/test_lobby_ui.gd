@@ -328,7 +328,8 @@ func test_drop_restore_drop_drop_restore_keeps_ability_state() -> void:
 
 func test_error_messages_cover_each_portal_code() -> void:
 	var codes: PackedInt32Array = ErrorCodes.packed()
-	assert_eq(codes.size(), 4)
+	assert_eq(codes.size(), 5)
+	assert_true(codes.has(PB.ErrorCode.COMMAND_NOT_ALLOWED))
 	assert_true(codes.has(PB.ErrorCode.MULTIPLIER_NOT_ALLOWED))
 	assert_true(codes.has(PB.ErrorCode.INSTANCE_FULL))
 	assert_true(codes.has(PB.ErrorCode.INSTANCE_NOT_FOUND))

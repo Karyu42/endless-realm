@@ -131,22 +131,29 @@ message PlayerStub {
   uint32 applied_seq = 2;
 }
 
-// Open a new portal instance with a locked multiplier.
+// Reserved command: open a portal instance with a locked multiplier.
 // m100 is whole hundredths: 50 ≤ m100 ≤ 150 and m100 % 5 == 0 (v0.1).
-// On success the opener is moved into the new instance.
+// Not executed: the Godot host and the Go harness answer COMMAND_NOT_ALLOWED
+// (an out-of-range m100 still gets INVALID_MULTIPLIER on the harness).
+// Portals are opened in the world.
 message OpenPortal {
   uint32 m100 = 1;
 }
 
-// Join an existing instance by id (including the default instance, which
-// returns the session to the process default / hub).
+// Reserved command: join an instance by id. Disabled (vision §6.1 rule 11):
+// answered with COMMAND_NOT_ALLOWED. Instances are entered only at their
+// entrance portal.
 message JoinInstance {
   uint64 instance = 1;
 }
 
-// Return to the process default instance without closing the portal.
+// Reserved command: leave the current instance. Refused (vision §6.1 rule
+// 11) with COMMAND_NOT_ALLOWED. Players leave by the exit portal, death, the
+// Hearth return after linger, or instance collapse.
 message LeaveInstance {}
 
+// Informational listing (InstanceList). Never an admission check: entry is
+// decided by the host at the entrance portal.
 message ListInstances {}
 
 message InstanceInfo {
@@ -155,6 +162,8 @@ message InstanceInfo {
   // Unset (0) in InstanceList. Seeds are only sent on Welcome,
   // OpenPortalOk, and JoinInstanceOk for the caller's own instance.
   uint64 seed = 3;
+  // player_count, capacity and admitted_count are 0 (unset) for an instance
+  // the viewer was never admitted to.
   uint32 player_count = 4;
   bool is_default = 5;
   uint32 base_level = 6;
@@ -193,6 +202,9 @@ enum ErrorCode {
   MULTIPLIER_NOT_ALLOWED = 6;
   // The player does not meet the requirements to join this instance.
   JOIN_REFUSED = 7;
+  // A reserved command this server deliberately does not execute
+  // (OpenPortal, JoinInstance, LeaveInstance; vision §6.1 rule 11).
+  COMMAND_NOT_ALLOWED = 8;
 }
 
 message ErrorReply {

@@ -89,6 +89,9 @@ const (
 	ErrorCode_MULTIPLIER_NOT_ALLOWED ErrorCode = 6
 	// The player does not meet the requirements to join this instance.
 	ErrorCode_JOIN_REFUSED ErrorCode = 7
+	// A reserved command this server deliberately does not execute
+	// (OpenPortal, JoinInstance, LeaveInstance; vision §6.1 rule 11).
+	ErrorCode_COMMAND_NOT_ALLOWED ErrorCode = 8
 )
 
 // Enum value maps for ErrorCode.
@@ -102,6 +105,7 @@ var (
 		5: "OPEN_PORTAL_LIMIT",
 		6: "MULTIPLIER_NOT_ALLOWED",
 		7: "JOIN_REFUSED",
+		8: "COMMAND_NOT_ALLOWED",
 	}
 	ErrorCode_value = map[string]int32{
 		"ERROR_CODE_UNSPECIFIED": 0,
@@ -112,6 +116,7 @@ var (
 		"OPEN_PORTAL_LIMIT":      5,
 		"MULTIPLIER_NOT_ALLOWED": 6,
 		"JOIN_REFUSED":           7,
+		"COMMAND_NOT_ALLOWED":    8,
 	}
 )
 
@@ -834,9 +839,11 @@ func (x *PlayerStub) GetAppliedSeq() uint32 {
 	return 0
 }
 
-// Open a new portal instance with a locked multiplier.
+// Reserved command: open a portal instance with a locked multiplier.
 // m100 is whole hundredths: 50 ≤ m100 ≤ 150 and m100 % 5 == 0 (v0.1).
-// On success the opener is moved into the new instance.
+// Not executed: the Godot host and the Go harness answer COMMAND_NOT_ALLOWED
+// (an out-of-range m100 still gets INVALID_MULTIPLIER on the harness).
+// Portals are opened in the world.
 type OpenPortal struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	M100          uint32                 `protobuf:"varint,1,opt,name=m100,proto3" json:"m100,omitempty"`
@@ -881,8 +888,9 @@ func (x *OpenPortal) GetM100() uint32 {
 	return 0
 }
 
-// Join an existing instance by id (including the default instance, which
-// returns the session to the process default / hub).
+// Reserved command: join an instance by id. Disabled (vision §6.1 rule 11):
+// answered with COMMAND_NOT_ALLOWED. Instances are entered only at their
+// entrance portal.
 type JoinInstance struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Instance      uint64                 `protobuf:"varint,1,opt,name=instance,proto3" json:"instance,omitempty"`
@@ -927,7 +935,9 @@ func (x *JoinInstance) GetInstance() uint64 {
 	return 0
 }
 
-// Return to the process default instance without closing the portal.
+// Reserved command: leave the current instance. Refused (vision §6.1 rule
+// 11) with COMMAND_NOT_ALLOWED. Players leave by the exit portal, death, the
+// Hearth return after linger, or instance collapse.
 type LeaveInstance struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -964,6 +974,8 @@ func (*LeaveInstance) Descriptor() ([]byte, []int) {
 	return file_v1_protocol_proto_rawDescGZIP(), []int{10}
 }
 
+// Informational listing (InstanceList). Never an admission check: entry is
+// decided by the host at the entrance portal.
 type ListInstances struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1006,7 +1018,9 @@ type InstanceInfo struct {
 	M100     uint32                 `protobuf:"varint,2,opt,name=m100,proto3" json:"m100,omitempty"`
 	// Unset (0) in InstanceList. Seeds are only sent on Welcome,
 	// OpenPortalOk, and JoinInstanceOk for the caller's own instance.
-	Seed          uint64 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
+	Seed uint64 `protobuf:"varint,3,opt,name=seed,proto3" json:"seed,omitempty"`
+	// player_count, capacity and admitted_count are 0 (unset) for an instance
+	// the viewer was never admitted to.
 	PlayerCount   uint32 `protobuf:"varint,4,opt,name=player_count,json=playerCount,proto3" json:"player_count,omitempty"`
 	IsDefault     bool   `protobuf:"varint,5,opt,name=is_default,json=isDefault,proto3" json:"is_default,omitempty"`
 	BaseLevel     uint32 `protobuf:"varint,6,opt,name=base_level,json=baseLevel,proto3" json:"base_level,omitempty"`
@@ -1764,7 +1778,7 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\x17PORTAL_KIND_UNSPECIFIED\x10\x00\x12\t\n" +
 	"\x05ENTER\x10\x01\x12\b\n" +
 	"\x04EXIT\x10\x02\x12\x0f\n" +
-	"\vPLACEHOLDER\x10\x03*\xc8\x01\n" +
+	"\vPLACEHOLDER\x10\x03*\xe1\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12INVALID_MULTIPLIER\x10\x01\x12\x16\n" +
@@ -1773,7 +1787,8 @@ const file_v1_protocol_proto_rawDesc = "" +
 	"\rINSTANCE_FULL\x10\x04\x12\x15\n" +
 	"\x11OPEN_PORTAL_LIMIT\x10\x05\x12\x1a\n" +
 	"\x16MULTIPLIER_NOT_ALLOWED\x10\x06\x12\x10\n" +
-	"\fJOIN_REFUSED\x10\aBIZGgithub.com/Karyu42/endless-realm/server/internal/protocol/v1;protocolv1b\x06proto3"
+	"\fJOIN_REFUSED\x10\a\x12\x17\n" +
+	"\x13COMMAND_NOT_ALLOWED\x10\bBIZGgithub.com/Karyu42/endless-realm/server/internal/protocol/v1;protocolv1b\x06proto3"
 
 var (
 	file_v1_protocol_proto_rawDescOnce sync.Once

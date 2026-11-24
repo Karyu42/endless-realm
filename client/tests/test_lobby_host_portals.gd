@@ -1863,6 +1863,7 @@ class _Remote:
 	var ws := WebSocketPeer.new()
 	var snap = null  # latest PB.Snapshot
 	var list = null  # latest PB.InstanceList
+	var error_code: int = -1  # latest ErrorReply code
 	var seq: int = 0
 
 
@@ -1888,6 +1889,8 @@ func _drain(r: _Remote) -> void:
 			r.snap = m.get_snapshot()
 		elif m.has_instance_list():
 			r.list = m.get_instance_list()
+		elif m.has_error():
+			r.error_code = m.get_error().get_code()
 
 
 func _pump(r: _Remote, pred: Callable) -> bool:
@@ -2422,3 +2425,108 @@ func test_progression_restore_does_not_reseed() -> void:
 	assert_eq(sp.last_activity_tick, stamp, "stamp not refreshed")
 	assert_eq(int(dsim._boss_damage_by.get(p.sim_id, 0)), 42, "boss credit not cleared")
 	assert_eq(sp.hp, hp, "HP never raised")
+
+
+# --- instance rules (rule 11), listing, class defaults -------------------
+
+func _remote_error_code(r: _Remote, cm) -> int:
+	r.error_code = -1
+	r.ws.send(cm.to_bytes())
+	assert_true(_pump(r, func() -> bool: return r.error_code != -1))
+	return r.error_code
+
+
+func test_remote_reserved_commands_not_allowed() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var r := _connect_remote()
+	var me: int = _host.players[0].id
+	var portal := _open_portal()
+	_place_remote(me, portal.x + 0.5, portal.y)
+	_remote_send_interact(r, portal.id)
+	assert_true(_pump(r, func() -> bool: return not _instance_of(me).is_overworld()))
+	var inst := _instance_of(me)
+	var leave = PB.ClientMessage.new()
+	leave.new_leave_instance()
+	assert_eq(_remote_error_code(r, leave), PB.ErrorCode.COMMAND_NOT_ALLOWED)
+	var join = PB.ClientMessage.new()
+	join.new_join_instance().set_instance(0)
+	assert_eq(_remote_error_code(r, join), PB.ErrorCode.COMMAND_NOT_ALLOWED)
+	var open = PB.ClientMessage.new()
+	open.new_open_portal().set_m100(100)
+	assert_eq(_remote_error_code(r, open), PB.ErrorCode.COMMAND_NOT_ALLOWED)
+	_ticks(2)
+	assert_same(_instance_of(me), inst, "still inside: no command moves a player")
+	assert_eq(_host.instances.size(), 2, "no instance opened")
+	r.ws.close()
+
+
+func test_list_instances_hides_counts_of_worlds_never_admitted() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var r := _connect_remote()
+	var portal := _open_portal()
+	var b := _join_near_portal(portal)
+	_enter(b, portal)
+	var theirs := _instance_of(b)
+	var m = PB.ClientMessage.new()
+	m.new_list_instances()
+	r.ws.send(m.to_bytes())
+	assert_true(_pump(r, func() -> bool: return r.list != null))
+	var info = null
+	for i in r.list.get_instances():
+		if int(i.get_instance()) == theirs.index:
+			info = i
+	assert_not_null(info, "an entrance in view is still listed")
+	assert_eq(info.get_m100(), portal.m100)
+	assert_eq(info.get_player_count(), 0, "count hidden")
+	assert_eq(info.get_capacity(), 0, "capacity hidden")
+	assert_eq(info.get_admitted_count(), 0, "admitted count hidden")
+	assert_eq(info.get_seed(), 0)
+	r.ws.close()
+
+
+func test_empty_class_maps_to_default() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	_host.run_tick()
+	for character in ["", {"class": ""}, {"class_id": ""}]:
+		var id := _host.add_local_player(character)
+		assert_gt(id, 0, "empty class seats with the default")
+		_host.run_tick()
+		assert_eq(_host.sim.get_player(id).class_id, LobbyHost.DEFAULT_CLASS_ID)
+
+
+func test_default_class_missing_from_catalog_refuses() -> void:
+	_host = _new_host()
+	var classes: Dictionary = _host.catalog.classes
+	var def = classes[LobbyHost.DEFAULT_CLASS_ID]
+	classes.erase(LobbyHost.DEFAULT_CLASS_ID)
+	var first := _host.add_local_player()
+	var second := _host.add_local_player(null)
+	classes[LobbyHost.DEFAULT_CLASS_ID] = def
+	assert_push_error("default class")
+	assert_push_error("default class")
+	assert_eq(first, -1, "no seat without a valid default class")
+	assert_eq(second, -1)
+	assert_eq(_host.players.size(), 0)
+	assert_eq(_host.issued_player_id_count(), 0)
+
+
+func test_remote_hello_join_gets_default_class() -> void:
+	_host = _new_host()
+	assert_eq(_host.start(), OK)
+	var r := _connect_remote()
+	var p: LobbyHost.HostPlayer = _host.players[0]
+	assert_eq(p.class_id, LobbyHost.DEFAULT_CLASS_ID)
+	assert_eq(_host.sim.get_player(p.sim_id).class_id, LobbyHost.DEFAULT_CLASS_ID)
+	r.ws.close()
+
+
+func test_viewer_body_empty_without_own_fields() -> void:
+	_host = _new_host()
+	var a := _host.add_local_player()
+	_open_portal()
+	_host._sync_portal_records()
+	_host.run_tick()
+	assert_eq(_host._viewer_snapshot_body(_host.instances[0], [], a).size(), 0)

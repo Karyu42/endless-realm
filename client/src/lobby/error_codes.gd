@@ -10,6 +10,7 @@ const NAMES: Dictionary = {
 	PB.ErrorCode.INSTANCE_FULL: "INSTANCE_FULL",
 	PB.ErrorCode.INSTANCE_NOT_FOUND: "INSTANCE_NOT_FOUND",
 	PB.ErrorCode.JOIN_REFUSED: "JOIN_REFUSED",
+	PB.ErrorCode.COMMAND_NOT_ALLOWED: "COMMAND_NOT_ALLOWED",
 }
 
 
@@ -20,6 +21,7 @@ static func packed() -> PackedInt32Array:
 		PB.ErrorCode.INSTANCE_FULL,
 		PB.ErrorCode.INSTANCE_NOT_FOUND,
 		PB.ErrorCode.JOIN_REFUSED,
+		PB.ErrorCode.COMMAND_NOT_ALLOWED,
 	])
 
 

@@ -270,6 +270,9 @@ var loadtest_entrances: int = 0
 var loadtest_distinct_admitted: bool = false
 var _loadtest_admitted: Dictionary = {}  # lobby player id -> true
 const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
+## Stand-in for the Hearth (town) placement in the overworld until the real
+## Hearth zone exists: where deaths and resets land.
+const HEARTH_STAND_IN := Vector2(16.0, 16.0)
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
 var _portal_records: Dictionary = {}  # source instance / entrance -> PortalRecord
@@ -963,8 +966,9 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 			c.ws.put_packet(_encode_instance_list(c.player))
 	elif c.player != null and (msg.has_open_portal() or msg.has_join_instance() \
 			or msg.has_leave_instance()):
-		# Portals are not part of this load-test host yet.
-		_send_error(c, PB.ErrorCode.ERROR_CODE_UNSPECIFIED, "portals are not supported by the Godot host yet")
+		# vision §6.1 rule 11: entry only at an entrance portal, no command
+		# to leave an instance, portals are opened in the world.
+		_send_error(c, PB.ErrorCode.COMMAND_NOT_ALLOWED, "command is not allowed")
 
 
 ## Shared by remote InputFrames and submit_local_input: applied once per seq,
@@ -1142,7 +1146,7 @@ func _default_class_id() -> String:
 ## takeover falls back to the default when none or an invalid class is given.
 func _resolve_join_class(character: Variant, fallback_to_default: bool) -> String:
 	var requested: Variant = _requested_class_id(character)
-	if requested == null:
+	if requested == null or String(requested) == "":
 		return _default_class_id()
 	var class_id := String(requested)
 	if _catalog_has_class(class_id):
@@ -1844,7 +1848,7 @@ func _route_practice_deaths(inst: HostInstance) -> void:
 			continue
 		var sp := inst.sim.get_player(p.sim_id)
 		if sp != null and sp.hp <= 0:
-			_move_player(p, instances[0], p.id, 16.0, 16.0)
+			_move_player(p, instances[0], p.id, HEARTH_STAND_IN.x, HEARTH_STAND_IN.y)
 
 
 ## Deep inventory snapshot, preserving equipment/slot references within it.
@@ -1939,7 +1943,7 @@ func _reset_instance(record: PortalRecord) -> bool:
 		return false
 	for p in players.duplicate():
 		if p.instance == inst:
-			_move_player(p, instances[0], p.id, 16.0, 16.0)
+			_move_player(p, instances[0], p.id, HEARTH_STAND_IN.x, HEARTH_STAND_IN.y)
 	record.sim_ids.clear()
 	inst.sim = fresh
 	record.cleared = false
@@ -2170,8 +2174,13 @@ func _shared_snapshot_body(inst: HostInstance) -> PackedByteArray:
 ## still re-enter. Empty when there are none. Protobuf merges fields that
 ## follow the shared body (repeated fields append), so the two concatenate.
 func _viewer_snapshot_body(inst: HostInstance, bags: Array, owner_id: int, entrances: Variant = null) -> PackedByteArray:
-	if bags.is_empty() and owner_id < 0:
-		return PackedByteArray()
+	var reenter: Array[int] = []
+	if owner_id >= 0:
+		for e in (entrances if entrances != null else _entrance_records(inst)):
+			if _may_reenter(e[1], owner_id):
+				reenter.append(e[0])
+	if bags.is_empty() and reenter.is_empty():
+		return PackedByteArray()  # the common case: nothing of their own
 	var s = PB.Snapshot.new()
 	var any := false
 	for bag in bags:
@@ -2185,11 +2194,9 @@ func _viewer_snapshot_body(inst: HostInstance, bags: Array, owner_id: int, entra
 		b.set_t_star(maxi(bag.t_star, 0))
 		b.set_spawn_tick(maxi(bag.spawn_tick, 0))
 		any = true
-	if owner_id >= 0:
-		for e in (entrances if entrances != null else _entrance_records(inst)):
-			if _may_reenter(e[1], owner_id):
-				s.add_admitted_portal_ids(e[0])
-				any = true
+	for id in reenter:
+		s.add_admitted_portal_ids(id)
+		any = true
 	return s.to_bytes() if any else PackedByteArray()
 
 
@@ -2214,7 +2221,10 @@ static func _wrap_snapshot(body: PackedByteArray) -> PackedByteArray:
 
 ## Includes only public metadata of worlds reachable from this player's
 ## current entrance view, plus their current world and prior admissions.
-## Seeds, identities and lobby credentials are never included.
+## Seeds, identities and lobby credentials are never included. Counts and
+## capacity are left unset for a dungeon the viewer was never admitted to.
+## Informational only: admission is always decided at the entrance portal
+## (_record_refusal), never from this listing.
 func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
 	var msg = PB.ServerMessage.new()
 	var listing = msg.new_instance_list()
@@ -2226,12 +2236,15 @@ func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
 		var info = listing.add_instances()
 		info.set_instance(inst.index)
 		info.set_m100(inst.m100)
-		info.set_player_count(_occupants(inst, -1))
 		info.set_is_default(inst.is_overworld())
 		info.set_base_level(inst.created_from.base_level if inst.created_from != null else 0)
-		info.set_capacity(record.capacity if record != null else _settings.max_players)
-		info.set_admitted_count(_admitted_count(record) if record != null else _occupants(inst, -1))
 		info.set_closed(_entrance_closed(record) if record != null else false)
+		var admitted: bool = inst.is_overworld() or inst == viewer.instance \
+				or (record != null and record.admitted.has(viewer.id))
+		if admitted:
+			info.set_player_count(_occupants(inst, -1))
+			info.set_capacity(record.capacity if record != null else _settings.max_players)
+			info.set_admitted_count(_admitted_count(record) if record != null else _occupants(inst, -1))
 	return msg.to_bytes()
 
 
@@ -2248,6 +2261,9 @@ func _entrance_closed(record: PortalRecord) -> bool:
 
 
 ## An earlier admission this player may still use (see _record_refusal).
+## Persistent entrances are left out on purpose: they admit by current
+## occupancy (content §2.5), not by earlier admission, and never expire, so
+## a past entry grants nothing extra and `closed` alone is accurate.
 func _may_reenter(record: PortalRecord, player_id: int) -> bool:
 	return not record.closed and not record.persistent and record.admitted.has(player_id)
 
