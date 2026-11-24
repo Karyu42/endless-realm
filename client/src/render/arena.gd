@@ -654,9 +654,13 @@ func _update_hud() -> void:
 		_inv.text += "  Glint %d (pending)" % snap.pending_glint
 	var focus_show: int = int(snap.player_focus)
 	var ability_name: String = snap.ability_name if snap.ability_name != "" else "Ability"
+	# Remaining cooldown can exceed the current ability's max after a class
+	# change; the display fraction is clamped to 1.
+	var _cd_frac: float = snap.ability_cooldown_frac()
 	if snap.ability_cooldown_ticks > 0:
 		var secs: float = float(snap.ability_cooldown_ticks) * SimConstants.TICK_DT
 		_ability.text = "%s  %.1fs  Focus %d / %d" % [ability_name, secs, focus_show, snap.player_focus_max]
+		_ability.set_meta("cooldown_frac", _cd_frac)
 	else:
 		_ability.text = "%s  Ready  Focus %d / %d" % [ability_name, focus_show, snap.player_focus_max]
 	var portal := _nearest_portal()

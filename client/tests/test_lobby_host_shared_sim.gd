@@ -678,3 +678,141 @@ func test_class_change_readd_below_new_max_keeps_hp() -> void:
 	assert_eq(sp.class_id, "gleamwright")
 	assert_gt(_host.sim._current_max_hp(sp), 50)
 	assert_eq(sp.hp, 50, "HP below the new max is unchanged")
+
+
+# --- class validation on seating --------------------------------------------
+
+class RefusingAddSim extends LocalSim:
+	var refuse_next_add: bool = false
+
+	func add_player(id: int, character: Variant = null) -> bool:
+		if refuse_next_add:
+			refuse_next_add = false
+			return false
+		return super.add_player(id, character)
+
+
+func _host_with_refusing_sim() -> LobbyHost:
+	var host := _new_host()
+	var stub := RefusingAddSim.new(SimConfig.new(), 0.0, 0.0, host.catalog)
+	stub.remove_player(1)
+	stub.set_bounds(0.0, 0.0, host.arena_size, host.arena_size)
+	stub.set_world_seed(host.instance_seed)
+	stub.set_lobby_settings(host.settings())
+	host.sim = stub
+	host.instances[0].sim = stub
+	return host
+
+
+func test_local_add_with_unknown_class_leaves_no_seat_or_issued_id() -> void:
+	_host = _new_host()
+	var first := _host.add_local_player()
+	_host.run_tick()
+	var seats := _host.players.size()
+	var issued := _host.issued_player_id_count()
+	assert_eq(_host.add_local_player("no_such_class"), -1)
+	assert_eq(_host.add_local_player(""), -1)
+	assert_eq(_host.add_local_player({"class_id": "bogus_class"}), -1)
+	assert_eq(_host.add_local_player({"class": ""}), -1)
+	assert_eq(_host.players.size(), seats)
+	assert_eq(_host.issued_player_id_count(), issued)
+	assert_eq(_host.sim.get_player(first).class_id, LobbyHost.DEFAULT_CLASS_ID)
+	assert_eq(_host.ability_stash_size(), 0)
+
+
+func test_remote_join_with_unknown_class_is_refused() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	_host.run_tick()
+	var seats := _host.players.size()
+	var issued := _host.issued_player_id_count()
+	assert_null(_host._add_player("no_such_class"))
+	assert_eq(_host.players.size(), seats, "no seat")
+	assert_eq(_host.issued_player_id_count(), issued, "no issued id")
+
+	assert_eq(_host.start(), OK)
+	var ws := WebSocketPeer.new()
+	assert_eq(ws.connect_to_url("ws://127.0.0.1:%d/ws" % _host.port), OK)
+	var pump := func(pred: Callable) -> bool:
+		for i in range(500):
+			_host.run_tick()
+			ws.poll()
+			if pred.call():
+				return true
+			OS.delay_msec(10)
+		return false
+	assert_true(pump.call(func() -> bool: return ws.get_ready_state() == WebSocketPeer.STATE_OPEN))
+	assert_true(pump.call(func() -> bool:
+		return not _host._conns.is_empty() 				and _host._conns[0].ws.get_ready_state() == WebSocketPeer.STATE_OPEN
+	), "connection accepted")
+	var c: LobbyHost.HostConn = _host._conns[0]
+	assert_null(_host._try_remote_join(c, "bogus_class"))
+	# Read the Error before the next tick's close_pending path closes the socket.
+	var code := [-1]
+	for i in range(30):
+		c.ws.poll()
+		ws.poll()
+		while ws.get_available_packet_count() > 0:
+			var m = PB.ServerMessage.new()
+			if m.from_bytes(ws.get_packet()) == PB.PB_ERR.NO_ERRORS and m.has_error():
+				code[0] = m.get_error().get_code()
+		if code[0] != -1:
+			break
+		OS.delay_msec(10)
+	assert_eq(code[0], PB.ErrorCode.JOIN_REFUSED, "remote gets JOIN_REFUSED")
+	assert_eq(_host.players.size(), seats, "nothing is created")
+	assert_eq(_host.issued_player_id_count(), issued)
+	ws.close()
+
+
+func test_player_1_with_empty_or_unknown_class_gets_the_default() -> void:
+	_host = _new_host()
+	var id := _host.add_local_player("")
+	assert_eq(id, 1)
+	assert_eq(_host.sim.get_player(1).class_id, LobbyHost.DEFAULT_CLASS_ID)
+	assert_eq(_host._find_player(1).class_id, LobbyHost.DEFAULT_CLASS_ID)
+	_host.stop()
+
+	_host = _new_host()
+	assert_eq(_host.add_local_player({"class_id": ""}), 1)
+	assert_eq(_host.sim.get_player(1).class_id, LobbyHost.DEFAULT_CLASS_ID)
+	_host.stop()
+
+	_host = _new_host()
+	assert_eq(_host.add_local_player({"class_id": "no_such_class"}), 1)
+	assert_eq(_host.sim.get_player(1).class_id, LobbyHost.DEFAULT_CLASS_ID)
+	assert_eq(_host.issued_player_id_count(), 1)
+
+
+func test_valid_class_still_seats_local_and_remote() -> void:
+	_host = _new_host()
+	var a := _host.add_local_player("gleamwright")
+	var b := _host.add_local_player({"class_id": "driftrunner"})
+	var remote := _host._add_player()
+	assert_eq(a, 1)
+	assert_gt(b, 0)
+	assert_not_null(remote)
+	_host.run_tick()
+	assert_eq(_host.sim.get_player(a).class_id, "gleamwright")
+	assert_eq(_host.sim.get_player(b).class_id, "driftrunner")
+	assert_eq(_host.sim.get_player(remote.id).class_id, LobbyHost.DEFAULT_CLASS_ID)
+	assert_eq(_host.players.size(), 3)
+	assert_eq(_host.issued_player_id_count(), 3)
+
+
+func test_add_player_false_rolls_back_seat_and_issued_id() -> void:
+	_host = _host_with_refusing_sim()
+	var a := _host.add_local_player()
+	assert_eq(a, 1)
+	_host.run_tick()
+	var seats := _host.players.size()
+	var issued := _host.issued_player_id_count()
+	(_host.sim as RefusingAddSim).refuse_next_add = true
+	assert_eq(_host.add_local_player("gleamwright"), -1)
+	assert_eq(_host.players.size(), seats, "no ghost seat")
+	assert_eq(_host.issued_player_id_count(), issued, "issued id rolled back")
+	assert_eq(_host.sim.get_player(a).class_id, LobbyHost.DEFAULT_CLASS_ID)
+	var b := _host.add_local_player("gleamwright")
+	assert_gt(b, 0, "a later valid add still works")
+	_host.run_tick()
+	assert_eq(_host.sim.get_player(b).class_id, "gleamwright")

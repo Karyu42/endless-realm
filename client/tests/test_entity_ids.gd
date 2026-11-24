@@ -275,27 +275,28 @@ func test_character_dict_hp_is_sanitized() -> void:
 	sim.step()
 	assert_eq(sim.get_player(fresh_over).hp, 200)
 
-	# place_player of a current occupant.
+	# place_player of a current occupant. HP <= 0 keeps the current value.
 	var placed: int = sim.alloc_player_id()
 	assert_true(sim.add_player(placed, {"x": 3.0, "y": 3.0}))
 	sim.step()
 	sim.get_player(placed).hp = 120
 	sim.place_player(placed, 3.0, 3.0, -5)
 	assert_eq(sim.get_player(placed).hp, 120, "place_player ignores HP below 0")
+	sim.place_player(placed, 3.0, 3.0, 0)
+	assert_eq(sim.get_player(placed).hp, 120, "place_player ignores HP 0 on an existing player")
 	sim.place_player(placed, 3.0, 3.0, 99999)
 	assert_eq(sim.get_player(placed).hp, 200)
-	sim.place_player(placed, 3.0, 3.0, 0)
-	assert_eq(sim.get_player(placed).hp, 0)
+	sim.get_player(placed).hp = 0
 	sim.place_player(placed, 3.0, 3.0, 80)
 	assert_eq(sim.get_player(placed).hp, 0, "place_player does not revive a dead player")
 
-	# place_player creating a new player.
+	# place_player creating a new player. HP <= 0 starts at max.
 	var new_neg: int = sim.alloc_player_id()
 	sim.place_player(new_neg, 3.0, 3.0, -5)
 	assert_eq(sim.get_player(new_neg).hp, 200)
 	var new_zero: int = sim.alloc_player_id()
 	sim.place_player(new_zero, 3.0, 3.0, 0)
-	assert_eq(sim.get_player(new_zero).hp, 0)
+	assert_eq(sim.get_player(new_zero).hp, 200, "a new place_player with HP <= 0 starts at max")
 	var new_over: int = sim.alloc_player_id()
 	sim.place_player(new_over, 3.0, 3.0, 99999)
 	assert_eq(sim.get_player(new_over).hp, 200)
@@ -313,7 +314,8 @@ func test_character_dict_hp_is_sanitized() -> void:
 	assert_eq(sim.get_player(readd).hp, 200)
 	sim.remove_player(readd)
 	assert_true(sim.add_player(readd, {"hp": 0}))
-	assert_eq(sim.get_player(readd).hp, 0)
+	assert_eq(sim.get_player(readd).hp, 200, "cancelled leave keeps current HP when HP is 0")
+	sim.get_player(readd).hp = 0
 	sim.remove_player(readd)
 	assert_true(sim.add_player(readd, {"hp": 80}))
 	assert_eq(sim.get_player(readd).hp, 0, "cancelled leave does not revive a dead player")
@@ -406,3 +408,155 @@ func test_cancelled_leave_with_the_same_class_keeps_ability_state() -> void:
 	assert_eq(sim.ability_cooldown_ticks(pid), 150)
 	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
 	assert_eq(sim.ally_ability_heals(pid), 3)
+
+
+func test_place_player_non_positive_hp_matches_add_player() -> void:
+	# place_player with HP <= 0 matches add_player: a new player starts at
+	# max, and an existing player's current HP is kept.
+	var sim := _new_sim()
+	var fresh: int = sim.alloc_player_id()
+	sim.place_player(fresh, 3.0, 3.0, 0)
+	assert_eq(sim.get_player(fresh).hp, 200)
+	var existing: int = sim.alloc_player_id()
+	assert_true(sim.add_player(existing, {"x": 3.0, "y": 3.0}))
+	sim.step()
+	sim.get_player(existing).hp = 120
+	sim.place_player(existing, 4.0, 4.0, 0)
+	assert_eq(sim.get_player(existing).hp, 120)
+	sim.place_player(existing, 4.0, 4.0, -5)
+	assert_eq(sim.get_player(existing).hp, 120)
+
+
+func test_cancelled_leave_non_positive_hp_keeps_current() -> void:
+	# Cancelled-leave add_player with HP <= 0 keeps the current HP, matching
+	# place_player of an existing player.
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, {"x": 3.0, "y": 3.0}))
+	sim.step()
+	sim.get_player(pid).hp = 120
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, {"hp": 0}))
+	assert_eq(sim.get_player(pid).hp, 120)
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, {"hp": -5}))
+	assert_eq(sim.get_player(pid).hp, 120)
+
+
+func test_unknown_or_empty_class_keeps_current_class_and_ability_state() -> void:
+	# An unknown or empty class name keeps the current class, cooldown, and
+	# Focus. The unknown id is logged through DataCatalog.
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, "thornguard"))
+	sim.step()
+	sim.set_ability_cooldown_ticks(pid, 150)
+	sim.ability_state(pid).focus = 5.0
+	sim.ability_state(pid).ally_ability_heals = 3
+	sim.get_player(pid).hp = 80
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, "bogus_class"))
+	assert_push_error("DataCatalog: unknown id bogus_class")
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
+	assert_eq(sim.ally_ability_heals(pid), 3)
+	assert_eq(sim.get_player(pid).hp, 80)
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, ""))
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
+	sim.set_player_class_for(pid, "no_such_class")
+	assert_push_error("DataCatalog: unknown id no_such_class")
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
+	sim.set_player_class_for(pid, "")
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_almost_eq(sim.focus(pid), 5.0, 1e-6)
+
+
+func test_class_change_and_back_keeps_remaining_cooldown() -> void:
+	# Thorn Ward is 160 ticks; Kindle Pulse is 120. A leftover cooldown is
+	# kept across a class change, even when it is longer than the new
+	# ability's max. Swapping to another class and back leaves it unchanged.
+	# The HUD display fraction is clamped to 1.
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	assert_true(sim.add_player(pid, "thornguard"))
+	sim.step()
+	sim.set_ability_cooldown_ticks(pid, 150)
+	sim.ability_state(pid).ally_ability_heals = 3
+	sim.get_player(pid).hp = 80
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, "gleamwright"))
+	assert_eq(sim.get_player(pid).class_id, "gleamwright")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	var view := sim.world_view(pid)
+	assert_eq(view.ability_cooldown_max, 120)
+	assert_almost_eq(view.ability_cooldown_frac(), 1.0, 1e-6)
+	assert_eq(sim.get_player(pid).hp, 80)
+	assert_eq(sim.ally_ability_heals(pid), 3)
+	sim.remove_player(pid)
+	assert_true(sim.add_player(pid, "thornguard"))
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+	assert_eq(sim.ability_cooldown_ticks(pid), 150)
+	assert_eq(sim.ally_ability_heals(pid), 3)
+
+
+func test_fresh_add_with_unknown_or_empty_class_is_refused() -> void:
+	# A fresh add_player with an unknown or empty class is refused: nothing
+	# is queued or created, and the allocator and maps stay unchanged.
+	var sim := _new_sim()
+	var pid: int = sim.alloc_player_id()
+	var next_id: int = sim._next_id
+	var ability_keys: Array = sim._ability_by_player.keys()
+	assert_false(sim.add_player(pid, "bogus_class"))
+	assert_push_error("DataCatalog: unknown id bogus_class")
+	assert_eq(sim.get_player(pid), null)
+	assert_false(sim._pending_adds.has(pid))
+	assert_eq(sim._next_id, next_id)
+	assert_eq(sim._ability_by_player.keys(), ability_keys)
+	sim.step()
+	assert_eq(sim.get_player(pid), null)
+	assert_eq(sim._next_id, next_id)
+	assert_eq(sim._ability_by_player.keys(), ability_keys)
+
+	assert_false(sim.add_player(pid, ""))
+	assert_eq(sim.get_player(pid), null)
+	assert_false(sim._pending_adds.has(pid))
+	sim.step()
+	assert_eq(sim.get_player(pid), null)
+
+	assert_false(sim.add_player(pid, {"class_id": "no_such_class", "x": 3.0, "y": 3.0}))
+	assert_push_error("DataCatalog: unknown id no_such_class")
+	assert_eq(sim.get_player(pid), null)
+	assert_false(sim.add_player(pid, {"class": ""}))
+	assert_eq(sim.get_player(pid), null)
+	assert_eq(sim._next_id, next_id)
+	assert_eq(sim._ability_by_player.keys(), ability_keys)
+	# The issued id can still be used with a real class.
+	assert_true(sim.add_player(pid, "thornguard"))
+	sim.step()
+	assert_eq(sim.get_player(pid).class_id, "thornguard")
+
+
+func test_fresh_add_with_no_class_still_works() -> void:
+	# Omitting class entirely still joins on the no-class default path.
+	var sim := _new_sim()
+	var none: int = sim.alloc_player_id()
+	assert_true(sim.add_player(none, {"x": 3.0, "y": 3.0}))
+	sim.step()
+	assert_eq(sim.get_player(none).class_id, "")
+	assert_eq(sim.get_player(none).hp, 200)
+	var bare: int = sim.alloc_player_id()
+	assert_true(sim.add_player(bare))
+	sim.step()
+	assert_eq(sim.get_player(bare).class_id, "")
+	assert_eq(sim.get_player(bare).hp, 200)
+	var placed: int = sim.alloc_player_id()
+	sim.place_player(placed, 4.0, 4.0)
+	assert_eq(sim.get_player(placed).class_id, "")
+	assert_eq(sim.get_player(placed).hp, 200)

@@ -62,7 +62,7 @@ func test_dead_target_is_replaced_on_the_next_tick() -> void:
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 3, "nearest living player")
 	_issue_through(sim, 3)
-	sim.place_player(3, 2.0, 0.0, 0)
+	sim.get_player(3).hp = 0
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 5, "re-picks the other living player")
 
@@ -80,7 +80,7 @@ func test_no_living_player_in_range_idles_without_host_fallback() -> void:
 	assert_eq(sim.enemy_target_id(eid), 3)
 	var x_after_aggro: float = sim.snapshot().enemies[0].x
 	_issue_through(sim, 3)
-	sim.place_player(3, 2.0, 0.0, 0)
+	sim.get_player(3).hp = 0
 	sim.step()
 	assert_eq(sim.enemy_target_id(eid), 0, "idle when nobody is alive in range")
 	var snap := sim.snapshot()
