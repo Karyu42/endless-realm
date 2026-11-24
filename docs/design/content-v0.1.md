@@ -73,6 +73,15 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
   - **Remote joins start conservative** every time: 0 Focus and the ability on full cooldown.
 - **Phase 2 (after the handshake identity PR, #50):** remote joins switch to the same rules, keyed by the character id that the handshake has verified.
 
+**Class lock:** a character's class is bound to the character. Class changes happen only in town (the Hearth).
+- While a character is inside an instance (a dungeon or the practice vault, §2.5), a rejoin must use the same class.
+- A join with a different class from anywhere, the Wilds included, while the character's last location was in the Wilds or an instance, is **not a rejoin**:
+  1. The old character first runs the normal disconnect linger (vision §7.3), with all its normal outcomes, hardcore death during linger included.
+  2. Only once linger finishes with the character alive does it move to the Hearth. It arrives with `HP = min(current HP, new class max HP)`, 0 Focus and the ability on full cooldown, with no snapshot (join state above) and no boss credit. This counts as a way out of an instance (vision §6.1 rule 11).
+- **Fresh conservative join with no prior in-world state:** full max HP, 0 Focus and the ability on full cooldown, with no snapshot.
+- **Rule 9 re-entry** (vision §6.1) through an entrance from the Hearth is a normal entry, not a rejoin, so a different class is allowed. That character enters with normal entry state and no carried boss credit, and counts as a new identity in the `n_now` set (vision §3.5). That doesn't add 1 to `n_peak` by itself; `n_peak` only changes through the normal `n_now` count.
+- Entering and leaving instances follows vision §6.1 rule 11: entry only at an entrance, no `LeaveInstance`.
+
 **Fire timing (fire on press, all weapons):** each weapon tracks `next_ready` as a float64 sim time in seconds (tick × 0.05), starting at 0. Let `cd = 1 / (Tempo × (1 + tempoBonus))`. On every tick where `fire_held` is true and `now ≥ next_ready − 1e-9`, one volley fires:
 - If fire has been held on every tick since the previous volley (one continuous hold), set `next_ready = next_ready + cd`. This keeps the long-run rate exact even though `cd` isn't a whole number of ticks.
 - Otherwise (the first volley after a press), set `next_ready = now + cd`.
