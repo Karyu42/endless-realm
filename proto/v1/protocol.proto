@@ -162,8 +162,8 @@ message InstanceInfo {
   // Unset (0) in InstanceList. Seeds are only sent on Welcome,
   // OpenPortalOk, and JoinInstanceOk for the caller's own instance.
   uint64 seed = 3;
-  // player_count, capacity and admitted_count are 0 (unset) for an instance
-  // the viewer was never admitted to.
+  // player_count is 0 (unset) for an instance the viewer was never admitted
+  // to. capacity and admitted_count are public to every viewer.
   uint32 player_count = 4;
   bool is_default = 5;
   uint32 base_level = 6;

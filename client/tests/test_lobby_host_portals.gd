@@ -2461,7 +2461,7 @@ func test_remote_reserved_commands_not_allowed() -> void:
 	r.ws.close()
 
 
-func test_list_instances_hides_counts_of_worlds_never_admitted() -> void:
+func test_list_instances_shows_capacity_but_hides_live_count_of_worlds_never_admitted() -> void:
 	_host = _new_host()
 	assert_eq(_host.start(), OK)
 	var r := _connect_remote()
@@ -2479,9 +2479,12 @@ func test_list_instances_hides_counts_of_worlds_never_admitted() -> void:
 			info = i
 	assert_not_null(info, "an entrance in view is still listed")
 	assert_eq(info.get_m100(), portal.m100)
-	assert_eq(info.get_player_count(), 0, "count hidden")
-	assert_eq(info.get_capacity(), 0, "capacity hidden")
-	assert_eq(info.get_admitted_count(), 0, "admitted count hidden")
+	var rec: LobbyHost.PortalRecord = _host._portal_records[theirs.portal_key]
+	assert_gt(rec.capacity, 0)
+	assert_eq(info.get_player_count(), 0, "the live player count stays hidden")
+	assert_eq(info.get_capacity(), rec.capacity, "capacity is public")
+	assert_eq(info.get_admitted_count(), _host._admitted_count(rec), "admitted count is public")
+	assert_eq(info.get_admitted_count(), 1, "the one admitted player is counted")
 	assert_eq(info.get_seed(), 0)
 	r.ws.close()
 

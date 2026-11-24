@@ -2221,8 +2221,10 @@ static func _wrap_snapshot(body: PackedByteArray) -> PackedByteArray:
 
 ## Includes only public metadata of worlds reachable from this player's
 ## current entrance view, plus their current world and prior admissions.
-## Seeds, identities and lobby credentials are never included. Counts and
-## capacity are left unset for a dungeon the viewer was never admitted to.
+## Seeds, identities and lobby credentials are never included. Capacity and
+## admitted count are public to every viewer of a listed world (vision §6.1
+## rule 11); only the live player count is left unset for a dungeon the
+## viewer was never admitted to.
 ## Informational only: admission is always decided at the entrance portal
 ## (_record_refusal), never from this listing.
 func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
@@ -2243,8 +2245,8 @@ func _encode_instance_list(viewer: HostPlayer) -> PackedByteArray:
 				or (record != null and record.admitted.has(viewer.id))
 		if admitted:
 			info.set_player_count(_occupants(inst, -1))
-			info.set_capacity(record.capacity if record != null else _settings.max_players)
-			info.set_admitted_count(_admitted_count(record) if record != null else _occupants(inst, -1))
+		info.set_capacity(record.capacity if record != null else _settings.max_players)
+		info.set_admitted_count(_admitted_count(record) if record != null else _occupants(inst, -1))
 	return msg.to_bytes()
 
 
