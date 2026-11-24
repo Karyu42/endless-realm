@@ -91,3 +91,11 @@ func duplicate_snapshot() -> WorldSnapshot:
 	copy.seal_tick = seal_tick
 	copy.seal_segments = seal_segments.duplicate()
 	return copy
+
+
+## Fill fraction for a cooldown display. Remaining ticks may exceed the
+## current ability's max after a class change; the value is clamped to 1.
+func ability_cooldown_frac() -> float:
+	if ability_cooldown_max <= 0:
+		return 1.0 if ability_cooldown_ticks > 0 else 0.0
+	return minf(1.0, float(ability_cooldown_ticks) / float(ability_cooldown_max))
