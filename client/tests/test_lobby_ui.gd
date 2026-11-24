@@ -205,6 +205,7 @@ func test_validate_reasons_join_for_inline_display() -> void:
 func _start_host() -> void:
 	_host = LobbyHost.new(SimConfig.new())
 	_host.port = 0
+	_host.join_in_wilds = true  # these lobby UI checks read the Wilds
 	assert_eq(_host.start(), OK)
 
 

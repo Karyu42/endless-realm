@@ -143,6 +143,8 @@ class HostInstance:
 	## Distinct players this instance may admit, locked at creation (vision §6 rule 5).
 	var capacity: int = 0
 	var admitted: Dictionary = {}  # lobby player id -> true
+	## Host tick the instance was created on (vision §6.1 rule 8 collapse).
+	var created_tick: int = 0
 	func is_overworld() -> bool:
 		return kind == Kind.WILDS
 	func is_hearth() -> bool:
@@ -287,6 +289,10 @@ var loadtest_instances: int = 0
 var loadtest_entrances: int = 0
 ## Load test only: admit each remote player to a distinct subset of them.
 var loadtest_distinct_admitted: bool = false
+## Dev and test option, never set in a real lobby: fresh joins land in the
+## Wilds instead of the Hearth (vision §7.1), so load rows and the Wilds and
+## instance test suites start there. Rejoin routing is unchanged by it.
+var join_in_wilds: bool = false
 var _loadtest_admitted: Dictionary = {}  # lobby player id -> true
 const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
@@ -302,8 +308,12 @@ const HEARTH_GATE := Vector2(8.0, 2.0)
 const HEARTH_ARRIVAL := Vector2(8.0, 4.0)
 ## Asked-for HP on a Standard respawn; the sim caps it at the body's max.
 const FULL_HP := 1 << 30
+## vision §6.1 rule 8: an instance lasts at most 30 min, then collapses and
+## everyone inside is moved to the Hearth.
+const INSTANCE_MAX_LIFETIME_TICKS: int = 30 * 60 * SimConstants.TICK_HZ
 var death_events: int = 0
 var hearth_entries: int = 0
+var collapses: int = 0
 ## After any crossing, either gate refuses that character for this long.
 const GATE_COOLDOWN_TICKS: int = 5 * SimConstants.TICK_HZ
 var _instance_by_portal: Dictionary = {}  # portal_key -> HostInstance
@@ -403,10 +413,9 @@ func _configure_sim() -> void:
 
 
 ## A permanent safe zone, separate from both the Wilds and dungeon slices.
-## No combat content is configured here. Rejoins (_seat_in_hearth),
-## class-change arrivals (_class_change_arrival), practice deaths and
-## practice resets arrive here; fresh joins, dungeon exits and collapse
-## still land in the Wilds for now.
+## No combat content is configured here. Every arrival of vision §7.1 lands
+## here: fresh joins and rejoins (_seat_in_hearth), class-change arrivals,
+## dungeon exit portals, collapse (rule 8), and practice deaths and resets.
 func _create_hearth() -> void:
 	hearth = HostInstance.new()
 	hearth.kind = HostInstance.Kind.HEARTH
@@ -1150,7 +1159,17 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	_issued_player_ids[p.id] = true
 	if to_hearth:
 		return _seat_in_hearth(p, character, class_id, saved, identity, arrival_class)
-	p.instance = instances[0]  # every other join lands in the overworld
+	# vision §7.1: a join with no body in the Wilds to continue (a fresh
+	# join, or a rejoin whose body never reached the sim) lands in the Hearth.
+	# A body still in the Wilds (a cancelled leave) stays where it is.
+	if not join_in_wilds and (takes_builtin or sim.get_player(p.id) == null):
+		if takes_builtin:
+			sim.remove_player(1)  # the built-in placeholder never enters play
+		var seated := _seat_in_hearth(p, character, class_id, {}, identity, "")
+		if seated == null and takes_builtin:
+			_builtin_taken = false
+		return seated
+	p.instance = instances[0]  # load-test joins and cancelled leaves stay in the Wilds
 	p.sim_id = p.id
 	# Spread spawns over the arena deterministically by id.
 	var a: float = float(p.id) * 2.399963
@@ -1210,20 +1229,22 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 func _seat_in_hearth(p: HostPlayer, character: Variant, class_id: String, saved: Dictionary,
 		identity: String, arrival_class: String) -> HostPlayer:
 	var dead := int(saved.get("hp", -1)) == 0
-	var sid := hearth.sim.alloc_player_id()
+	if not hearth.sim_ids.has(p.id):
+		hearth.sim_ids[p.id] = hearth.sim.alloc_player_id()
+	var sid: int = int(hearth.sim_ids[p.id])
 	var rec := _sim_character(character, HEARTH_ARRIVAL.x, HEARTH_ARRIVAL.y)
 	rec["class_id"] = class_id
 	rec["x"] = HEARTH_ARRIVAL.x
 	rec["y"] = HEARTH_ARRIVAL.y
 	rec.erase("hp")  # set after the progression restore, which can raise max
 	if hearth.sim.add_player(sid, rec) == false:
+		hearth.sim_ids.erase(p.id)
 		_rollback_seat(p, false)
 		return null
 	if dead and class_id != String(saved.get("class_id", class_id)):
 		p.restore_ability = CONSERVATIVE  # the old class's cooldown does not carry
 	p.arrival = {"hp": FULL_HP if dead else p.restore_hp, "class_id": arrival_class, "hearth_entry": true}
 	p.restore_hp = -1
-	hearth.sim_ids[p.id] = sid
 	p.instance = hearth
 	p.sim_id = sid
 	p.character = character
@@ -1646,6 +1667,7 @@ func _step_sim() -> Array[PackedFloat64Array]:
 	if loadtest_distinct_admitted:
 		_admit_loadtest_players()
 	_walk_zone_gates()
+	_collapse_expired_instances()
 	_teardown_empty_instances()
 	# Stand-in bullets live in the overworld only.
 	var ow: Array[HostPlayer] = []
@@ -1852,9 +1874,10 @@ func _route_transfer(source: HostInstance, xfer: PortalTransfer) -> void:
 	if source == hearth:
 		return  # the Hearth has no dungeon entrances or other exits
 	if xfer.kind == PortalTransfer.KIND_EXIT:
-		# TODO(portal lifetime): Hearth routing, seal and re-entry rules;
-		# for now an exit returns to the overworld.
-		_move_player(p, instances[0], p.id, xfer.arrival_x, xfer.arrival_y)
+		# content §3: a dungeon exit portal leads to the Hearth (a living
+		# arrival: HP, Focus and cooldown as they are). Practice exits restore
+		# the entry state on the way out (_move_player).
+		_enter_hearth(p)
 		return
 	if not source.grants_persistent:
 		_reject_portal(p, PB.ErrorCode.INSTANCE_NOT_FOUND, "only the practice exit is available here")
@@ -1930,6 +1953,7 @@ func _create_dungeon_instance(xfer: PortalTransfer, grants_persistent: bool = fa
 	inst.arrival_x = xfer.arrival_x
 	inst.arrival_y = xfer.arrival_y
 	inst.capacity = _settings.max_players
+	inst.created_tick = tick
 	var dsim := _build_dungeon_sim(def, xfer, inst.index * INSTANCE_ID_BLOCK, grants_persistent)
 	if dsim == null:
 		return null
@@ -2179,6 +2203,47 @@ func _sync_position(p: HostPlayer, psim: LocalSim, id: int) -> void:
 		p.y = sp.y
 
 
+## Test hook: ages a dungeon instance so its rule 8 lifetime ends next step.
+func expire_instance_for_test(index: int) -> bool:
+	for inst in instances:
+		if inst.index == index and inst.is_dungeon():
+			inst.created_tick = tick - INSTANCE_MAX_LIFETIME_TICKS
+			return true
+	return false
+
+
+## vision §6.1 rule 8: a dungeon instance collapses at the end of its
+## lifetime. Everyone inside goes to the Hearth: a living character as a
+## living arrival (banked there, §7.1), a dead one as its Standard respawn.
+## A lingering body's linger ends at once: it leaves the instance with its
+## state saved (it can no longer be hit or die), and its rejoin arrives in
+## the Hearth as a living arrival, banked once then (§7.1).
+## Persistent entrances (the practice door) keep their one instance.
+func _collapse_expired_instances() -> void:
+	for record: PortalRecord in _portal_records.values():
+		var inst := record.instance
+		if inst == null or record.persistent or not inst.is_dungeon() \
+				or tick - inst.created_tick < INSTANCE_MAX_LIFETIME_TICKS:
+			continue
+		if not record.closed:
+			collapses += 1
+		record.closed = true  # close admission before routing occupants
+		for p in players.duplicate():
+			if p.instance != inst:
+				continue
+			if p.is_lingering():
+				_end_linger(p)
+				continue
+			var body: SimPlayerState = inst.sim.get_player(p.sim_id)
+			if body != null:
+				_enter_hearth(p, body.hp <= 0 and inst.grants_persistent)
+		if _occupants(inst, -1) > 0:
+			continue  # retry a failed move next tick
+		record.instance = null
+		instances.erase(inst)
+		_instance_by_portal.erase(inst.portal_key)
+
+
 ## Instance lifetime follows vision §6.1: keep progress while empty,
 ## then retire the entrance and sim together after the empty grace period.
 func _teardown_empty_instances() -> void:
@@ -2212,7 +2277,7 @@ func _teardown_empty_instances() -> void:
 	# remains. Never remove a tombstone simply because its instance is empty.
 	for key in _portal_records.keys():
 		var record: PortalRecord = _portal_records[key]
-		if record.closed and record.source.sim.portal_by_id(record.portal_id) == null:
+		if record.closed and record.instance == null and record.source.sim.portal_by_id(record.portal_id) == null:
 			_portal_records.erase(key)
 
 

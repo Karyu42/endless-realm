@@ -16,6 +16,7 @@ func after_each() -> void:
 func _new_host() -> LobbyHost:
 	var host := LobbyHost.new(SimConfig.new())
 	host.port = 0
+	host.join_in_wilds = true  # walk-in tests start in the Wilds; see test_fresh_join_*
 	return host
 
 
@@ -204,6 +205,42 @@ func test_gate_press_routes_like_walking() -> void:
 	_host._route_transfer(_host.hearth, back)
 	assert_true(p.instance.is_overworld())
 	assert_gt(p.y, _host.arena_size * 0.8, "to the south edge, not the old stand-in")
+
+
+func test_fresh_join_lands_in_the_hearth() -> void:
+	_host = LobbyHost.new(SimConfig.new())
+	_host.port = 0
+	var entered: Array = []
+	_host.hearth_entered.connect(func(id: int) -> void: entered.append(id))
+	var a := _host.add_local_player()
+	_host.run_tick()
+	var p := _host._find_player(a)
+	assert_true(p.instance.is_hearth(), "a fresh local join arrives in the Hearth")
+	assert_eq(entered, [a], "a fresh join is a Hearth entry (its banking is a no-op)")
+	assert_eq(_host.hearth_entries, 1, "one Hearth entry for the join")
+	assert_null(_host.sim.get_player(a), "no body in the Wilds")
+	var r := _host._add_player()  # remote Hello path
+	_host.run_tick()
+	assert_true(r.instance.is_hearth(), "a fresh remote join arrives in the Hearth")
+	assert_eq(_host.hearth.sim.focus(r.sim_id), 0.0, "remote joins stay conservative")
+	assert_eq(_host.hearth_entries, 2)
+	var ids: Array = []
+	for ps in _host.world_view(a).players:
+		ids.append(ps.id)
+	assert_eq(ids.size(), 2, "both visible in the Hearth")
+
+
+func test_fresh_join_can_walk_out_into_the_wilds() -> void:
+	_host = LobbyHost.new(SimConfig.new())
+	_host.port = 0
+	var a := _host.add_local_player()
+	_host.run_tick()
+	var p := _host._find_player(a)
+	var gate := _host.hearth.sim.portal_by_id(_host._hearth_gate_id)
+	_host.hearth.sim.place_player(p.sim_id, gate.x, gate.y)
+	_host.run_tick()
+	assert_true(p.instance.is_overworld(), "the gate leads to the Wilds")
+	assert_eq(p.sim_id, a, "under the lobby id in the Wilds")
 
 
 func test_gate_refuses_a_character_for_the_cooldown_after_any_crossing() -> void:
