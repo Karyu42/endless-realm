@@ -549,7 +549,8 @@ func is_m100_allowed(m100: int) -> bool:
 func add_local_player(character: Variant = null, rejoin_token: String = "") -> int:
 	# A rejoin that resumes its own lingering body reuses that seat.
 	if players.size() >= max_players and (rejoin_token == "" \
-			or _lingering_for_identity(_LOCAL_KEY_PREFIX + rejoin_token) == null):
+			or _lingering_for_identity(_LOCAL_KEY_PREFIX + rejoin_token) == null) \
+			and not _free_seat_for_join():
 		return -1
 	# Local players are verified by the host itself: no token is a first join
 	# (ready); a token is a rejoin and only its snapshot can restore state.
@@ -895,7 +896,7 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 			# Close a tick later: closing right away can drop the queued Reject.
 			c.close_pending = true
 			return
-		if players.size() >= max_players:
+		if players.size() >= max_players and not _free_seat_for_join():
 			# The Error always goes out: this connection closes right after.
 			c.errors_in_window = 0
 			_send_error(c, PB.ErrorCode.INSTANCE_FULL, "lobby is full")
@@ -1348,6 +1349,23 @@ static func _sim_character(character: Variant, spawn_x: float, spawn_y: float) -
 			rec["class_id"] = String(d["class"])
 		rec.erase("class")
 	return rec
+
+
+## A full lobby makes room for a new join by ending the oldest linger that no
+## one can resume (no host-verified identity), so lingering bodies cannot
+## hold seats against real joins. Returns true if a seat is free.
+func _free_seat_for_join() -> bool:
+	if players.size() < max_players:
+		return true
+	var oldest: HostPlayer = null
+	for p in players:
+		if p.is_lingering() and p.linger_identity == "" \
+				and (oldest == null or p.linger_until_tick < oldest.linger_until_tick):
+			oldest = p
+	if oldest == null:
+		return false
+	_end_linger(oldest)
+	return players.size() < max_players
 
 
 func _drop_player(c: HostConn) -> void:
