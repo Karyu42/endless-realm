@@ -19,7 +19,8 @@ var intent: InputIntent = InputIntent.new()
 ## vision §6.1 rule 7: last activity stamp (a sim tick). Seeded on join or
 ## instance entry and never unset.
 var last_activity_tick: int = 0
-## Aim (radians) recorded at the last activity stamp. Seeded to 0.
+## Aim (radians) recorded at the last activity stamp. Seeded from the
+## player's aim at join or instance entry.
 var activity_aim_ref: float = 0.0
 ## Cumulative actual path, in tiles, since the last stamp. Seeded to 0.
 var activity_path: float = 0.0

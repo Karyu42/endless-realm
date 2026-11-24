@@ -2877,21 +2877,27 @@ func _is_boss_eligible(e: EnemyState, player_id: int, sim_tick: int) -> bool:
 	if not contributed:
 		return false
 	var p: SimPlayerState = _players.get(player_id, null) as SimPlayerState
-	if p == null:
+	if p == null or p.hp <= 0:
 		return false
 	# Inclusive window: last_activity_tick >= kill_tick - 600.
 	return p.last_activity_tick >= sim_tick - ACTIVITY_WINDOW_TICKS
 
 
 ## Seed the rule 7 activity stamp on sim join or instance entry. The stamp
-## itself is never unset; the aim reference and accumulated path start at 0.
+## itself is never unset. The aim reference is the player's current aim, and
+## the accumulated path starts at 0. A cancelled leave does not seed, so
+## fight bookkeeping for that id is left in place.
 func _seed_activity(p: SimPlayerState) -> void:
 	if p == null:
 		return
 	p.last_activity_tick = _tick
-	p.activity_aim_ref = 0.0
+	p.activity_aim_ref = p.aim
 	p.activity_path = 0.0
 	p.activity_fire_held = false
+	# Fresh entry starts with no prior fight contribution for this id.
+	_boss_damage_by.erase(p.id)
+	_boss_near_ticks.erase(p.id)
+	_boss_ally_heals.erase(p.id)
 
 
 func _stamp_activity(p: SimPlayerState, sim_tick: int) -> void:
@@ -2908,14 +2914,20 @@ func _aim_delta_degrees(from_rad: float, to_rad: float) -> float:
 ## Stamp last_activity_tick when this tick has a qualifying event. Held fire,
 ## a wall push, interact, a sub-10° aim change, and a refused ability do not.
 func _note_activity(p: SimPlayerState, accepted_ability: bool, sim_tick: int) -> void:
+	var fire_edge: bool = (not p.activity_fire_held) and p.intent.fire_held
+	p.activity_fire_held = p.intent.fire_held
+	# Dead characters do not stamp, including aim, fire edges, movement, and
+	# abilities. fire_held is still tracked so a hold across death does not
+	# become a rising edge later.
+	if p.hp <= 0:
+		return
 	var dx: float = p.x - p.prev_x
 	var dy: float = p.y - p.prev_y
 	p.activity_path += sqrt(dx * dx + dy * dy)
-	var fire_edge: bool = (not p.activity_fire_held) and p.intent.fire_held
-	p.activity_fire_held = p.intent.fire_held
 	if accepted_ability or fire_edge or p.activity_path >= 1.0:
 		_stamp_activity(p, sim_tick)
 		return
+	# 1e-6 degrees covers float error on an exact 10° wrap, such as 359° to 9°.
 	if _aim_delta_degrees(p.activity_aim_ref, p.aim) >= ACTIVITY_AIM_DEG - 1e-6:
 		_stamp_activity(p, sim_tick)
 
