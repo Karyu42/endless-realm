@@ -161,6 +161,90 @@ func test_full_lobby_replies_instance_full_and_closes() -> void:
 	assert_eq(_host.players.size(), 1)
 
 
+func test_full_lobby_refuses_a_join_while_a_linger_holds_the_seat() -> void:
+	_host = _start_host(1)
+	var a := _connect()
+	assert_true(_open(a))
+	a.put_packet(_hello())
+	var ca := {}
+	assert_true(_pump(func() -> bool:
+		_drain(a, ca)
+		return ca.get("welcome", 0) == 1), "first player joins")
+	a.close()
+	assert_true(_pump(func() -> bool:
+		return _host.players.size() == 1 and _host.players[0].is_lingering()), "the dropped body lingers")
+	var held: LobbyHost.HostPlayer = _host.players[0]
+	var b := _connect()
+	assert_true(_open(b))
+	b.put_packet(_hello())
+	var cb := {}
+	assert_true(_pump(func() -> bool:
+		_drain(b, cb)
+		return cb.get("error", 0) >= 1), "the new join is refused")
+	assert_eq(cb.get("last_code", -1), PB.ErrorCode.INSTANCE_FULL)
+	assert_eq(cb.get("welcome", 0), 0)
+	assert_eq(_host.players, [held] as Array[LobbyHost.HostPlayer], "the linger keeps its seat")
+	assert_not_null(_host.sim.get_player(held.sim_id), "the body is still there")
+	# The linger resolves normally, then the seat is free again.
+	assert_true(_pump(func() -> bool: return _host.players.is_empty()), "the seat frees after the linger")
+	var c := _connect()
+	assert_true(_open(c))
+	c.put_packet(_hello())
+	var cc := {}
+	assert_true(_pump(func() -> bool:
+		_drain(c, cc)
+		return cc.get("welcome", 0) == 1), "a join after the linger gets the seat")
+
+
+func _local_host(max_players: int) -> LobbyHost:
+	var host := LobbyHost.new(SimConfig.new())
+	host.max_players = max_players
+	return host
+
+
+func _end_lingers() -> void:
+	for i in range(LobbyHost.LINGER_TICKS + 1):
+		_host.run_tick()
+
+
+func test_full_lobby_refuses_local_joins_while_lingers_hold_seats() -> void:
+	_host = _local_host(3)
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	var c := _host.add_local_player()
+	_host.run_tick()
+	var pb := _host._find_player(b)
+	_host._leave(pb)  # no identity, as for a dropped remote connection
+	var token := _host.remove_local_player(c)  # with an identity
+	assert_true(pb.is_lingering())
+	assert_true(_host._find_player(c).is_lingering())
+	assert_eq(_host.add_local_player(), -1, "full while lingers hold seats")
+	assert_eq(_host.add_local_player("not_a_class"), -1)
+	assert_eq(_host.players.size(), 3, "no linger is ended to make room")
+	_host.run_tick()
+	assert_eq(_host.add_local_player(), -1)
+	assert_not_null(_host.sim.get_player(b))
+	assert_not_null(_host.sim.get_player(c))
+	_end_lingers()
+	assert_eq(_host.players.size(), 1, "both seats free after the lingers")
+	assert_gt(_host.add_local_player(), 0)
+	assert_gt(_host.add_local_player(null, token), 0)
+
+
+func test_death_during_linger_resolves_it_and_frees_the_seat() -> void:
+	_host = _local_host(2)
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	var pb := _host._find_player(b)
+	_host._leave(pb)
+	assert_eq(_host.add_local_player(), -1, "refused while the linger holds the seat")
+	_host.sim.get_player(b).hp = 0  # dies while lingering
+	_host.run_tick()
+	assert_false(_host.players.has(pb), "a death ends the linger")
+	assert_gt(_host.add_local_player(), 0, "the seat is free")
+
+
 # --- deadline tick ----------------------------------------------------------
 
 func test_on_time_service_runs_one_tick() -> void:
