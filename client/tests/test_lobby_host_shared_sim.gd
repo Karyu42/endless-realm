@@ -58,7 +58,9 @@ func test_one_shared_sim_for_all_players() -> void:
 	assert_eq(_host.sim.tick(), _host.tick)
 	_host.remove_local_player(b)
 	_host.run_tick()
-	assert_eq(_host.sim.player_ids(), [a] as Array[int], "leave applies at the next step")
+	assert_eq(_host.sim.player_ids(), [a, b] as Array[int], "the body lingers")
+	_end_lingers()
+	assert_eq(_host.sim.player_ids(), [a] as Array[int], "leave applies after the linger")
 
 
 func test_newest_accepted_seq_is_applied_once_per_tick() -> void:
@@ -327,7 +329,7 @@ func test_leave_clears_sim_ability_entry() -> void:
 	_host.run_tick()
 	assert_true(_host.sim._ability_by_player.has(b))
 	_host.remove_local_player(b)
-	_host.run_tick()
+	_end_lingers()
 	assert_false(_host.sim._ability_by_player.has(b))
 	assert_true(_host.sim._ability_by_player.has(a))
 
@@ -444,11 +446,13 @@ func test_rejoin_after_eviction_starts_conservative() -> void:
 	_host = _new_host()
 	var b := _player_mid_cooldown()
 	var token := _host.remove_local_player(b)
-	_host.run_tick()
+	_end_lingers()
 	for i in range(LobbyHost.MAX_ABILITY_STASH):
 		var id := _host.add_local_player()
 		_host.run_tick()
+		_host.sim.get_player(id).hp = 0  # a dead body does not linger
 		_host.remove_local_player(id)
+		_host.run_tick()
 	assert_eq(_host.ability_stash_size(), LobbyHost.MAX_ABILITY_STASH, "bounded")
 	var back := _host.add_local_player(null, token)
 	assert_ne(back, b, "evicted token is not a match")
@@ -586,14 +590,14 @@ func test_rejoin_drops_an_unavailable_saved_id() -> void:
 	var other := _host.add_local_player()
 	_host.run_tick()
 	var token := _host.remove_local_player(other)
-	_host.run_tick()
+	_end_lingers()
 	_host._ability_stash["local:" + token]["id"] = live
 	var fresh := _host.add_local_player(null, token)
 	assert_ne(fresh, live)
 	assert_eq(_host.ability_stash_size(), 0, "unavailable saved entry dropped")
 	assert_false(_host._issued_player_ids.has(other), "unheld issued id pruned")
 	var live_token := _host.remove_local_player(live)
-	_host.run_tick()
+	_end_lingers()
 	var retry := _host.add_local_player(null, token)
 	assert_ne(retry, live, "old token cannot take the id after it becomes available")
 	assert_eq(_host.add_local_player(null, live_token), live, "the owner's own token still works")
@@ -615,14 +619,17 @@ func test_dead_local_player_readded_same_tick_stays_dead() -> void:
 	assert_eq(_host.sim.get_player(b).hp, 0)
 
 
-func test_dead_local_player_readded_with_other_class_stays_dead() -> void:
+func test_dead_local_player_rejoin_with_other_class_refused_stays_dead() -> void:
 	_host = _new_host()
 	_host.add_local_player()
 	var b := _host.add_local_player("thornguard")
 	_host.run_tick()
 	_host.sim.get_player(b).hp = 0
 	var token := _host.remove_local_player(b)
-	assert_eq(_host.add_local_player("gleamwright", token), b)
+	assert_eq(_host.add_local_player("gleamwright", token), -1, "class is kept with the character")
+	assert_eq(_host.sim.get_player(b).hp, 0)
+	assert_eq(_host.sim.get_player(b).class_id, "thornguard")
+	assert_eq(_host.add_local_player(null, token), b, "same class still rejoins")
 	assert_eq(_host.sim.get_player(b).hp, 0)
 
 
@@ -666,18 +673,68 @@ func test_readd_same_tick_keeps_ability_cooldown_and_focus() -> void:
 	assert_eq(_host.sim.ability_cooldown_ticks(b), maxi(cd - 1, 0))
 
 
-func test_class_change_readd_below_new_max_keeps_hp() -> void:
+func test_class_change_rejoin_in_overworld_never_refills_or_switches() -> void:
 	_host = _new_host()
-	_host.add_local_player()
-	var b := _host.add_local_player("thornguard")
-	_host.run_tick()
-	_host.sim.get_player(b).hp = 50
-	var token := _host.remove_local_player(b)
-	assert_eq(_host.add_local_player("gleamwright", token), b)
+	var b := _player_mid_cooldown()
 	var sp := _host.sim.get_player(b)
-	assert_eq(sp.class_id, "gleamwright")
-	assert_gt(_host.sim._current_max_hp(sp), 50)
-	assert_eq(sp.hp, 50, "HP below the new max is unchanged")
+	sp.hp = 50
+	var cd := _host.sim.ability_cooldown_ticks(b)
+	var focus := _host.sim.focus(b)
+	var token := _host.remove_local_player(b)
+	# Same tick: the body is still in the sim.
+	assert_eq(_host.add_local_player("gleamwright", token), -1, "no class change in the Wilds")
+	sp = _host.sim.get_player(b)
+	assert_eq(sp.class_id, "thornguard", "class not changed in place")
+	assert_eq(sp.hp, 50)
+	assert_eq(_host.sim.ability_cooldown_ticks(b), cd)
+	assert_almost_eq(_host.sim.focus(b), focus, 1e-6)
+	assert_eq(_host.add_local_player("", token), b, "an unnamed class keeps the character's")
+	sp = _host.sim.get_player(b)
+	assert_eq(sp.class_id, "thornguard")
+	assert_eq(sp.hp, 50, "no HP refill")
+	assert_eq(_host.sim.ability_cooldown_ticks(b), cd, "no cooldown refill")
+	assert_almost_eq(_host.sim.focus(b), focus, 1e-6, "no Focus refill")
+	assert_eq(_host._find_player(b).class_id, sp.class_id, "host class record follows the sim")
+	# After the body has left the sim, a rejoin still keeps class and HP.
+	token = _host.remove_local_player(b)
+	_end_lingers()
+	assert_null(_host.sim.get_player(b))
+	assert_eq(_host.add_local_player("gleamwright", token), -1)
+	assert_eq(_host.add_local_player(null, token), b)
+	_host.run_tick()
+	sp = _host.sim.get_player(b)
+	assert_eq(sp.class_id, "thornguard")
+	assert_lte(sp.hp, 50, "the rejoin keeps the HP it left with")
+	assert_gt(_host.sim.ability_cooldown_ticks(b), 0, "cooldown still running")
+	assert_eq(_host._find_player(b).class_id, "thornguard")
+
+
+func test_overworld_leave_lingers_and_rejoin_keeps_hp_focus_cooldown() -> void:
+	_host = _new_host()
+	var b := _player_mid_cooldown()
+	_host.sim.get_player(b).hp = 30
+	var token := _host.remove_local_player(b)
+	_host.run_tick()
+	_host.run_tick()
+	var sp := _host.sim.get_player(b)
+	assert_not_null(sp, "the body lingers in the Wilds")
+	assert_true(_host._find_player(b).is_lingering())
+	var cd := _host.sim.ability_cooldown_ticks(b)
+	var focus := _host.sim.focus(b)
+	assert_eq(_host.add_local_player(null, token), b, "a rejoin inside the linger cancels the leave")
+	sp = _host.sim.get_player(b)
+	assert_eq(sp.hp, 30, "no HP refill")
+	assert_eq(_host.sim.ability_cooldown_ticks(b), cd, "no cooldown refill")
+	assert_almost_eq(_host.sim.focus(b), focus, 1e-6, "no Focus refill")
+	assert_false(_host._find_player(b).is_lingering())
+	# After the linger, the rejoin is a new body that still keeps the HP.
+	token = _host.remove_local_player(b)
+	_end_lingers()
+	assert_null(_host.sim.get_player(b))
+	assert_eq(_host.add_local_player(null, token), b)
+	_host.run_tick()
+	assert_lte(_host.sim.get_player(b).hp, 30, "no HP refill after the linger")
+	assert_gt(_host.sim.ability_cooldown_ticks(b), 0)
 
 
 # --- class validation on seating --------------------------------------------
@@ -814,3 +871,9 @@ func test_add_player_false_rolls_back_seat_and_issued_id() -> void:
 	assert_gt(b, 0, "a later valid add still works")
 	_host.run_tick()
 	assert_eq(_host.sim.get_player(b).class_id, "gleamwright")
+
+
+## Runs the host past the disconnect linger so leaving bodies are gone.
+func _end_lingers() -> void:
+	for i in range(LobbyHost.LINGER_TICKS + 1):
+		_host.run_tick()

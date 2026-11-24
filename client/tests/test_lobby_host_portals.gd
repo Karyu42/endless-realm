@@ -2227,6 +2227,41 @@ func _lingering_setup() -> Array:
 	return [portal, a, p, dsim]
 
 
+func test_class_change_rejoin_while_lingering_never_refills_or_switches() -> void:
+	_host = _new_host()
+	var r := _lingering_setup()
+	var a: int = r[1]
+	var p: LobbyHost.HostPlayer = r[2]
+	var dsim: LocalSim = r[3]
+	var body := dsim.get_player(p.sim_id)
+	var cls := body.class_id
+	var other := "gleamwright" if cls != "gleamwright" else "thornguard"
+	body.hp = maxi(1, body.hp / 2)
+	var hp := body.hp
+	var cd := dsim.ability_cooldown_ticks(p.sim_id)
+	var focus := dsim.focus(p.sim_id)
+	var stamp := body.last_activity_tick
+	var token := _host.remove_local_player(a)
+	assert_true(p.is_lingering())
+	assert_eq(_host.add_local_player(other, token), -1, "no class change in an instance")
+	assert_true(p.is_lingering(), "the linger goes on")
+	body = dsim.get_player(p.sim_id)
+	assert_eq(body.class_id, cls, "class not changed in place")
+	assert_eq(body.hp, hp)
+	assert_eq(dsim.ability_cooldown_ticks(p.sim_id), cd)
+	assert_almost_eq(dsim.focus(p.sim_id), focus, 1e-6)
+	assert_eq(_host.players.size(), 1, "no second body or seat")
+	assert_eq(p.class_id, cls, "host class record follows the sim")
+	assert_eq(_host.add_local_player(null, token), a, "same class resumes")
+	body = dsim.get_player(p.sim_id)
+	assert_eq(body.class_id, cls)
+	assert_eq(body.hp, hp, "no HP refill")
+	assert_eq(dsim.ability_cooldown_ticks(p.sim_id), cd, "no cooldown refill")
+	assert_almost_eq(dsim.focus(p.sim_id), focus, 1e-6, "no Focus refill")
+	assert_eq(int(dsim._boss_damage_by.get(p.sim_id, 0)), 42)
+	assert_eq(body.last_activity_tick, stamp)
+
+
 func test_linger_keeps_body_still_in_the_instance() -> void:
 	_host = _new_host()
 	var r := _lingering_setup()
@@ -2391,7 +2426,7 @@ func test_progression_restore_does_not_reseed() -> void:
 	assert_eq(sp.hp, hp, "HP never raised")
 
 
-# --- vision §6.1 rule 11 and the content §1 class lock -----------------------
+# --- instance rules (rule 11), listing, class defaults -------------------
 
 func _remote_error_code(r: _Remote, cm) -> int:
 	r.error_code = -1
@@ -2448,104 +2483,6 @@ func test_list_instances_hides_counts_of_worlds_never_admitted() -> void:
 	assert_eq(info.get_admitted_count(), 0, "admitted count hidden")
 	assert_eq(info.get_seed(), 0)
 	r.ws.close()
-
-
-func _ability(id: int) -> Array:
-	var p := _host._find_player(id)
-	return [p.instance.sim.focus(p.sim_id), p.instance.sim.ability_cooldown_ticks(p.sim_id),
-			p.instance.sim.world_view(p.sim_id).ability_cooldown_max]
-
-
-func test_class_switch_during_linger_lands_in_hearth_after_it() -> void:
-	_host = _new_host()
-	var r := _lingering_setup()
-	var a: int = r[1]
-	var p: LobbyHost.HostPlayer = r[2]
-	var dsim: LocalSim = r[3]
-	var sid := p.sim_id
-	assert_eq(p.class_id, "thornguard")
-	dsim.get_player(sid).hp = 60
-	var token := _host.remove_local_player(a)
-	_host.run_tick()
-	var back := _host.add_local_player("gleamwright", token)
-	assert_eq(back, a, "the same seat")
-	_host.run_tick()
-	assert_not_null(dsim.get_player(sid), "the old body still runs its linger")
-	assert_true(_host._find_player(a).is_lingering())
-	_ticks(LobbyHost.LINGER_TICKS + 2)
-	var q := _host._find_player(a)
-	assert_not_null(q)
-	assert_false(q.is_lingering())
-	assert_true(q.instance.is_overworld(), "moved to the Hearth")
-	assert_null(dsim.get_player(sid), "old body gone")
-	var sp := _host.sim.get_player(a)
-	assert_eq(sp.class_id, "gleamwright")
-	assert_almost_eq(sp.x, LobbyHost.HEARTH_STAND_IN.x, 0.01)
-	assert_eq(sp.hp, mini(60, _host.sim._current_max_hp(sp)), "HP = min(HP it had, new max)")
-	# Conservative start applied on arrival; a few ticks of regen since.
-	var ab := _ability(a)
-	assert_lt(ab[0], 2.0, "0 Focus on arrival")
-	assert_gte(ab[1], ab[2] - 5, "ability on full cooldown on arrival")
-	assert_false(_host.sim._boss_damage_by.has(a), "no boss credit")
-	assert_eq(_host.ability_stash_size(), 0, "no snapshot")
-	# The returning player can act again.
-	var x := sp.x
-	_host.submit_local_input(a, InputIntent.from_raw(1, 1.0, 0.0, 0.0, false, false, 0, 0))
-	_ticks(3)
-	assert_ne(_host.sim.get_player(a).x, x)
-
-
-func test_class_switch_with_death_during_linger_arrives_full() -> void:
-	_host = _new_host()
-	var r := _lingering_setup()
-	var a: int = r[1]
-	var p: LobbyHost.HostPlayer = r[2]
-	var dsim: LocalSim = r[3]
-	var token := _host.remove_local_player(a)
-	_host.run_tick()
-	assert_eq(_host.add_local_player("gleamwright", token), a)
-	dsim.get_player(p.sim_id).hp = 0
-	_ticks(2)
-	var sp := _host.sim.get_player(a)
-	assert_not_null(sp)
-	assert_eq(sp.class_id, "gleamwright")
-	assert_eq(sp.hp, _host.sim._current_max_hp(sp), "Standard respawn: full HP")
-	assert_lt(_ability(a)[0], 1.0)
-
-
-func test_practice_class_switch_keeps_no_gains() -> void:
-	_host = _new_host()
-	var portal := _open_portal(true)
-	var a := _join_near_portal(portal)
-	_owned_item(a, "a-ring")
-	var before := _progress(a)
-	_enter(a, portal)
-	_grant_inside(a)
-	var token := _host.remove_local_player(a)
-	_host.run_tick()
-	assert_eq(_host.add_local_player("gleamwright", token), a)
-	_ticks(LobbyHost.LINGER_TICKS + 2)
-	assert_true(_instance_of(a).is_overworld())
-	assert_eq(_progress(a), before, "practice gains not kept")
-	assert_true(_ids_of(a).has("a-ring"))
-	_assert_unique(_all_item_ids())
-
-
-func test_hearth_class_change_rejoin_is_conservative_and_capped() -> void:
-	_host = _new_host()
-	var a := _host.add_local_player("thornguard")
-	_host.run_tick()
-	_host.sim.get_player(a).hp = 60
-	var token := _host.remove_local_player(a)
-	_host.run_tick()
-	assert_eq(_host.add_local_player("gleamwright", token), a)
-	_host.run_tick()
-	var sp := _host.sim.get_player(a)
-	assert_eq(sp.class_id, "gleamwright")
-	assert_eq(sp.hp, mini(60, _host.sim._current_max_hp(sp)))
-	var ab := _ability(a)
-	assert_eq(ab[0], 0.0)
-	assert_eq(ab[1], ab[2])
 
 
 func test_empty_class_maps_to_default() -> void:

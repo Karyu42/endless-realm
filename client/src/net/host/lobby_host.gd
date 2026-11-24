@@ -168,6 +168,8 @@ class HostPlayer:
 	var loadtest_spread: bool = false
 	var progression_entries: Array[Dictionary] = []
 	var restore_progression: Dictionary = {}
+	## HP of the body this rejoin continues (-1 = none kept).
+	var restore_hp: int = -1
 	var seq: int = 0
 	## Last seq handed to LocalSim.apply_input. rule 7 activity tracks
 	## received input frames: is_new_frame is true only when seq advanced
@@ -205,12 +207,6 @@ class HostPlayer:
 	var linger_until_tick: int = -1
 	## Rejoin key saved at the leave ("" = none), for the linger's end.
 	var linger_identity: String = ""
-	## content §1 class lock: a different-class join made during the linger.
-	## When the linger ends, the seat continues in the Hearth with this class.
-	var class_switch: String = ""
-	## Class and HP the new body starts with before a class-change arrival
-	## ({} = the joined class at full HP).
-	var arrive_as: Dictionary = {}
 	func is_lingering() -> bool:
 		return linger_until_tick >= 0
 	## Ability state to apply right after the step that adds this player:
@@ -265,7 +261,7 @@ var loadtest_distinct_admitted: bool = false
 var _loadtest_admitted: Dictionary = {}  # lobby player id -> true
 const LINGER_TICKS: int = 5 * SimConstants.TICK_HZ
 ## Stand-in for the Hearth (town) placement in the overworld until the real
-## Hearth zone exists: where deaths, resets and class-change moves land.
+## Hearth zone exists: where deaths and resets land.
 const HEARTH_STAND_IN := Vector2(16.0, 16.0)
 const EMPTY_INSTANCE_CLOSE_TICKS: int = 60 * SimConstants.TICK_HZ
 const ENTRANCE_LIFETIME_TICKS: int = 120 * SimConstants.TICK_HZ
@@ -870,12 +866,19 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# collides with an enemy, projectile or bag (or a sim-only player such
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
+	# The class stays with the character on every rejoin: no class change
+	# while the body is lingering or held for a rejoin (there is no town or
+	# Hearth sim yet, and the Wilds lock the class like a dungeon).
+	var locked_class := _locked_class_for(identity, saved)
+	if locked_class != "":
+		var requested_class: Variant = _requested_class_id(character)
+		if requested_class == null or String(requested_class) == "":
+			character = _with_class(character, locked_class)
+		elif String(requested_class) != locked_class:
+			return null
 	var resumed := _resume_lingering(identity, character)
 	if resumed != null:
 		return resumed
-	var switching := _class_switch_while_lingering(identity, character)
-	if switching != null:
-		return switching
 	var saved_unusable: bool = not saved.is_empty() and (
 			not _stash_id_issued_here(saved) or _find_player(int(saved["id"])) != null)
 	var saved_usable: bool = not saved.is_empty() and not saved_unusable
@@ -896,13 +899,9 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		# Leave the snapshot in place until the sim accepts the seat.
 		p.id = int(saved["id"])
 		p.restore_progression = saved.get("progression", {})
+		p.restore_hp = int(saved.get("hp", -1))
 		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
 				"left_tick": int(saved["left_tick"])}
-		if String(saved.get("class_id", class_id)) != class_id:
-			# content §1: a class change in the Hearth (after any linger).
-			p.restore_ability = {"class_arrival": class_id}
-			if int(saved.get("hp", -1)) > 0:
-				p.arrive_as = {"class_id": String(saved["class_id"]), "hp": int(saved["hp"])}
 	elif takes_builtin:
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
@@ -916,12 +915,9 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	var r: float = arena_size * 0.35 * sqrt(float(p.id % 50) / 50.0)
 	var rec := _sim_character(character, arena_size * 0.5 + cos(a) * r, arena_size * 0.5 + sin(a) * r)
 	rec["class_id"] = class_id
-	if not p.arrive_as.is_empty():
-		# Hearth class change: the body starts as it left, and
-		# apply_class_change_arrival switches it after the join step.
-		rec["class_id"] = p.arrive_as["class_id"]
-		rec["hp"] = p.arrive_as["hp"]
-		p.arrive_as = {}
+	if p.restore_hp > 0:
+		# A rejoin never comes back with more HP than the body left with.
+		rec["hp"] = p.restore_hp
 	p.character = character
 	p.class_id = class_id
 	p.x = float(rec["x"])
@@ -933,7 +929,6 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		# only for a new spawn (the built-in player taken over at first
 		# join); a player who never left the sim keeps the sim's HP.
 		var new_spawn := takes_builtin
-		var kept_hp := existing.hp
 		# place_player is void today; call() still lets us honour a later
 		# bool return without a parse error on the current signature.
 		var placed: Variant = sim.call("place_player", p.id, p.x, p.y,
@@ -944,16 +939,19 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		_sync_position(p, sim, p.id)
 		if new_spawn:
 			sim.set_player_class_for(p.id, p.class_id)
-		elif existing.class_id != p.class_id:
-			# A class change refills to the new max; keep the HP they had
-			# (capped at that max) so it never revives or tops up.
-			sim.set_player_class_for(p.id, p.class_id)
-			existing.hp = mini(kept_hp, existing.hp)
+		else:
+			# A body still in the sim keeps its class, HP and ability state
+			# (the class was locked above, before any seat was taken).
+			p.class_id = existing.class_id
 		_restore_ability(p)
 	else:
 		if sim.add_player(p.id, rec) == false:
 			_rollback_seat(p, takes_builtin)
 			return null
+	# The host's class record always follows the sim's body.
+	var joined := sim.get_player(p.id)
+	if joined != null:
+		p.class_id = joined.class_id
 	if saved_usable:
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
@@ -1030,13 +1028,13 @@ func _sim_has_builtin_player() -> bool:
 
 
 ## Removes a host player from the lobby. With a host-verified identity,
-## saves their ability state under it for a later rejoin. A living body in a
-## dungeon instance first lingers there (vision §7.3); it leaves the sim
+## saves their ability state under it for a later rejoin. A living body
+## first lingers where it is, in the Wilds or a dungeon (vision §7.3); it leaves the sim
 ## when the linger ends (_end_linger) unless the same identity rejoins first.
 func _leave(p: HostPlayer, identity: String = "") -> void:
 	interact_validator.forget_player(p.id)
 	var leaving := p.instance.sim.get_player(p.sim_id)
-	var lingers: bool = not p.instance.is_overworld() and leaving != null and leaving.hp > 0
+	var lingers: bool = leaving != null and leaving.hp > 0
 	if identity != "":
 		var isim: LocalSim = p.instance.sim
 		var sid: int = p.sim_id
@@ -1071,16 +1069,16 @@ func _leave(p: HostPlayer, identity: String = "") -> void:
 ## progression into the saved rejoin state (never onto a live body).
 func _end_linger(p: HostPlayer) -> void:
 	var leaving := p.instance.sim.get_player(p.sim_id)
+	if leaving != null and p.linger_identity != "":
+		var held: Dictionary = _ability_stash.get(p.linger_identity, {})
+		if int(held.get("id", 0)) == p.id:
+			held["hp"] = leaving.hp  # HP after any damage taken while lingering
 	if leaving != null and not p.progression_entries.is_empty() and p.linger_identity != "":
 		var carry := PlayerCarry.from_sim(leaving, p.instance.sim.ability_state(p.sim_id))
 		_restore_entry_progression(p, carry)
 		var saved: Dictionary = _ability_stash.get(p.linger_identity, {})
 		if int(saved.get("id", 0)) == p.id:
 			saved["progression"] = _progression_fields(carry)
-	if leaving != null and p.linger_identity != "":
-		var saved_hp: Dictionary = _ability_stash.get(p.linger_identity, {})
-		if int(saved_hp.get("id", 0)) == p.id:
-			saved_hp["hp"] = leaving.hp
 	# Persistent entrances admit by occupancy, so per-player entries of
 	# players who left the lobby are dropped to keep them bounded.
 	for record: PortalRecord in _portal_records.values():
@@ -1102,10 +1100,7 @@ func _step_lingering() -> void:
 			continue
 		var body: SimPlayerState = p.instance.sim.get_player(p.sim_id)
 		if body == null or body.hp <= 0 or tick >= p.linger_until_tick:
-			if p.class_switch != "":
-				_class_switch_to_hearth(p)
-			else:
-				_end_linger(p)
+			_end_linger(p)
 
 
 ## The lingering player this host-verified identity left, if any.
@@ -1121,82 +1116,36 @@ func _lingering_for_identity(identity: String) -> HostPlayer:
 	return p
 
 
-## content §1 class lock: a join with a different (valid) class while this
-## identity's body still lingers in an instance is not a rejoin. The body
-## finishes its linger first; the seat (same lobby id) then continues in the
-## Hearth (_class_switch_to_hearth). Until then the seat takes no input.
-func _class_switch_while_lingering(identity: String, character: Variant) -> HostPlayer:
-	var p := _lingering_for_identity(identity)
-	if p == null:
-		return null
-	var class_id := _resolve_join_class(character, false)
-	if class_id == "" or p.instance.sim.class_change_allowed(p.sim_id, class_id):
-		return null
-	_ability_stash.erase(identity)
-	_ability_stash_order.erase(identity)
-	p.linger_identity = ""
-	p.class_switch = class_id
-	p.character = character
-	return p
-
-
-## The end of a class-switch linger: the old body leaves its instance and
-## the seat continues in the Hearth stand-in. A survivor arrives with the HP
-## it had and then gets LocalSim.apply_class_change_arrival (new class,
-## HP = min(HP, new max), 0 Focus, full cooldown, no snapshot, no boss
-## credit, fresh stamp). A body that died during the linger arrives as a
-## fresh conservative join of the new class (the Standard respawn: full
-## HP). Practice-vault entry progression is restored first.
-## TODO(§7.1): pending loot is not banked on this Hearth arrival yet.
-func _class_switch_to_hearth(p: HostPlayer) -> void:
-	var src: LocalSim = p.instance.sim
-	var body := src.get_player(p.sim_id)
-	var alive: bool = body != null and body.hp > 0
-	var fields: Dictionary = {}
-	if body != null:
-		var carry := PlayerCarry.from_sim(body, src.ability_state(p.sim_id))
-		while not p.progression_entries.is_empty():
-			_restore_entry_progression(p, carry)
-		fields = _progression_fields(carry)
-		fields.erase("class_id")
-	for record: PortalRecord in _portal_records.values():
-		if record.persistent:
-			record.admitted.erase(p.id)
-			record.sim_ids.erase(p.id)
-	src.remove_player(p.sim_id)
-	var rec := {"class_id": p.class_switch, "x": HEARTH_STAND_IN.x, "y": HEARTH_STAND_IN.y}
-	if alive:
-		# Arrive as the old class with the HP it had; the class change is
-		# applied on arrival (after the join step).
-		rec = {"class_id": p.class_id, "x": HEARTH_STAND_IN.x, "y": HEARTH_STAND_IN.y, "hp": body.hp}
-	var new_class := p.class_switch
-	p.class_id = p.class_switch
-	p.class_switch = ""
-	p.linger_until_tick = -1
-	p.instance = instances[0]
-	p.sim_id = p.id
-	p.in_sim = false
-	p.x = HEARTH_STAND_IN.x
-	p.y = HEARTH_STAND_IN.y
-	p.seq = 0
-	p.fed_seq = 0
-	p.restore_ability = {"class_arrival": new_class} if alive else CONSERVATIVE
-	p.restore_progression = fields
-	if sim.add_player(p.id, rec) == false:
-		# Should not happen (the class was validated); fail closed.
-		players.erase(p)
-		_prune_issued_id(p.id)
-
-
 ## A rejoin within the linger cancels the leave: the same body, still in
 ## its instance, with its boss contribution, activity stamp, HP and
 ## ability state untouched (vision §6.1 rule 7). Only for the same class;
 ## anything else is not a resume.
+## The class a rejoin by this identity is held to, or "" when nothing of
+## the character is lingering or held for a rejoin.
+func _locked_class_for(identity: String, saved: Dictionary) -> String:
+	if identity == "":
+		return ""
+	var lingering := _lingering_for_identity(identity)
+	if lingering != null:
+		return lingering.class_id
+	return String(saved.get("class_id", ""))
+
+
+## `character` with its class set to `class_id` (for a join that named none).
+static func _with_class(character: Variant, class_id: String) -> Variant:
+	if character is Dictionary:
+		var d: Dictionary = (character as Dictionary).duplicate()
+		d["class_id"] = class_id
+		return d
+	return class_id
+
+
 func _resume_lingering(identity: String, character: Variant) -> HostPlayer:
 	var p := _lingering_for_identity(identity)
 	if p == null:
 		return null
-	if _resolve_join_class(character, false) != p.class_id:
+	var requested: Variant = _requested_class_id(character)
+	if requested != null and String(requested) != p.class_id:
 		return null
 	if p.instance.sim.get_player(p.sim_id) == null:
 		return null
@@ -1273,8 +1222,6 @@ func _restore_ability(p: HostPlayer) -> void:
 	elif saved.has("conservative"):
 		isim.set_ability_cooldown_ticks(sid, isim.world_view(sid).ability_cooldown_max)
 		isim.set_focus(sid, 0.0)
-	elif saved.has("class_arrival"):
-		isim.apply_class_change_arrival(sid, String(saved["class_arrival"]))
 
 
 ## Number of saved ability states (bounded by MAX_ABILITY_STASH).

@@ -242,11 +242,13 @@ func test_flooding_client_is_budgeted_and_disconnected_without_starving_others()
 	assert_gt(_host.dropped_messages, 0, "excess messages are dropped")
 	assert_eq(_host.budget_disconnects, 1, "sustained excess disconnects the flooder")
 	assert_true(_closed(flooder), "flooder is closed")
-	assert_eq(_host.players.size(), 1, "flooder's player is removed")
 	assert_eq(co.get("snapshot", 0), ticks, "observer got a snapshot every tick")
 	assert_lt(worst_tick_usec, LobbyHost.PERIOD_USEC, "flood does not blow the tick budget")
 	assert_lte(cf.get("error", 0), LobbyHost.MAX_ERROR_REPLIES_PER_WINDOW * (ticks / LobbyHost.ERROR_WINDOW_TICKS + 1),
 		"Error replies stay rate limited")
+	for i in range(LobbyHost.LINGER_TICKS + 1):
+		_host.run_tick()
+	assert_eq(_host.players.size(), 1, "flooder's player is removed after the linger")
 
 
 func test_error_replies_are_rate_limited_per_connection() -> void:
