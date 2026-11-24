@@ -308,15 +308,11 @@ const HEARTH_GATE := Vector2(8.0, 2.0)
 const HEARTH_ARRIVAL := Vector2(8.0, 4.0)
 ## Asked-for HP on a Standard respawn; the sim caps it at the body's max.
 const FULL_HP := 1 << 30
-## vision §7.2 step 4: a connected Standard character respawns automatically
-## after a 3 s death screen (no button), counted from its death event.
-const RESPAWN_DELAY_TICKS: int = 3 * SimConstants.TICK_HZ
 ## vision §6.1 rule 8: an instance lasts at most 30 min, then collapses and
 ## everyone inside is moved to the Hearth.
 const INSTANCE_MAX_LIFETIME_TICKS: int = 30 * 60 * SimConstants.TICK_HZ
 var death_events: int = 0
 var hearth_entries: int = 0
-var respawns: int = 0
 var collapses: int = 0
 ## After any crossing, either gate refuses that character for this long.
 const GATE_COOLDOWN_TICKS: int = 5 * SimConstants.TICK_HZ
@@ -419,8 +415,7 @@ func _configure_sim() -> void:
 ## A permanent safe zone, separate from both the Wilds and dungeon slices.
 ## No combat content is configured here. Every arrival of vision §7.1 lands
 ## here: fresh joins and rejoins (_seat_in_hearth), class-change arrivals,
-## dungeon exit portals, collapse (rule 8), practice deaths and resets, and
-## the Standard respawn of a connected character (_respawn_dead).
+## dungeon exit portals, collapse (rule 8), and practice deaths and resets.
 func _create_hearth() -> void:
 	hearth = HostInstance.new()
 	hearth.kind = HostInstance.Kind.HEARTH
@@ -501,10 +496,6 @@ func _finish_arrival(p: HostPlayer, steps: Dictionary) -> void:
 		hs.apply_class_change_arrival(p.sim_id, cls)
 		if hp >= FULL_HP and body.hp > 0:
 			hs.place_player(p.sim_id, body.x, body.y, FULL_HP)  # respawn: the new class's max
-	if hp >= FULL_HP and body.hp > 0:
-		# A Standard respawn also arrives with full Focus and its ability ready.
-		hs.set_focus(p.sim_id, float(hs.focus_max(p.sim_id)))
-		hs.set_ability_cooldown_ticks(p.sim_id, 0)
 	p.class_id = body.class_id
 	_sync_position(p, hs, p.sim_id)
 	if steps.get("hearth_entry", false) and p.instance == hearth:
@@ -1662,7 +1653,6 @@ func _step_sim() -> Array[PackedFloat64Array]:
 			else:
 				p.death_event_tick = -1
 	_step_lingering()
-	_respawn_dead()
 	for inst in stepped:
 		if not inst.grants_persistent:
 			_enforce_practice_items(inst)
@@ -2211,23 +2201,6 @@ func _sync_position(p: HostPlayer, psim: LocalSim, id: int) -> void:
 	if sp != null:
 		p.x = sp.x
 		p.y = sp.y
-
-
-## vision §7.2 step 4: a connected Standard character that died respawns in
-## the Hearth at full HP once RESPAWN_DELAY_TICKS have passed since its death
-## event (taken once, at the death; the respawn takes nothing). Practice
-## deaths leave with their entry state instead (_route_practice_deaths);
-## lingering bodies are resolved by _step_lingering and respawn on rejoin.
-func _respawn_dead() -> void:
-	for p in players.duplicate():
-		if p.is_lingering() or p.death_event_tick < 0 or p.instance == hearth \
-				or not p.instance.grants_persistent:
-			continue
-		var body: SimPlayerState = p.instance.sim.get_player(p.sim_id)
-		if body == null or body.hp > 0 or tick - p.death_event_tick < RESPAWN_DELAY_TICKS:
-			continue
-		if _enter_hearth(p, true):
-			respawns += 1
 
 
 ## Test hook: ages a dungeon instance so its rule 8 lifetime ends next step.

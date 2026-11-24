@@ -2559,7 +2559,7 @@ func test_viewer_body_empty_without_own_fields() -> void:
 	assert_eq(_host._viewer_snapshot_body(_host.instances[0], [], a).size(), 0)
 
 
-# --- part (d): exits, collapse and respawns land in the Hearth ---------------
+# --- part (d): exits and collapse land in the Hearth ---------------------------
 
 func _max_hp(id: int) -> int:
 	var p := _host._find_player(id)
@@ -2584,70 +2584,6 @@ func test_exit_is_a_living_arrival_with_hp_focus_and_cooldown_kept() -> void:
 	assert_eq(_sp(a).hp, 37, "an exit never refills HP")
 	assert_eq(p.instance.sim.ability_cooldown_ticks(p.sim_id), cooldown_before, "cooldown carried")
 	assert_almost_eq(p.instance.sim.focus(p.sim_id), focus_before, 1e-6, "Focus carried")
-
-
-func test_connected_death_respawns_in_the_hearth_at_full_hp_after_the_delay() -> void:
-	_host = _new_host()
-	var a := _host.add_local_player()
-	_host.run_tick()
-	var entries := _host.hearth_entries
-	_host.sim.get_player(a).hp = 0
-	_host.run_tick()
-	assert_eq(_host.death_events, 1, "one death event, at the death")
-	assert_eq(LobbyHost.RESPAWN_DELAY_TICKS, 60, "a 3 s death screen")
-	_host.sim.set_focus(a, 0.0)
-	_host.sim.set_ability_cooldown_ticks(a, 500)
-	for i in LobbyHost.RESPAWN_DELAY_TICKS - 1:
-		_host.run_tick()
-		assert_true(_instance_of(a).is_overworld(), "stays dead through the death screen")
-		assert_eq(_sp(a).hp, 0)
-	_host.run_tick()  # 60 ticks after the death event
-	assert_true(_instance_of(a).is_hearth(), "automatic Standard respawn in the Hearth")
-	assert_eq(_sp(a).hp, _max_hp(a), "the respawn is at full HP")
-	var p := _host._find_player(a)
-	assert_almost_eq(p.instance.sim.focus(p.sim_id), float(p.instance.sim.focus_max(p.sim_id)), 1e-6,
-			"with full Focus")
-	assert_eq(p.instance.sim.ability_cooldown_ticks(p.sim_id), 0, "and the ability ready")
-	assert_eq(_host.respawns, 1)
-	assert_eq(_host.hearth_entries, entries + 1, "one Hearth entry for the respawn")
-	_ticks(LobbyHost.RESPAWN_DELAY_TICKS * 2)
-	assert_eq(_host.death_events, 1, "no second death event or fee")
-	assert_eq(_host.respawns, 1)
-	assert_null(_host.sim.get_player(a), "no body left in the Wilds")
-
-
-func test_death_in_a_dungeon_respawns_in_the_hearth() -> void:
-	_host = _new_host()
-	var portal := _open_portal()
-	var a := _join_near_portal(portal)
-	_enter(a, portal)
-	_ticks(2)
-	var inst := _instance_of(a)
-	_sp(a).hp = 0
-	_ticks(LobbyHost.RESPAWN_DELAY_TICKS + 1)
-	assert_true(_instance_of(a).is_hearth())
-	assert_eq(_sp(a).hp, _max_hp(a))
-	assert_eq(_host.death_events, 1)
-	assert_true(inst.admitted.has(a) or _host._portal_records.values()[0].admitted.has(a),
-			"the party slot is kept for rule 9 re-entry")
-
-
-func test_a_lingering_death_is_not_respawned_until_the_rejoin() -> void:
-	_host = _new_host()
-	_host.add_local_player()
-	var b := _host.add_local_player()
-	_host.run_tick()
-	var token := _host.remove_local_player(b)
-	_host.run_tick()
-	_host.sim.get_player(b).hp = 0
-	_ticks(LobbyHost.RESPAWN_DELAY_TICKS + 1)
-	assert_eq(_host.respawns, 0, "the linger resolves a dead body; nothing respawns it")
-	assert_null(_host._find_player(b))
-	var again := _host.add_local_player(null, token)
-	_host.run_tick()
-	assert_true(_instance_of(again).is_hearth(), "the rejoin respawns in the Hearth")
-	assert_eq(_sp(again).hp, _max_hp(again))
-	assert_eq(_host.death_events, 1)
 
 
 func test_collapse_moves_everyone_inside_to_the_hearth() -> void:
