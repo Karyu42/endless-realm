@@ -208,8 +208,9 @@ class HostPlayer:
 	## content §1 class lock: a different-class join made during the linger.
 	## When the linger ends, the seat continues in the Hearth with this class.
 	var class_switch: String = ""
-	## After the join step, HP is capped at this (-1 = no cap).
-	var hp_cap_after_join: int = -1
+	## Class and HP the new body starts with before a class-change arrival
+	## ({} = the joined class at full HP).
+	var arrive_as: Dictionary = {}
 	func is_lingering() -> bool:
 		return linger_until_tick >= 0
 	## Ability state to apply right after the step that adds this player:
@@ -898,11 +899,10 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
 				"left_tick": int(saved["left_tick"])}
 		if String(saved.get("class_id", class_id)) != class_id:
-			# content §1: a class change in the Hearth (after any linger):
-			# HP = min(HP it had, new max), 0 Focus, full cooldown, no snapshot.
-			p.restore_ability = CONSERVATIVE
+			# content §1: a class change in the Hearth (after any linger).
+			p.restore_ability = {"class_arrival": class_id}
 			if int(saved.get("hp", -1)) > 0:
-				p.hp_cap_after_join = int(saved["hp"])
+				p.arrive_as = {"class_id": String(saved["class_id"]), "hp": int(saved["hp"])}
 	elif takes_builtin:
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
@@ -916,6 +916,12 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	var r: float = arena_size * 0.35 * sqrt(float(p.id % 50) / 50.0)
 	var rec := _sim_character(character, arena_size * 0.5 + cos(a) * r, arena_size * 0.5 + sin(a) * r)
 	rec["class_id"] = class_id
+	if not p.arrive_as.is_empty():
+		# Hearth class change: the body starts as it left, and
+		# apply_class_change_arrival switches it after the join step.
+		rec["class_id"] = p.arrive_as["class_id"]
+		rec["hp"] = p.arrive_as["hp"]
+		p.arrive_as = {}
 	p.character = character
 	p.class_id = class_id
 	p.x = float(rec["x"])
@@ -1124,7 +1130,7 @@ func _class_switch_while_lingering(identity: String, character: Variant) -> Host
 	if p == null:
 		return null
 	var class_id := _resolve_join_class(character, false)
-	if class_id == "" or class_id == p.class_id:
+	if class_id == "" or p.instance.sim.class_change_allowed(p.sim_id, class_id):
 		return null
 	_ability_stash.erase(identity)
 	_ability_stash_order.erase(identity)
@@ -1135,11 +1141,13 @@ func _class_switch_while_lingering(identity: String, character: Variant) -> Host
 
 
 ## The end of a class-switch linger: the old body leaves its instance and
-## the seat continues in the Hearth stand-in as the new class, with
-## HP = min(HP it had, new class max), 0 Focus, the ability on full
-## cooldown, no snapshot and no boss credit (a new body in another sim).
-## A body that died during the linger arrives at full HP (the Standard
-## respawn). Practice-vault entry progression is restored first.
+## the seat continues in the Hearth stand-in. A survivor arrives with the HP
+## it had and then gets LocalSim.apply_class_change_arrival (new class,
+## HP = min(HP, new max), 0 Focus, full cooldown, no snapshot, no boss
+## credit, fresh stamp). A body that died during the linger arrives as a
+## fresh conservative join of the new class (the Standard respawn: full
+## HP). Practice-vault entry progression is restored first.
+## TODO(§7.1): pending loot is not banked on this Hearth arrival yet.
 func _class_switch_to_hearth(p: HostPlayer) -> void:
 	var src: LocalSim = p.instance.sim
 	var body := src.get_player(p.sim_id)
@@ -1155,9 +1163,13 @@ func _class_switch_to_hearth(p: HostPlayer) -> void:
 		if record.persistent:
 			record.admitted.erase(p.id)
 			record.sim_ids.erase(p.id)
-	var kept_hp: int = body.hp if alive else -1
 	src.remove_player(p.sim_id)
 	var rec := {"class_id": p.class_switch, "x": HEARTH_STAND_IN.x, "y": HEARTH_STAND_IN.y}
+	if alive:
+		# Arrive as the old class with the HP it had; the class change is
+		# applied on arrival (after the join step).
+		rec = {"class_id": p.class_id, "x": HEARTH_STAND_IN.x, "y": HEARTH_STAND_IN.y, "hp": body.hp}
+	var new_class := p.class_switch
 	p.class_id = p.class_switch
 	p.class_switch = ""
 	p.linger_until_tick = -1
@@ -1168,9 +1180,8 @@ func _class_switch_to_hearth(p: HostPlayer) -> void:
 	p.y = HEARTH_STAND_IN.y
 	p.seq = 0
 	p.fed_seq = 0
-	p.restore_ability = CONSERVATIVE
+	p.restore_ability = {"class_arrival": new_class} if alive else CONSERVATIVE
 	p.restore_progression = fields
-	p.hp_cap_after_join = kept_hp
 	if sim.add_player(p.id, rec) == false:
 		# Should not happen (the class was validated); fail closed.
 		players.erase(p)
@@ -1262,11 +1273,8 @@ func _restore_ability(p: HostPlayer) -> void:
 	elif saved.has("conservative"):
 		isim.set_ability_cooldown_ticks(sid, isim.world_view(sid).ability_cooldown_max)
 		isim.set_focus(sid, 0.0)
-	if p.hp_cap_after_join > 0:
-		var sp := isim.get_player(sid)
-		if sp != null:
-			sp.hp = mini(sp.hp, p.hp_cap_after_join)
-		p.hp_cap_after_join = -1
+	elif saved.has("class_arrival"):
+		isim.apply_class_change_arrival(sid, String(saved["class_arrival"]))
 
 
 ## Number of saved ability states (bounded by MAX_ABILITY_STASH).
