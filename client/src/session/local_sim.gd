@@ -47,6 +47,8 @@ enum DamageSource {
 	ENVIRONMENT,
 }
 const PLAYER_DAMAGE_REFUSED_LOG := "LocalSim: player-source damage refused"
+## Global cap on logged (attacker, target) pairs, not per attacker. Past the
+## cap, player-source damage is still refused but not logged.
 const PLAYER_DAMAGE_REFUSAL_LOG_CAP: int = 64
 
 var _config: SimConfig
@@ -1158,7 +1160,7 @@ func _pattern_shots_vs_players(sim_tick: int) -> void:
 					attacker_level = src.content_level
 					if src.def != null:
 						dmg = src.def.damage_for(b.damage_key)
-				if _hurt_player(p, dmg, attacker_level, DamageSource.ENEMY, b.source_id):
+				if _hurt_player(p, dmg, DamageSource.ENEMY, b.source_id, attacker_level):
 					b.consumed = true
 				break
 
@@ -1180,15 +1182,15 @@ func _contact_vs_players() -> void:
 				if _ability_of(p.id).invuln_ticks > 0:
 					continue
 				var dmg: int = e.def.contact_damage if e.def != null else 0
-				if _hurt_player(p, dmg, e.content_level, DamageSource.ENEMY, e.id):
+				if _hurt_player(p, dmg, DamageSource.ENEMY, e.id, e.content_level):
 					e.contact_cooldown = _config.contact_cooldown_ticks
 				break
 
 
-## Apply incoming damage to a player. `source_kind` defaults to
-## DamageSource.ENEMY so existing two- and three-argument callers keep
-## working. Player-source damage is refused in every zone.
-func _hurt_player(p: SimPlayerState, amount: int, attacker_level: int = 1, source_kind: int = DamageSource.ENEMY, attacker_id: int = 0) -> bool:
+## Apply incoming damage to a player. `source_kind` is required so a caller
+## cannot silently treat a player hit as enemy damage. Player-source damage
+## is refused in every zone.
+func _hurt_player(p: SimPlayerState, amount: int, source_kind: int, attacker_id: int, attacker_level: int = 1) -> bool:
 	if p == null or amount <= 0 or p.hp <= 0:
 		return false
 	if source_kind == DamageSource.PLAYER:
@@ -3694,7 +3696,7 @@ func _tick_hazards(sim_tick: int) -> void:
 			if p.hp <= 0:
 				continue
 			if h.contains(p.x, p.y):
-				_hurt_player(p, amount, attacker_level, DamageSource.ENEMY, h.source_id)
+				_hurt_player(p, amount, DamageSource.ENEMY, h.source_id, attacker_level)
 
 
 func _cull_hazards(sim_tick: int) -> void:
