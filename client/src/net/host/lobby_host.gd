@@ -386,7 +386,8 @@ func _create_hearth() -> void:
 	hearth.grants_persistent = true
 	hearth.sim = LocalSim.new(_config, HEARTH_ARRIVAL.x, HEARTH_ARRIVAL.y, catalog)
 	hearth.sim.remove_player(1)
-	hearth.sim.set_id_floor(hearth.index * INSTANCE_ID_BLOCK)
+	var floor_ok := hearth.sim.set_id_floor(hearth.index * INSTANCE_ID_BLOCK)
+	assert(floor_ok, "the Hearth id block fits the entity id range")
 	hearth.sim.configure_zone(LocalSim.ZONE_HEARTH)
 	hearth.sim.set_bounds(0.0, 0.0, HEARTH_SIZE, HEARTH_SIZE)
 	hearth.sim.set_lobby_settings(_settings)
