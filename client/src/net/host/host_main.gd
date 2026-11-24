@@ -22,6 +22,7 @@ extends SceneTree
 ##   --loadtest-distinct-admitted
 ##                          LOAD TEST: admit every remote player to a distinct
 ##                          subset of those entrances (per-viewer worst case)
+##   --loadtest-join-wilds  LOAD TEST: fresh joins land in the Wilds, not the Hearth
 ##   --arena TILES          square arena edge in tiles (default 48)
 ##   --expect-clients N     record stats only while >= N players are connected
 ##   --run-seconds S        hard stop after S seconds (default 0 = no limit)
@@ -70,6 +71,8 @@ func _initialize() -> void:
 				_host.loadtest_entrances = int(v); i += 1
 			"--loadtest-distinct-admitted":
 				_host.loadtest_distinct_admitted = true
+			"--loadtest-join-wilds":
+				_host.join_in_wilds = true
 			"--arena":
 				_host.arena_size = float(v); i += 1
 			"--expect-clients":

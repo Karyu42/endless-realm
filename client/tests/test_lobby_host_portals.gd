@@ -31,6 +31,9 @@ func after_each() -> void:
 func _new_host(max_players: int = 4) -> LobbyHost:
 	var host := LobbyHost.new(SimConfig.new())
 	host.port = 0
+	# These tests start in the Wilds; fresh-join Hearth arrivals are covered
+	# in test_lobby_host_hearth.gd. Rejoin routing is unaffected.
+	host.join_in_wilds = true
 	var s := LobbySettings.new()
 	s.max_players = max_players
 	assert_eq(host.apply_settings(s), OK)
@@ -64,6 +67,16 @@ func _join_near_portal(portal: PortalSnapshot) -> int:
 	_host.run_tick()
 	_host.sim.place_player(id, portal.x + 0.5, portal.y)
 	return id
+
+
+## Puts a player at (x, y) in the Wilds: moved there from the Hearth or an
+## instance (exits now arrive in the Hearth), or placed if already there.
+func _place_in_wilds(id: int, x: float, y: float) -> void:
+	var p := _host._find_player(id)
+	if p.instance.is_overworld():
+		_host.sim.place_player(id, x, y)
+	else:
+		assert_true(_host._move_player(p, _host.instances[0], id, x, y), "back to the Wilds")
 
 
 func _press(id: int, seq: int, target: int) -> void:
@@ -120,7 +133,7 @@ func test_out_of_range_press_does_not_transfer() -> void:
 	var portal := _open_portal()
 	var a := _host.add_local_player()
 	_host.run_tick()
-	_host.sim.place_player(a, portal.x + 5.0, portal.y)
+	_place_in_wilds(a, portal.x + 5.0, portal.y)
 	_enter(a, portal)
 	_host.run_tick()
 	assert_eq(_host.instances.size(), 1)
@@ -316,7 +329,7 @@ func _overworld_bag(owner: int) -> GroundDrop:
 	return bag
 
 
-func test_exit_returns_to_overworld_and_instance_waits_while_empty() -> void:
+func test_exit_arrives_in_the_hearth_and_instance_waits_while_empty() -> void:
 	_host = _new_host()
 	var portal := _open_portal()
 	var a := _join_near_portal(portal)
@@ -327,12 +340,15 @@ func test_exit_returns_to_overworld_and_instance_waits_while_empty() -> void:
 	assert_eq(_instance_of(b), inst)
 	_host.remove_local_player(b)
 	_host.run_tick()
+	var entries := _host.hearth_entries
 	_exit_here(a, 5)
-	assert_true(_instance_of(a).is_overworld())
-	assert_eq(_host._find_player(a).sim_id, a, "back under the lobby id")
+	assert_true(_instance_of(a).is_hearth(), "a dungeon exit leads to the Hearth")
+	assert_eq(_host._find_player(a).sim_id, int(_host.hearth.sim_ids[a]), "under the Hearth id")
+	assert_eq(_host.hearth_entries, entries + 1, "one Hearth entry")
 	assert_eq(_host.instances.size(), 2, "empty instance is kept for now")
 	_host.run_tick()
-	assert_eq(_host.sim.player_ids(), [a] as Array[int])
+	assert_eq(_host.sim.player_ids(), [] as Array[int], "no body left in the Wilds")
+	assert_eq(_host.hearth.sim.player_ids(), [int(_host.hearth.sim_ids[a])] as Array[int])
 
 
 # --- bags per instance ------------------------------------------------------
@@ -353,6 +369,9 @@ func test_bags_from_other_instances_are_not_shown() -> void:
 	msg.from_bytes(_host._encode_snapshot_for([bag], inst, a))
 	assert_eq(msg.get_snapshot().get_bags().size(), 0, "snapshot drops bags of other instances")
 	_exit_here(a, 5)
+	_host.run_tick()
+	assert_false(_host._bags_by_owner().has(a), "not shown in the Hearth either")
+	_place_in_wilds(a, 20.0, 20.0)
 	_host.run_tick()
 	assert_eq(_host._bags_by_owner()[a].size(), 1, "shown again back in the overworld")
 
@@ -375,7 +394,7 @@ func test_reentry_returns_to_same_instance_with_progress() -> void:
 	var dtick := inst.sim.tick()
 	_exit_here(a, 5)
 	_ticks(20)
-	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_place_in_wilds(a, portal.x + 0.5, portal.y)
 	_enter(a, portal, 6)
 	assert_eq(_instance_of(a), inst, "same instance, not a fresh one")
 	assert_eq(_host.instances.size(), 2)
@@ -407,7 +426,7 @@ func test_capacity_holds_after_instance_empties_and_closes() -> void:
 	assert_eq(_rejections.back()[1], PB.ErrorCode.INSTANCE_FULL, "empty instance frees no slot")
 	_ticks(LobbyHost.EMPTY_INSTANCE_CLOSE_TICKS)
 	assert_eq(_host.instances.size(), 1)
-	_host.sim.place_player(c, portal.x + 0.5, portal.y)
+	_place_in_wilds(c, portal.x + 0.5, portal.y)
 	_enter(c, portal, 2)
 	_host.run_tick()
 	assert_true(_instance_of(c).is_overworld(), "teardown frees no slot either")
@@ -434,7 +453,7 @@ func test_closed_entrance_rejects_entry() -> void:
 	_enter(a, portal)
 	_exit_here(a, 5)
 	_ticks(LobbyHost.EMPTY_INSTANCE_CLOSE_TICKS)
-	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_place_in_wilds(a, portal.x + 0.5, portal.y)
 	_rejections = []
 	_enter(a, portal, 6)
 	_host.run_tick()
@@ -720,7 +739,7 @@ func test_persistent_instance_survives_empty_and_keeps_state_on_reentry() -> voi
 	assert_eq(_host.instances.size(), 2, "persistent instance kept while empty")
 	assert_false(rec.closed)
 	assert_true(rec.cleared)
-	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_place_in_wilds(a, portal.x + 0.5, portal.y)
 	_enter(a, portal, 6)
 	assert_eq(_instance_of(a), inst)
 	assert_eq(_host._find_player(a).sim_id, sid)
@@ -752,7 +771,7 @@ func test_persistent_capacity_counts_occupants_and_keeps_reentry_ids() -> void:
 	_enter(c, portal, 2)
 	assert_eq(_instance_of(c), inst, "leaving frees a persistent-door slot")
 	# Previously admitted players also need an occupant slot.
-	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_place_in_wilds(a, portal.x + 0.5, portal.y)
 	_enter(a, portal, 6)
 	assert_true(_instance_of(a).is_overworld())
 	assert_eq(_rejections.back()[1], PB.ErrorCode.INSTANCE_FULL)
@@ -781,7 +800,7 @@ func _clear_vault(id: int) -> int:
 
 
 func _enter_persistent(id: int, portal: PortalSnapshot, seq: int) -> void:
-	_host.sim.place_player(id, portal.x + 0.5, portal.y)
+	_place_in_wilds(id, portal.x + 0.5, portal.y)
 	_enter(id, portal, seq)
 
 
@@ -821,7 +840,7 @@ func test_persistent_late_arrivals_get_nothing_after_clear() -> void:
 	var b := _join_near_portal(portal)
 	var r := _host._add_player()
 	_host.run_tick()
-	_host.sim.place_player(r.id, portal.x + 0.5, portal.y)
+	_place_in_wilds(r.id, portal.x + 0.5, portal.y)
 	for id in [b, r.id]:
 		var xp_before: int = _host.sim.get_player(id).xp_tenths
 		if id == r.id:
@@ -902,7 +921,7 @@ func test_persistent_flag_comes_only_from_host_data() -> void:
 	_ticks(LobbyHost.ENTRANCE_LIFETIME_TICKS)
 	var c := _host.add_local_player()
 	_host.run_tick()
-	_host.sim.place_player(c, fake.x + 0.5, fake.y)
+	_place_in_wilds(c, fake.x + 0.5, fake.y)
 	_rejections = []
 	_enter(c, fake)
 	_host.run_tick()
@@ -995,7 +1014,7 @@ func test_practice_vault_rewards_are_reverted_on_exit() -> void:
 	assert_false(_instance_of(a).grants_persistent)
 	_grant_inside(a)
 	_exit_here(a, 5)
-	assert_true(_instance_of(a).is_overworld())
+	assert_true(_instance_of(a).is_hearth())
 	assert_eq(_progress(a), before, "XP, currency and items gained inside are reverted")
 	_ticks(2)
 	assert_eq(_progress(a), before)
@@ -1292,7 +1311,7 @@ func test_practice_no_reset_under_living_or_lingering_player() -> void:
 	assert_same(inst.sim, sim0, "no rebuild during the linger")
 	_exit_here(c, 5)
 	_ticks(LobbyHost.LINGER_TICKS)
-	_host.sim.place_player(b, portal.x + 0.5, portal.y)
+	_place_in_wilds(b, portal.x + 0.5, portal.y)
 	_enter(b, portal, 6)
 	assert_ne(inst.sim, sim0, "rebuilt once nobody living or lingering is inside")
 	# A player who dies inside leaves (with the restore); the next entry
@@ -1302,7 +1321,7 @@ func test_practice_no_reset_under_living_or_lingering_player() -> void:
 	inst.sim.get_player(pb.sim_id).hp = 0
 	_host.run_tick()
 	assert_true(_instance_of(b).is_hearth())
-	_host.sim.place_player(c, portal.x + 0.5, portal.y)
+	_place_in_wilds(c, portal.x + 0.5, portal.y)
 	_enter(c, portal, 6)
 	assert_ne(inst.sim, sim1)
 
@@ -1428,7 +1447,7 @@ func test_practice_shared_container_deposit_is_refused() -> void:
 	assert_true(_host._resolve_bag(_host._find_player(b).sim_id, a).is_empty())
 	assert_true(_host._resolve_bag(123456789, a).is_empty())
 	_exit_here(a, 5)  # the exit itself still works
-	assert_true(_instance_of(a).is_overworld())
+	assert_true(_instance_of(a).is_hearth())
 	assert_true(_ids_of(a).has("a-sword"))
 
 
@@ -1479,7 +1498,7 @@ func test_practice_no_duplicate_after_any_exit_path() -> void:
 	# Disconnect from inside.
 	_host.run_tick()
 	var inv_b := _sp(b).inventory
-	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_place_in_wilds(a, portal.x + 0.5, portal.y)
 	var token := _host.remove_local_player(b)
 	_host.run_tick()
 	_assert_unique(_all_item_ids())
@@ -1620,15 +1639,15 @@ func test_hosted_riftstone_reverts_in_practice_and_stays_from_real_vault() -> vo
 	_enter(a, practice)
 	_inside(a).pending_riftstone += 5
 	_exit_here(a, 5)
-	assert_true(_instance_of(a).is_overworld())
-	assert_eq(_host.sim.get_player(a).pending_riftstone, 4, "practice: outside value kept")
+	assert_true(_instance_of(a).is_hearth())
+	assert_eq(_sp(a).pending_riftstone, 4, "practice: outside value kept")
 	var real := _open_portal(false)
-	_host.sim.place_player(a, real.x + 0.5, real.y)
+	_place_in_wilds(a, real.x + 0.5, real.y)
 	_enter(a, real, 7)
 	assert_true(_instance_of(a).grants_persistent)
 	_inside(a).pending_riftstone += 5
 	_exit_here(a, 9)
-	assert_eq(_host.sim.get_player(a).pending_riftstone, 9, "real vault keeps it")
+	assert_eq(_sp(a).pending_riftstone, 9, "real vault keeps it")
 
 
 func test_practice_strips_copies_and_unlabelled_items() -> void:
@@ -1661,11 +1680,11 @@ func test_host_refuses_to_place_an_id_it_never_issued() -> void:
 	_exit_here(a, 5)
 	var forged := real_id + 3
 	assert_false(_host._move_player(p, inst, forged, inst.arrival_x, inst.arrival_y), "unissued dungeon id")
-	assert_true(_instance_of(a).is_overworld())
+	assert_true(_instance_of(a).is_hearth())
 	assert_null(inst.sim.get_player(forged))
 	assert_false(_host._move_player(p, _host.instances[0], a + 7, 1.0, 1.0), "unissued overworld id")
 	# The id the dungeon sim issued and the entrance record maps to this player still works.
-	_host.sim.place_player(a, portal.x + 0.5, portal.y)
+	_place_in_wilds(a, portal.x + 0.5, portal.y)
 	_enter(a, portal, 7)
 	assert_same(_instance_of(a), inst)
 	assert_eq(_host._find_player(a).sim_id, real_id)
@@ -2139,6 +2158,7 @@ func _admitted_and_not() -> Array:
 	var a := _join_near_portal(portal)
 	_enter(a, portal)
 	_exit_here(a, 5)
+	_place_in_wilds(a, portal.x + 0.5, portal.y)
 	var b := _join_near_portal(portal)
 	_ticks(2)
 	assert_true(_instance_of(a).is_overworld())
@@ -2537,3 +2557,152 @@ func test_viewer_body_empty_without_own_fields() -> void:
 	_host._sync_portal_records()
 	_host.run_tick()
 	assert_eq(_host._viewer_snapshot_body(_host.instances[0], [], a).size(), 0)
+
+
+# --- part (d): exits, collapse and respawns land in the Hearth ---------------
+
+func _max_hp(id: int) -> int:
+	var p := _host._find_player(id)
+	for ps in p.instance.sim.world_view(p.sim_id).players:
+		if ps.id == p.sim_id:
+			return ps.max_hp
+	return -1
+
+
+func test_exit_is_a_living_arrival_with_hp_focus_and_cooldown_kept() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	_ticks(2)
+	var p := _host._find_player(a)
+	_sp(a).hp = 37
+	var cooldown_before := p.instance.sim.ability_cooldown_ticks(p.sim_id)
+	var focus_before := p.instance.sim.focus(p.sim_id)
+	_exit_here(a, 5)
+	assert_true(_instance_of(a).is_hearth())
+	assert_eq(_sp(a).hp, 37, "an exit never refills HP")
+	assert_eq(p.instance.sim.ability_cooldown_ticks(p.sim_id), cooldown_before, "cooldown carried")
+	assert_almost_eq(p.instance.sim.focus(p.sim_id), focus_before, 1e-6, "Focus carried")
+
+
+func test_connected_death_respawns_in_the_hearth_at_full_hp_after_the_delay() -> void:
+	_host = _new_host()
+	var a := _host.add_local_player()
+	_host.run_tick()
+	var entries := _host.hearth_entries
+	_host.sim.get_player(a).hp = 0
+	_host.run_tick()
+	assert_eq(_host.death_events, 1, "one death event, at the death")
+	assert_true(_instance_of(a).is_overworld(), "stays dead until the respawn")
+	assert_eq(_sp(a).hp, 0)
+	_ticks(LobbyHost.RESPAWN_DELAY_TICKS)
+	assert_true(_instance_of(a).is_hearth(), "Standard respawn in the Hearth")
+	assert_eq(_sp(a).hp, _max_hp(a), "the respawn is at full HP")
+	assert_eq(_host.respawns, 1)
+	assert_eq(_host.hearth_entries, entries + 1, "one Hearth entry for the respawn")
+	_ticks(LobbyHost.RESPAWN_DELAY_TICKS * 2)
+	assert_eq(_host.death_events, 1, "no second death event or fee")
+	assert_eq(_host.respawns, 1)
+	assert_null(_host.sim.get_player(a), "no body left in the Wilds")
+
+
+func test_death_in_a_dungeon_respawns_in_the_hearth() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	_ticks(2)
+	var inst := _instance_of(a)
+	_sp(a).hp = 0
+	_ticks(LobbyHost.RESPAWN_DELAY_TICKS + 1)
+	assert_true(_instance_of(a).is_hearth())
+	assert_eq(_sp(a).hp, _max_hp(a))
+	assert_eq(_host.death_events, 1)
+	assert_true(inst.admitted.has(a) or _host._portal_records.values()[0].admitted.has(a),
+			"the party slot is kept for rule 9 re-entry")
+
+
+func test_a_lingering_death_is_not_respawned_until_the_rejoin() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	var token := _host.remove_local_player(b)
+	_host.run_tick()
+	_host.sim.get_player(b).hp = 0
+	_ticks(LobbyHost.RESPAWN_DELAY_TICKS + 1)
+	assert_eq(_host.respawns, 0, "the linger resolves a dead body; nothing respawns it")
+	assert_null(_host._find_player(b))
+	var again := _host.add_local_player(null, token)
+	_host.run_tick()
+	assert_true(_instance_of(again).is_hearth(), "the rejoin respawns in the Hearth")
+	assert_eq(_sp(again).hp, _max_hp(again))
+	assert_eq(_host.death_events, 1)
+
+
+func test_collapse_moves_everyone_inside_to_the_hearth() -> void:
+	_host = _new_host()
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	var b := _join_near_portal(portal)
+	var c := _join_near_portal(portal)
+	for id in [a, b, c]:
+		_enter(id, portal)
+	_ticks(2)
+	var inst := _instance_of(a)
+	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
+	_sp(a).hp = 41
+	var token := _host.remove_local_player(c)  # lingers inside
+	_host.run_tick()
+	_sp(b).hp = 0
+	assert_true(_host._find_player(c).is_lingering())
+	var entries := _host.hearth_entries
+	assert_true(_host.expire_instance_for_test(inst.index))
+	_host.run_tick()
+	assert_eq(_host.collapses, 1)
+	assert_true(_instance_of(a).is_hearth(), "living: moved to the Hearth")
+	assert_eq(_sp(a).hp, 41, "a living arrival keeps its HP")
+	assert_true(_instance_of(b).is_hearth(), "dead: Standard respawn")
+	assert_eq(_sp(b).hp, _max_hp(b))
+	assert_eq(_host.hearth_entries, entries + 2, "one entry each for the connected players")
+	assert_true(_host._find_player(c).is_lingering(), "collapse never shortens a linger")
+	assert_true(_host.instances.has(inst), "kept only for the remaining linger")
+	assert_true(rec.closed)
+	_ticks(LobbyHost.LINGER_TICKS)
+	assert_null(_host._find_player(c), "the linger resolves normally")
+	assert_false(_host.instances.has(inst), "then the closed instance is retired")
+	assert_null(rec.instance)
+	assert_eq(_host.collapses, 1, "only one collapse event")
+	assert_eq(_host.hearth_entries, entries + 2, "no banking for the disconnected linger")
+	var again := _host.add_local_player(null, token)
+	_host.run_tick()
+	assert_true(_instance_of(again).is_hearth(), "the lingerer's rejoin arrives in the Hearth")
+	_place_in_wilds(a, portal.x + 0.5, portal.y)
+	_rejections = []
+	_enter(a, portal, 9)
+	assert_true(_instance_of(a).is_overworld(), "a collapsed instance is never restarted")
+	assert_eq(_rejections.size(), 1)
+
+
+func test_collapse_waits_for_the_lifetime_and_spares_the_practice_door() -> void:
+	_host = _new_host()
+	var practice := _open_portal(true)
+	var a := _join_near_portal(practice)
+	_enter(a, practice)
+	var pinst := _instance_of(a)
+	assert_false(_host.expire_instance_for_test(_host.instances[0].index), "the Wilds never collapse")
+	assert_true(_host.expire_instance_for_test(pinst.index))
+	_host.run_tick()
+	assert_eq(_host.collapses, 0, "the persistent practice door keeps its one instance")
+	assert_same(_instance_of(a), pinst)
+	var portal := _open_portal()
+	portal.x += 2.0
+	var b := _join_near_portal(portal)
+	_enter(b, portal)
+	var inst := _instance_of(b)
+	inst.created_tick = _host.tick - LobbyHost.INSTANCE_MAX_LIFETIME_TICKS + 2
+	_host.run_tick()
+	assert_same(_instance_of(b), inst, "not before 30 min")
+	_ticks(2)
+	assert_true(_instance_of(b).is_hearth(), "collapses at 30 min")

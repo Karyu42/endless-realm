@@ -82,7 +82,10 @@ def run_one(args, clients):
                 "-s", "res://src/net/host/host_main.gd", "--",
                 "--host", "--port", str(port), "--expect-clients", str(clients),
                 "--emitters", str(args.emitters), "--exit-when-empty",
-                "--run-seconds", str(args.duration + 60)]
+                "--run-seconds", str(args.duration + 60),
+                # Fresh joins land in the Hearth in a real lobby; the rows
+                # measure the Wilds, so the bots start there.
+                "--loadtest-join-wilds"]
     if args.distinct_admitted and (1 << args.entrances) < clients:
         raise SystemExit(f"--distinct-admitted needs 2^entrances >= clients ({clients})")
     if args.instances > 1:

@@ -19,6 +19,9 @@ func after_each() -> void:
 func _start_host(max_players: int = LobbyHost.DEFAULT_MAX_PLAYERS, clock: Callable = Callable()) -> LobbyHost:
 	var host := LobbyHost.new(SimConfig.new())
 	host.port = 0
+	# Starts in the Wilds; fresh-join Hearth arrivals are covered in
+	# test_lobby_host_hearth.gd.
+	host.join_in_wilds = true
 	host.emitter_count = 1
 	host.max_players = max_players
 	if clock.is_valid():
@@ -201,6 +204,7 @@ func test_full_lobby_refuses_a_join_while_a_linger_holds_the_seat() -> void:
 
 func _local_host(max_players: int) -> LobbyHost:
 	var host := LobbyHost.new(SimConfig.new())
+	host.join_in_wilds = true
 	host.max_players = max_players
 	return host
 

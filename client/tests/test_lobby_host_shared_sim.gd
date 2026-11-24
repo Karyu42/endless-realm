@@ -16,6 +16,9 @@ func after_each() -> void:
 func _new_host() -> LobbyHost:
 	var host := LobbyHost.new(SimConfig.new())
 	host.port = 0
+	# These tests start in the Wilds; fresh-join Hearth arrivals are covered
+	# in test_lobby_host_hearth.gd. Rejoin routing is unaffected.
+	host.join_in_wilds = true
 	return host
 
 
@@ -366,8 +369,11 @@ func test_listen_host_first_join_is_ready() -> void:
 	var host: LobbyHost = gs.lobby_host
 	var pid: int = gs.local_player_id
 	host.run_tick()
-	assert_eq(host.sim.ability_cooldown_ticks(pid), 0, "listen-host: cooldown 0")
-	assert_almost_eq(host.sim.focus(pid), 100.0, 1e-6, "listen-host: 100 Focus")
+	var hp := host._find_player(pid)
+	assert_true(hp.instance.is_hearth(), "the listen-host's fresh join lands in the Hearth")
+	assert_eq(hp.instance.sim.ability_cooldown_ticks(hp.sim_id), 0, "listen-host: cooldown 0")
+	assert_almost_eq(hp.instance.sim.focus(hp.sim_id), 100.0, 1e-6, "listen-host: 100 Focus")
+	assert_null(host.sim.get_player(pid), "no built-in placeholder left in the Wilds")
 	gs._teardown_net()
 	gs.free()
 

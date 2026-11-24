@@ -19,6 +19,9 @@ func after_each() -> void:
 func _new_host() -> LobbyHost:
 	var host := LobbyHost.new(SimConfig.new())
 	host.port = 0
+	# Starts in the Wilds; fresh-join Hearth arrivals are covered in
+	# test_lobby_host_hearth.gd.
+	host.join_in_wilds = true
 	return host
 
 
