@@ -617,6 +617,7 @@ func test_dead_local_player_readded_same_tick_stays_dead() -> void:
 
 func test_dead_local_player_readded_with_other_class_stays_dead() -> void:
 	_host = _new_host()
+	_host.sim.configure_zone(LocalSim.ZONE_HEARTH)
 	_host.add_local_player()
 	var b := _host.add_local_player("thornguard")
 	_host.run_tick()
@@ -668,6 +669,7 @@ func test_readd_same_tick_keeps_ability_cooldown_and_focus() -> void:
 
 func test_class_change_readd_below_new_max_keeps_hp() -> void:
 	_host = _new_host()
+	_host.sim.configure_zone(LocalSim.ZONE_HEARTH)
 	_host.add_local_player()
 	var b := _host.add_local_player("thornguard")
 	_host.run_tick()
