@@ -318,6 +318,7 @@ The server applies these steps in order, in one transaction:
   - **Link lost:** the client sends a heartbeat every 1 s. The link counts as lost on a socket close, or after **5 s** with no packet.
   - **Linger:** for the next **5 s** the character stays in the world. It stops moving, can't fire or use abilities, takes damage normally and can die.
   - **After linger:** if it survives, the character is removed from the instance. On reconnect it appears in the Hearth, and its pending loot banks (§7.1).
+  - **Lobby slot:** a lingering body holds its lobby slot until its linger resolves normally: death if it dies during linger, otherwise the after-linger outcome above. No linger can be evicted. A join into a full lobby is refused with "lobby full", and no lingering body is evicted to make room.
   - **Logout:** a voluntary logout or quit outside the Hearth uses the same 5 s linger. A logout inside the Hearth is instant.
   - **Incident windows:** these protect players from server faults.
     - **⚠ Hosting:** "on-call" below means the lobby's **host admin** (§11.6).
@@ -538,7 +539,7 @@ Set by the host when the lobby starts. Fields marked *live* can change while it 
 | Lobby name | 3–32 characters | "<host name>'s lobby" | Shown in the browser |
 | Password | optional, 0–64 characters | none | Shown as a lock icon. The password is never listed |
 | Mode | Standard or Hardcore | Standard | One mode per lobby. Hardcore lobbies are the separate realm of §7.3 |
-| **Max players** | **1–50** | **50** (desktop / `--headless`) | The ceiling of 50 is **provisional** until the 50-player load test passes (`stack.md`); if it fails, the ceiling drops to the tested value; Android is join-only for v0.1 (later CoS ruling, D29), with no Android-host default. *Live:* lowering it never kicks anyone, it only blocks new joins. It also caps every portal instance (§6.1 rule 5) |
+| **Max players** | **1–50** | **50** (desktop / `--headless`) | The ceiling of 50 is **provisional** until the 50-player load test passes (`stack.md`); if it fails, the ceiling drops to the tested value; Android is join-only for v0.1 (later CoS ruling, D29), with no Android-host default. *Live:* lowering it never kicks anyone, it only blocks new joins. Lingering bodies hold their slots, and a join into a full lobby is refused (§7.3). It also caps every portal instance (§6.1 rule 5) |
 | **Allow imported characters** | on / off | on | *Live.* Whether characters created elsewhere (another lobby or offline solo) can be imported into this lobby (§11.5) |
 | **Allow Offline-flagged characters** | on / off | on | *Live.* Applies to imports whose `played_offline` flag is set. Only matters while imports are on. Turning it off blocks new imports of flagged characters; flagged characters already in the lobby stay |
 | **Allowed multiplier range** | `M_min` to `M_max` in hundredths, each in `[50, 150]`, step 5, `M_min ≤ 100 ≤ M_max` | 50 to 150 (the full v0.1 range) | *Live* for new portals. Validate the global step/range first (`INVALID_MULTIPLIER`), then the host range (`MULTIPLIER_NOT_ALLOWED`). The latter is an **additive protocol enum value**, not a renumbering; old peers must not treat it as a success. 1.00 must stay in range, because found portals (§6) are always M = 1.00 |
