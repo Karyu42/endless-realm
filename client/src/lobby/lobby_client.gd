@@ -12,17 +12,24 @@ signal error_received(code: int, reason: String)
 ## Hello-time ErrorReply, before Welcome. A join refusal, not a mid-session portal refusal.
 signal join_error_received(code: int, reason: String)
 signal snapshot_received(tick: int)
+signal instances_received
 signal lobbies_changed
 
 var player_id: int = 0
 var last_reason: String = ""
 var last_error_code: int = 0
 var last_tick: int = 0
+var last_snapshot = null
+var instances: Array = [] # dictionaries from InstanceInfo
+var instances_seq: int = 0
 var connected: bool = false
 var hello_sent: bool = false
 var lobbies: Array[Dictionary] = [] # decoded beacons plus "ip"
 
+const INSTANCE_LIST_INTERVAL := 0.75
+
 var _ws: WebSocketPeer
+var _list_wait: float = 0.0
 var _udp: PacketPeerUDP = PacketPeerUDP.new()
 var _udp_ready: bool = false
 var _url: String = ""
@@ -73,8 +80,9 @@ func send_intent(intent: InputIntent) -> void:
 	_ws.put_packet(NetClient.encode_input(intent))
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	poll()
+	_maybe_request_instance_list(delta)
 
 
 func poll() -> void:
@@ -113,8 +121,13 @@ func _on_packet(buf: PackedByteArray) -> void:
 		last_reason = msg.get_reject().get_reason()
 		rejected.emit(last_reason)
 	elif msg.has_snapshot():
-		last_tick = msg.get_snapshot().get_tick()
+		last_snapshot = msg.get_snapshot()
+		last_tick = last_snapshot.get_tick()
 		snapshot_received.emit(last_tick)
+	elif msg.has_instance_list():
+		instances = SnapshotDecode.instances_from_list(msg.get_instance_list())
+		instances_seq += 1
+		instances_received.emit()
 	elif msg.has_error():
 		last_error_code = msg.get_error().get_code()
 		last_reason = msg.get_error().get_reason()
@@ -159,12 +172,37 @@ func _poll_udp() -> void:
 		lobbies_changed.emit()
 
 
+func request_instance_list() -> void:
+	if _ws == null or _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		return
+	if player_id == 0:
+		return
+	var msg = PB.ClientMessage.new()
+	msg.new_list_instances()
+	_ws.put_packet(msg.to_bytes())
+
+
+func _maybe_request_instance_list(delta: float) -> void:
+	if player_id == 0 or not connected:
+		return
+	_list_wait += delta
+	if _list_wait < INSTANCE_LIST_INTERVAL:
+		return
+	_list_wait = 0.0
+	request_instance_list()
+
+
 func stop() -> void:
+	SnapshotDecode.reset_unknown_id_logs()
 	if _ws != null:
 		_ws.close()
 		_ws = null
 	connected = false
 	hello_sent = false
+	last_snapshot = null
+	instances = []
+	instances_seq += 1
+	_list_wait = 0.0
 	if _udp_ready:
 		_udp.close()
 		_udp_ready = false

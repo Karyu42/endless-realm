@@ -212,7 +212,7 @@ func start_client(url: String, offline: bool = false, join_code: String = "") ->
 	lobby_client.error_received.connect(_on_client_portal_error)
 	lobby_client.join_error_received.connect(_on_client_join_error)
 	mode = Mode.CLIENT
-	source = ClientWorldSource.new(lobby_client)
+	source = ClientWorldSource.new(lobby_client, catalog)
 	_reset_snapshots()
 	return OK
 
