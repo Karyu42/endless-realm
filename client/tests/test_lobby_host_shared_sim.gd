@@ -606,31 +606,64 @@ func test_rejoin_drops_an_unavailable_saved_id() -> void:
 
 # --- HP on re-add -------------------------------------------------------------
 
-func test_dead_local_player_readded_same_tick_stays_dead() -> void:
+## The Hearth body of a lobby player (null if they are not there).
+func _hearth_body(id: int) -> SimPlayerState:
+	var p := _host._find_player(id)
+	if p == null or p.instance != _host.hearth:
+		return null
+	return _host.hearth.sim.get_player(p.sim_id)
+
+
+## The class-change arrival: 0 Focus and full cooldown at the arrival tick,
+## then only normal regen and cooldown for the ticks since.
+func _assert_arrival_ability(sid: int, arrived_tick: int) -> void:
+	var hs := _host.hearth.sim
+	assert_gte(arrived_tick, 0)
+	var since := _host.tick - arrived_tick
+	assert_eq(hs.ability_cooldown_ticks(sid), maxi(0, hs.world_view(sid).ability_cooldown_max - since), "full cooldown at arrival")
+	assert_almost_eq(hs.focus(sid), hs.focus_regen_per_s(sid) * float(since) * SimConstants.TICK_DT, 1e-6, "0 Focus at arrival")
+
+
+func _kill(id: int) -> void:
+	_host.sim.get_player(id).hp = 0
+	_host.run_tick()  # the death event happens in a host tick
+
+
+func test_dead_local_rejoin_respawns_in_the_hearth_at_full_hp() -> void:
 	_host = _new_host()
 	_host.add_local_player()
 	var b := _host.add_local_player()
 	_host.run_tick()
-	_host.sim.get_player(b).hp = 0
+	_kill(b)
+	assert_eq(_host.death_events, 1, "one death event, at the death")
 	var token := _host.remove_local_player(b)
-	assert_eq(_host.add_local_player(null, token), b, "same id, still in the sim")
-	assert_eq(_host.sim.get_player(b).hp, 0, "no refill on re-add")
+	assert_eq(_host.add_local_player(null, token), b, "same id")
+	assert_same(_host._find_player(b).instance, _host.hearth, "respawns in the Hearth")
+	assert_eq(_host.sim.get_player(b).hp, 0, "the Wilds body is never refilled")
 	_host.run_tick()
-	assert_eq(_host.sim.get_player(b).hp, 0)
+	assert_null(_host.sim.get_player(b), "never back in the Wilds")
+	var sp := _hearth_body(b)
+	assert_not_null(sp)
+	assert_eq(sp.hp, _host.hearth.sim._current_max_hp(sp), "Standard respawn: full HP")
+	assert_eq(_host.death_events, 1, "no second death event or fee on the rejoin")
+	assert_eq(_host.hearth_entries, 1, "one Hearth entry")
 
 
-func test_dead_local_player_rejoin_with_other_class_refused_stays_dead() -> void:
+func test_dead_local_rejoin_with_another_class_respawns_in_it() -> void:
 	_host = _new_host()
 	_host.add_local_player()
 	var b := _host.add_local_player("thornguard")
 	_host.run_tick()
-	_host.sim.get_player(b).hp = 0
+	_kill(b)
 	var token := _host.remove_local_player(b)
-	assert_eq(_host.add_local_player("gleamwright", token), -1, "class is kept with the character")
-	assert_eq(_host.sim.get_player(b).hp, 0)
-	assert_eq(_host.sim.get_player(b).class_id, "thornguard")
-	assert_eq(_host.add_local_player(null, token), b, "same class still rejoins")
-	assert_eq(_host.sim.get_player(b).hp, 0)
+	assert_eq(_host.add_local_player("no-such-class", token), -1, "unknown classes are refused")
+	assert_eq(_host.add_local_player("gleamwright", token), b)
+	_host.run_tick()
+	var sp := _hearth_body(b)
+	assert_eq(sp.class_id, "gleamwright")
+	assert_eq(sp.hp, _host.hearth.sim._current_max_hp(sp), "full HP in the new class")
+	assert_eq(_host.hearth.sim.focus(_host._find_player(b).sim_id), 0.0, "conservative start in the new class")
+	assert_eq(_host._find_player(b).class_id, "gleamwright", "host class record follows the sim")
 
 
 func test_damaged_local_player_readded_same_tick_keeps_hp() -> void:
@@ -673,7 +706,7 @@ func test_readd_same_tick_keeps_ability_cooldown_and_focus() -> void:
 	assert_eq(_host.sim.ability_cooldown_ticks(b), maxi(cd - 1, 0))
 
 
-func test_class_change_rejoin_in_overworld_never_refills_or_switches() -> void:
+func test_class_change_rejoin_while_lingering_in_the_wilds_arrives_in_the_hearth() -> void:
 	_host = _new_host()
 	var b := _player_mid_cooldown()
 	var sp := _host.sim.get_player(b)
@@ -681,32 +714,73 @@ func test_class_change_rejoin_in_overworld_never_refills_or_switches() -> void:
 	var cd := _host.sim.ability_cooldown_ticks(b)
 	var focus := _host.sim.focus(b)
 	var token := _host.remove_local_player(b)
-	# Same tick: the body is still in the sim.
-	assert_eq(_host.add_local_player("gleamwright", token), -1, "no class change in the Wilds")
-	sp = _host.sim.get_player(b)
-	assert_eq(sp.class_id, "thornguard", "class not changed in place")
-	assert_eq(sp.hp, 50)
-	assert_eq(_host.sim.ability_cooldown_ticks(b), cd)
-	assert_almost_eq(_host.sim.focus(b), focus, 1e-6)
-	assert_eq(_host.add_local_player("", token), b, "an unnamed class keeps the character's")
-	sp = _host.sim.get_player(b)
-	assert_eq(sp.class_id, "thornguard")
-	assert_eq(sp.hp, 50, "no HP refill")
-	assert_eq(_host.sim.ability_cooldown_ticks(b), cd, "no cooldown refill")
-	assert_almost_eq(_host.sim.focus(b), focus, 1e-6, "no Focus refill")
-	assert_eq(_host._find_player(b).class_id, sp.class_id, "host class record follows the sim")
-	# After the body has left the sim, a rejoin still keeps class and HP.
-	token = _host.remove_local_player(b)
-	_end_lingers()
-	assert_null(_host.sim.get_player(b))
-	assert_eq(_host.add_local_player("gleamwright", token), -1)
-	assert_eq(_host.add_local_player(null, token), b)
+	var p := _host._find_player(b)
+	var arrived := [-1]
+	_host.hearth_entered.connect(func(_id: int) -> void: arrived[0] = _host.tick)
+	assert_eq(_host.add_local_player("gleamwright", token), b, "held for the Hearth arrival")
+	assert_true(p.is_lingering(), "the linger runs on")
+	assert_eq(_host.players.size(), 2, "no second seat")
 	_host.run_tick()
 	sp = _host.sim.get_player(b)
-	assert_eq(sp.class_id, "thornguard")
-	assert_lte(sp.hp, 50, "the rejoin keeps the HP it left with")
-	assert_gt(_host.sim.ability_cooldown_ticks(b), 0, "cooldown still running")
-	assert_eq(_host._find_player(b).class_id, "thornguard")
+	assert_eq(sp.class_id, "thornguard", "no class change in the Wilds")
+	assert_eq(sp.hp, 50, "no HP refill")
+	assert_eq(_host.sim.ability_cooldown_ticks(b), maxi(0, cd - 1), "no cooldown refill")
+	assert_gte(_host.sim.focus(b), focus, "Focus only regenerates")
+	assert_eq(p.class_id, "thornguard")
+	assert_eq(_host.hearth_entries, 0)
+	_end_lingers()
+	assert_same(p.instance, _host.hearth, "the linger ends with the Hearth arrival")
+	assert_false(p.is_lingering())
+	_host.run_tick()
+	assert_null(_host.sim.get_player(b), "the Wilds body is gone")
+	sp = _hearth_body(b)
+	assert_eq(sp.class_id, "gleamwright")
+	assert_lte(sp.hp, 50, "HP = min(current, new max)")
+	assert_gt(sp.hp, 0)
+	_assert_arrival_ability(p.sim_id, arrived[0])
+	assert_eq(p.class_id, "gleamwright", "host class record follows the sim")
+	assert_eq(_host.hearth_entries, 1, "one Hearth entry")
+	# Inputs from the new client apply after the arrival.
+	var x := sp.x
+	_host.submit_local_input(b, InputIntent.from_raw(1, 1.0, 0.0, 0.0, false, false, 0, 0))
+	_host.run_tick()
+	_host.run_tick()
+	assert_ne(_hearth_body(b).x, x)
+
+
+func test_class_change_held_through_a_death_respawns_in_the_new_class() -> void:
+	_host = _new_host()
+	var b := _player_mid_cooldown()
+	var token := _host.remove_local_player(b)
+	assert_eq(_host.add_local_player("gleamwright", token), b)
+	_kill(b)
+	assert_eq(_host.death_events, 1, "the death event while lingering")
+	var sp := _hearth_body(b)
+	assert_not_null(sp, "the death resolves the linger: Hearth respawn")
+	assert_eq(sp.class_id, "gleamwright")
+	assert_eq(sp.hp, _host.hearth.sim._current_max_hp(sp), "full HP")
+	_host.run_tick()
+	assert_eq(_host.death_events, 1, "no second fee")
+
+
+func test_class_change_rejoin_after_the_linger_arrives_in_the_hearth() -> void:
+	_host = _new_host()
+	var b := _player_mid_cooldown()
+	_host.sim.get_player(b).hp = 50
+	var token := _host.remove_local_player(b)
+	_end_lingers()
+	assert_null(_host._find_player(b), "out of the lobby after the linger")
+	assert_eq(_host.hearth_entries, 0, "no Hearth entry at the linger's end")
+	assert_eq(_host.add_local_player("no-such-class", token), -1)
+	assert_eq(_host.add_local_player("gleamwright", token), b)
+	_host.run_tick()
+	var p := _host._find_player(b)
+	var sp := _hearth_body(b)
+	assert_eq(sp.class_id, "gleamwright")
+	assert_lte(sp.hp, 50)
+	assert_gt(sp.hp, 0)
+	_assert_arrival_ability(p.sim_id, _host.tick)
+	assert_eq(_host.hearth_entries, 1, "banked once, on the reconnect")
 
 
 func test_overworld_leave_lingers_and_rejoin_keeps_hp_focus_cooldown() -> void:
@@ -727,14 +801,46 @@ func test_overworld_leave_lingers_and_rejoin_keeps_hp_focus_cooldown() -> void:
 	assert_eq(_host.sim.ability_cooldown_ticks(b), cd, "no cooldown refill")
 	assert_almost_eq(_host.sim.focus(b), focus, 1e-6, "no Focus refill")
 	assert_false(_host._find_player(b).is_lingering())
-	# After the linger, the rejoin is a new body that still keeps the HP.
+	# After the linger, the rejoin arrives in the Hearth and keeps its state,
+	# adjusted only for the time since.
 	token = _host.remove_local_player(b)
+	cd = _host.sim.ability_cooldown_ticks(b)
+	focus = _host.sim.focus(b)
+	var regen := _host.sim.focus_regen_per_s(b)
+	var left := _host.tick
 	_end_lingers()
 	assert_null(_host.sim.get_player(b))
+	for i in range(3):
+		_host.run_tick()
 	assert_eq(_host.add_local_player(null, token), b)
 	_host.run_tick()
-	assert_lte(_host.sim.get_player(b).hp, 30, "no HP refill after the linger")
-	assert_gt(_host.sim.ability_cooldown_ticks(b), 0)
+	var p := _host._find_player(b)
+	sp = _hearth_body(b)
+	assert_not_null(sp, "a living reconnect after the linger arrives in the Hearth")
+	assert_eq(sp.hp, 30, "HP kept")
+	var elapsed := _host.tick - left
+	assert_eq(_host.hearth.sim.ability_cooldown_ticks(p.sim_id), maxi(0, cd - elapsed), "cooldown by elapsed time only")
+	assert_almost_eq(_host.hearth.sim.focus(p.sim_id),
+			minf(float(_host.hearth.sim.focus_max(p.sim_id)), focus + regen * float(elapsed) * SimConstants.TICK_DT), 0.05,
+			"Focus by elapsed time only")
+	assert_eq(_host.hearth_entries, 1)
+
+
+func test_leave_in_the_hearth_is_instant_and_rejoin_returns_there() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _host.add_local_player()
+	_host.run_tick()
+	assert_true(_host.place_in_hearth_for_test(b))
+	_host.run_tick()
+	var p := _host._find_player(b)
+	_host.hearth.sim.get_player(p.sim_id).hp = 40
+	var token := _host.remove_local_player(b)
+	assert_null(_host._find_player(b), "a logout in the Hearth does not linger")
+	_host.run_tick()
+	assert_eq(_host.add_local_player(null, token), b)
+	_host.run_tick()
+	assert_eq(_hearth_body(b).hp, 40)
 
 
 # --- class validation on seating --------------------------------------------

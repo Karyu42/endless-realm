@@ -74,6 +74,7 @@ func test_walking_through_the_gate_crosses_both_ways() -> void:
 	_stand_on(_host.sim, a, _host._wilds_gate_id)
 	_host.run_tick()
 	assert_eq(p.instance, _host.hearth, "walked into the Hearth")
+	assert_eq(_host.hearth_entries, 1, "one Hearth entry (banking event) per walk-in")
 	assert_ne(p.sim_id, a, "own id inside the Hearth sim")
 	assert_gte(p.sim_id, _host.hearth.index * LobbyHost.INSTANCE_ID_BLOCK)
 	assert_lt(p.sim_id, (_host.hearth.index + 1) * LobbyHost.INSTANCE_ID_BLOCK)
@@ -96,6 +97,7 @@ func test_walking_through_the_gate_crosses_both_ways() -> void:
 	_stand_on(_host.sim, a, _host._wilds_gate_id)
 	_host.run_tick()
 	assert_eq(p.sim_id, hearth_id, "the same Hearth id on re-entry")
+	assert_eq(_host.hearth_entries, 2, "walking back in is another entry")
 
 
 func test_dead_or_lingering_players_do_not_cross() -> void:
@@ -151,7 +153,7 @@ func test_hearth_viewer_snapshot_and_listing() -> void:
 	assert_true(found, "the Hearth is listed for a Wilds viewer")
 
 
-func test_leave_and_linger_in_the_hearth() -> void:
+func test_leave_in_the_hearth_is_instant() -> void:
 	_host = _new_host()
 	_host.add_local_player()
 	var b := _joined()
@@ -160,16 +162,14 @@ func test_leave_and_linger_in_the_hearth() -> void:
 	_host.run_tick()
 	var sid := pb.sim_id
 	var token := _host.remove_local_player(b)
-	assert_true(pb.is_lingering())
-	_host.run_tick()
-	assert_not_null(_host.hearth.sim.get_player(sid), "the body lingers in the Hearth")
-	assert_eq(_host.add_local_player(null, token), b, "resumes in place")
-	assert_eq(pb.instance, _host.hearth)
-	_host.remove_local_player(b)
-	for i in range(LobbyHost.LINGER_TICKS + 2):
-		_host.run_tick()
-	assert_null(_host.hearth.sim.get_player(sid))
+	assert_false(pb.is_lingering(), "a logout inside the Hearth is instant")
+	assert_null(_host._find_player(b))
 	assert_false(_host.hearth.sim_ids.has(b), "mapping dropped when the player leaves")
+	_host.run_tick()
+	assert_null(_host.hearth.sim.get_player(sid))
+	assert_eq(_host.add_local_player(null, token), b, "the rejoin returns to the Hearth")
+	assert_same(_host._find_player(b).instance, _host.hearth)
+	_host.remove_local_player(b)
 	assert_false(_host.place_in_hearth_for_test(b), "no such player")
 
 

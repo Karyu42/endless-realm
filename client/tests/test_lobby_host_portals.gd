@@ -981,7 +981,7 @@ func _grant_inside(id: int) -> ItemState:
 
 
 func _progress(id: int) -> Dictionary:
-	var sp := _host.sim.get_player(id)
+	var sp := _sp(id)
 	return {"level": sp.level, "xp": sp.xp_tenths, "glint": sp.pending_glint,
 			"items": sp.inventory.live_items().size(), "riftstone": sp.pending_riftstone}
 
@@ -2225,7 +2225,7 @@ func _lingering_setup() -> Array:
 	return [portal, a, p, dsim]
 
 
-func test_class_change_rejoin_while_lingering_never_refills_or_switches() -> void:
+func test_class_change_rejoin_while_lingering_waits_for_the_hearth() -> void:
 	_host = _new_host()
 	var r := _lingering_setup()
 	var a: int = r[1]
@@ -2239,25 +2239,31 @@ func test_class_change_rejoin_while_lingering_never_refills_or_switches() -> voi
 	var cd := dsim.ability_cooldown_ticks(p.sim_id)
 	var focus := dsim.focus(p.sim_id)
 	var stamp := body.last_activity_tick
+	var arrived := [-1]
+	_host.hearth_entered.connect(func(_id: int) -> void: arrived[0] = _host.tick)
 	var token := _host.remove_local_player(a)
 	assert_true(p.is_lingering())
-	assert_eq(_host.add_local_player(other, token), -1, "no class change in an instance")
+	assert_eq(_host.add_local_player(other, token), a, "held until the linger resolves")
 	assert_true(p.is_lingering(), "the linger goes on")
 	body = dsim.get_player(p.sim_id)
-	assert_eq(body.class_id, cls, "class not changed in place")
+	assert_eq(body.class_id, cls, "class not changed in an instance")
 	assert_eq(body.hp, hp)
 	assert_eq(dsim.ability_cooldown_ticks(p.sim_id), cd)
 	assert_almost_eq(dsim.focus(p.sim_id), focus, 1e-6)
+	assert_eq(body.last_activity_tick, stamp)
 	assert_eq(_host.players.size(), 1, "no second body or seat")
 	assert_eq(p.class_id, cls, "host class record follows the sim")
-	assert_eq(_host.add_local_player(null, token), a, "same class resumes")
-	body = dsim.get_player(p.sim_id)
-	assert_eq(body.class_id, cls)
-	assert_eq(body.hp, hp, "no HP refill")
-	assert_eq(dsim.ability_cooldown_ticks(p.sim_id), cd, "no cooldown refill")
-	assert_almost_eq(dsim.focus(p.sim_id), focus, 1e-6, "no Focus refill")
-	assert_eq(int(dsim._boss_damage_by.get(p.sim_id, 0)), 42)
-	assert_eq(body.last_activity_tick, stamp)
+	_ticks(LobbyHost.LINGER_TICKS + 1)
+	assert_same(p.instance, _host.hearth, "arrives in the Hearth")
+	var sp := _sp(a)
+	assert_eq(sp.class_id, other)
+	assert_lte(sp.hp, hp)
+	assert_gt(sp.hp, 0)
+	var hs := _host.hearth.sim
+	assert_almost_eq(hs.focus(p.sim_id), hs.focus_regen_per_s(p.sim_id) * float(_host.tick - arrived[0]) * SimConstants.TICK_DT, 1e-6,
+			"0 Focus at arrival, then normal regen")
+	assert_false(_host.hearth.sim._boss_damage_by.has(p.sim_id), "no boss credit carried")
+	assert_eq(_host.hearth_entries, 1)
 
 
 func test_linger_keeps_body_still_in_the_instance() -> void:
@@ -2327,7 +2333,7 @@ func test_linger_end_then_rejoin_starts_fresh() -> void:
 	var back := _host.add_local_player(null, token)
 	assert_eq(back, a)
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld(), "a later rejoin lands in town")
+	assert_true(_instance_of(a).is_hearth(), "a later rejoin lands in the Hearth")
 	assert_false(_host.sim._boss_damage_by.has(a), "no carried boss credit")
 
 
@@ -2348,7 +2354,8 @@ func test_linger_death_ends_it() -> void:
 	var back := _host.add_local_player(null, token)
 	assert_eq(back, a)
 	_host.run_tick()
-	assert_true(_instance_of(a).is_overworld(), "no resume into a dead body")
+	assert_true(_instance_of(a).is_hearth(), "no resume into a dead body: Hearth respawn")
+	assert_eq(_sp(a).hp, _host.hearth.sim._current_max_hp(_sp(a)), "full HP")
 
 
 func test_lingering_body_holds_the_instance() -> void:
@@ -2398,7 +2405,7 @@ func test_practice_linger_death_and_expiry_keep_no_gains() -> void:
 		assert_null(_host._find_player(a))
 		assert_eq(_host.add_local_player(null, token), a)
 		_host.run_tick()
-		assert_true(_instance_of(a).is_overworld())
+		assert_true(_instance_of(a).is_hearth())
 		assert_eq(_progress(a), before, "no practice gains kept (dies=%s)" % dies)
 		assert_true(_ids_of(a).has("a-ring"))
 		_assert_unique(_all_item_ids())
