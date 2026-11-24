@@ -215,6 +215,8 @@ class HostPlayer:
 	var linger_until_tick: int = -1
 	## Rejoin key saved at the leave ("" = none), for the linger's end.
 	var linger_identity: String = ""
+	## First tick the Hearth gate pair accepts this character again.
+	var gate_ready_tick: int = 0
 	func is_lingering() -> bool:
 		return linger_until_tick >= 0
 	## Ability state to apply right after the step that adds this player:
@@ -279,6 +281,8 @@ const GATE_RADIUS := 1.0
 const HEARTH_SIZE := 16.0
 const HEARTH_GATE := Vector2(8.0, 2.0)
 const HEARTH_ARRIVAL := Vector2(8.0, 4.0)
+## After any crossing, either gate refuses that character for this long.
+const GATE_COOLDOWN_TICKS: int = 5 * SimConstants.TICK_HZ
 var _instance_by_portal: Dictionary = {}  # portal_key -> HostInstance
 var portal_rejections: int = 0
 var catalog: DataCatalog
@@ -456,12 +460,43 @@ func _walk_zone_gates() -> void:
 			_cross_zone_gate(p)
 
 
+## Crosses the gate pair, unless this character crossed it less than
+## GATE_COOLDOWN_TICKS ago (either direction). A refusal leaves the player
+## where they are.
 func _cross_zone_gate(p: HostPlayer) -> void:
+	if tick < p.gate_ready_tick:
+		return
+	var from := p.instance
 	if p.instance == hearth:
 		# Arrive clear of the walk-through trigger, so it cannot bounce.
 		_move_player(p, instances[0], p.id, arena_size * 0.5, arena_size - 3.0 * GATE_RADIUS)
 	elif p.instance.is_overworld():
 		_enter_hearth(p)
+	if p.instance != from:
+		p.gate_ready_tick = tick + GATE_COOLDOWN_TICKS
+
+
+## The Hearth does no damage to players from any source (and v0.1 has no
+## PvP anywhere). Fire and abilities are still allowed there and still spend
+## Focus and cooldown; only HP lost during a Hearth step is put back, never
+## more than the body had before the step.
+func _hearth_hp_before_step() -> Dictionary:
+	var hp: Dictionary = {}
+	for id in hearth.sim.player_ids():
+		var sp := hearth.sim.get_player(id)
+		if sp != null:
+			hp[id] = sp.hp
+	return hp
+
+
+func _undo_hearth_damage(before: Dictionary) -> void:
+	for id in before:
+		var sp := hearth.sim.get_player(int(id))
+		if sp != null and sp.hp < int(before[id]):
+			if sp.hp <= 0:
+				sp.hp = 1  # place_player never revives; this was a Hearth hit
+			# Capped at the body's current max HP by the sim.
+			hearth.sim.place_player(int(id), sp.x, sp.y, int(before[id]))
 
 
 func start() -> Error:
@@ -1383,8 +1418,10 @@ func _step_sim() -> Array[PackedFloat64Array]:
 		psim.apply_input(p.sim_id, intent, p.seq != p.fed_seq)
 		p.fed_seq = p.seq
 	var stepped: Array[HostInstance] = _all_instances()
+	var hearth_hp := _hearth_hp_before_step()
 	for inst in stepped:
 		inst.sim.step()
+	_undo_hearth_damage(hearth_hp)
 	var shots: Array[PackedFloat64Array] = []
 	for inst in stepped:
 		var done: int = inst.sim.tick()
