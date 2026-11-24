@@ -73,6 +73,11 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
   - **Remote joins start conservative** every time: 0 Focus and the ability on full cooldown.
 - **Phase 2 (after the handshake identity PR, #50):** remote joins switch to the same rules, keyed by the character id that the handshake has verified.
 
+**Class lock:** a character's class is bound to the character. Class changes happen only in town (the Hearth).
+- While a character is inside an instance (a dungeon or the practice vault, §2.5), a rejoin must use the same class.
+- A join with a different class is **not a rejoin**. It spawns in the Hearth as a fresh, conservative join: no snapshot (join state above), 0 Focus and the ability on full cooldown, no boss credit, and no HP or Focus carried over.
+- Entering and leaving instances follows vision §6.1 rule 11: entry only at an entrance, no `LeaveInstance`.
+
 **Fire timing (fire on press, all weapons):** each weapon tracks `next_ready` as a float64 sim time in seconds (tick × 0.05), starting at 0. Let `cd = 1 / (Tempo × (1 + tempoBonus))`. On every tick where `fire_held` is true and `now ≥ next_ready − 1e-9`, one volley fires:
 - If fire has been held on every tick since the previous volley (one continuous hold), set `next_ready = next_ready + cd`. This keeps the long-run rate exact even though `cd` isn't a whole number of ticks.
 - Otherwise (the first volley after a press), set `next_ready = now + cd`.
