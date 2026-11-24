@@ -34,7 +34,9 @@ const MAX_CATCH_UP: int = 5
 const PERIOD_USEC: int = 50000  # 1e6 / SimConstants.TICK_HZ
 ## Stand-in hp pool for HostStandinBulletField hits (load test only).
 const START_HP: int = 100
-## Class for remote players until the host-lobby protocol carries one.
+## Class for remote players until the host-lobby protocol carries one, and
+## for a join that omits a class. Must exist in the packed class data; the
+## host fails closed if it does not.
 ## TODO(host-lobby protocol PR): take the class from the joining client.
 const DEFAULT_CLASS_ID := "thornguard"
 ## Hosted join state (docs/design/content-v0.1.md §1, phase 1). Applies to
@@ -404,7 +406,9 @@ func is_m100_allowed(m100: int) -> bool:
 
 
 ## Adds a player hosted on this machine (listen server). Counts toward
-## max_players. Returns the player id, or -1 if the lobby is full.
+## max_players. Returns the player id, or -1 if the lobby is full or the
+## join is refused (an unknown or empty class, except the built-in player 1
+## takeover, which uses the default).
 ## `character` is passed to the shared sim: null (DEFAULT_CLASS_ID), a class
 ## id String, or a Dictionary {class_id, x?, y?, hp?}.
 ## No `rejoin_token` is a first join and starts ready. The token
@@ -422,6 +426,8 @@ func add_local_player(character: Variant = null, rejoin_token: String = "") -> i
 		p = _add_player(character, "", true)
 	else:
 		p = _add_player(character, _LOCAL_KEY_PREFIX + rejoin_token)
+	if p == null:
+		return -1
 	p.is_local = true
 	return p.id
 
@@ -759,7 +765,9 @@ func _on_packet(c: HostConn, data: PackedByteArray) -> void:
 			_send_error(c, PB.ErrorCode.INSTANCE_FULL, "lobby is full")
 			c.close_pending = true
 			return
-		c.player = _add_player()
+		c.player = _try_remote_join(c)
+		if c.player == null:
+			return
 		var out = PB.ServerMessage.new()
 		var w = out.new_welcome()
 		w.set_protocol_version(SimConstants.PROTOCOL_VERSION)
@@ -821,23 +829,31 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	# collides with an enemy, projectile or bag (or a sim-only player such
 	# as LocalSim.place_ally, which never counts toward max_players).
 	var saved: Dictionary = _ability_stash.get(identity, {}) if identity != "" else {}
-	if not saved.is_empty() and (not _stash_id_issued_here(saved) or _find_player(int(saved["id"])) != null):
+	var saved_unusable: bool = not saved.is_empty() and (
+			not _stash_id_issued_here(saved) or _find_player(int(saved["id"])) != null)
+	var saved_usable: bool = not saved.is_empty() and not saved_unusable
+	# Class is checked before any id is issued or a seat is appended, and
+	# before a snapshot is consumed.
+	takes_builtin = not saved_usable and _sim_has_builtin_player()
+	var class_id := _resolve_join_class(character, takes_builtin)
+	if class_id == "":
+		return null
+	if saved_unusable:
+		# Drop an unusable snapshot only once this join is going ahead.
 		_ability_stash.erase(identity)
 		_ability_stash_order.erase(identity)
 		for id in _issued_player_ids.keys():
 			_prune_issued_id(int(id))
 		saved = {}  # no usable saved id: a fresh id, conservative
-	if not saved.is_empty() and _find_player(int(saved["id"])) == null:
-		_ability_stash.erase(identity)
-		_ability_stash_order.erase(identity)
+	if saved_usable:
+		# Leave the snapshot in place until the sim accepts the seat.
 		p.id = int(saved["id"])
 		p.restore_progression = saved.get("progression", {})
 		p.restore_ability = {"cooldown": int(saved["cooldown"]), "focus": float(saved["focus"]),
 				"left_tick": int(saved["left_tick"])}
-	elif _sim_has_builtin_player():
+	elif takes_builtin:
 		p.id = 1  # reuse LocalSim's built-in player 1 before the first step
 		_builtin_taken = true
-		takes_builtin = true
 	else:
 		p.id = sim.alloc_player_id()
 	_issued_player_ids[p.id] = true
@@ -847,8 +863,9 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 	var a: float = float(p.id) * 2.399963
 	var r: float = arena_size * 0.35 * sqrt(float(p.id % 50) / 50.0)
 	var rec := _sim_character(character, arena_size * 0.5 + cos(a) * r, arena_size * 0.5 + sin(a) * r)
+	rec["class_id"] = class_id
 	p.character = character
-	p.class_id = String(rec["class_id"])
+	p.class_id = class_id
 	p.x = float(rec["x"])
 	p.y = float(rec["y"])
 	var existing := sim.get_player(p.id)
@@ -859,7 +876,13 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 		# join); a player who never left the sim keeps the sim's HP.
 		var new_spawn := takes_builtin
 		var kept_hp := existing.hp
-		sim.place_player(p.id, p.x, p.y, int(rec["hp"]) if new_spawn and rec.has("hp") else -1)
+		# place_player is void today; call() still lets us honour a later
+		# bool return without a parse error on the current signature.
+		var placed: Variant = sim.call("place_player", p.id, p.x, p.y,
+				int(rec["hp"]) if new_spawn and rec.has("hp") else -1)
+		if placed == false or sim.get_player(p.id) == null:
+			_rollback_seat(p, takes_builtin)
+			return null
 		_sync_position(p, sim, p.id)
 		if new_spawn:
 			sim.set_player_class_for(p.id, p.class_id)
@@ -870,10 +893,76 @@ func _add_player(character: Variant = null, identity: String = "", ready_if_new:
 			existing.hp = mini(kept_hp, existing.hp)
 		_restore_ability(p)
 	else:
-		sim.add_player(p.id, rec)
+		if sim.add_player(p.id, rec) == false:
+			_rollback_seat(p, takes_builtin)
+			return null
+	if saved_usable:
+		_ability_stash.erase(identity)
+		_ability_stash_order.erase(identity)
 	p.join_tick = tick
 	players.append(p)
 	return p
+
+
+## Remote Hello path: seat the player, or send JOIN_REFUSED and close.
+## `character` is unused by today's Hello (no class field yet) and is for
+## tests and a later protocol that carries one.
+func _try_remote_join(c: HostConn, character: Variant = null) -> HostPlayer:
+	var p := _add_player(character)
+	if p == null:
+		# The Error always goes out: this connection closes right after.
+		c.errors_in_window = 0
+		_send_error(c, PB.ErrorCode.JOIN_REFUSED, "class is not valid")
+		c.close_pending = true
+		return null
+	return p
+
+
+## The class id the join asked for, or null if none was given (use default).
+func _requested_class_id(character: Variant) -> Variant:
+	if character is String:
+		return String(character)
+	if character is Dictionary:
+		var d: Dictionary = character
+		if d.has("class_id"):
+			return String(d["class_id"])
+		if d.has("class"):
+			return String(d["class"])
+	return null
+
+
+func _catalog_has_class(class_id: String) -> bool:
+	return class_id != "" and catalog != null and catalog.class_def(class_id) != null
+
+
+func _default_class_id() -> String:
+	if _catalog_has_class(DEFAULT_CLASS_ID):
+		return DEFAULT_CLASS_ID
+	push_error("LobbyHost: default class '%s' is not in the catalog" % DEFAULT_CLASS_ID)
+	return ""
+
+
+## A valid class id for this join, or "" to refuse. The built-in player 1
+## takeover falls back to the default when none or an invalid class is given.
+func _resolve_join_class(character: Variant, fallback_to_default: bool) -> String:
+	var requested: Variant = _requested_class_id(character)
+	if requested == null:
+		return _default_class_id()
+	var class_id := String(requested)
+	if _catalog_has_class(class_id):
+		return class_id
+	if fallback_to_default:
+		return _default_class_id()
+	return ""
+
+
+## Drop a seat that never made it into the lobby, and forget its issued id.
+func _rollback_seat(p: HostPlayer, takes_builtin: bool) -> void:
+	if takes_builtin:
+		_builtin_taken = false
+	if p != null and p.id != 0:
+		# Keeps the id issued if a snapshot still names it.
+		_prune_issued_id(p.id)
 
 
 ## LocalSim spawns a solo player 1; it stays in the sim (pending removal)
