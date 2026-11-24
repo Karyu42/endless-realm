@@ -32,6 +32,13 @@ func _stand_on(psim: LocalSim, sim_id: int, gate_id: int) -> void:
 	sp.y = gate.y
 
 
+## Ticks until the gate pair accepts this character again (the player keeps
+## away from the gates meanwhile).
+func _wait_gate_cooldown(p: LobbyHost.HostPlayer) -> void:
+	while _host.tick < p.gate_ready_tick:
+		_host.run_tick()
+
+
 func test_hearth_is_a_separate_town_zone_without_combat() -> void:
 	_host = _new_host()
 	var h := _host.hearth
@@ -86,6 +93,7 @@ func test_walking_through_the_gate_crosses_both_ways() -> void:
 	_host.run_tick()
 	assert_eq(p.instance, _host.hearth, "arrival is clear of the gate, no bounce")
 	var hearth_id := p.sim_id
+	_wait_gate_cooldown(p)
 	_stand_on(_host.hearth.sim, p.sim_id, _host._hearth_gate_id)
 	_host.run_tick()
 	assert_true(p.instance.is_overworld(), "walked back out to the Wilds")
@@ -94,6 +102,7 @@ func test_walking_through_the_gate_crosses_both_ways() -> void:
 	_host.run_tick()
 	assert_true(p.instance.is_overworld(), "no bounce back in")
 	assert_null(_host.hearth.sim.get_player(hearth_id))
+	_wait_gate_cooldown(p)
 	_stand_on(_host.sim, a, _host._wilds_gate_id)
 	_host.run_tick()
 	assert_eq(p.sim_id, hearth_id, "the same Hearth id on re-entry")
@@ -190,8 +199,123 @@ func test_gate_press_routes_like_walking() -> void:
 	back.kind = PortalTransfer.KIND_EXIT
 	back.player_id = p.sim_id
 	back.portal_id = _host._hearth_gate_id
-	_host.run_tick()
+	_wait_gate_cooldown(p)
 	_stand_on(_host.hearth.sim, p.sim_id, _host._hearth_gate_id)
 	_host._route_transfer(_host.hearth, back)
 	assert_true(p.instance.is_overworld())
 	assert_gt(p.y, _host.arena_size * 0.8, "to the south edge, not the old stand-in")
+
+
+func test_gate_refuses_a_character_for_the_cooldown_after_any_crossing() -> void:
+	_host = _new_host()
+	var a := _joined()
+	var p := _host._find_player(a)
+	_stand_on(_host.sim, a, _host._wilds_gate_id)
+	_host.run_tick()
+	assert_same(p.instance, _host.hearth, "crossed in")
+	var crossed := _host.tick
+	# Straight back onto the Hearth gate: refused, and not moved.
+	_stand_on(_host.hearth.sim, p.sim_id, _host._hearth_gate_id)
+	var x := _host.hearth.sim.get_player(p.sim_id).x
+	var y := _host.hearth.sim.get_player(p.sim_id).y
+	while _host.tick < crossed + LobbyHost.GATE_COOLDOWN_TICKS - 1:
+		_host.run_tick()
+		assert_same(p.instance, _host.hearth, "refused during the cooldown")
+	assert_almost_eq(p.x, x, 0.01, "a refusal does not move the player")
+	assert_almost_eq(p.y, y, 0.01)
+	# A gate press is refused the same way.
+	var xfer := PortalTransfer.new()
+	xfer.kind = PortalTransfer.KIND_EXIT
+	xfer.player_id = p.sim_id
+	xfer.portal_id = _host._hearth_gate_id
+	_host._route_transfer(_host.hearth, xfer)
+	assert_same(p.instance, _host.hearth, "a press is refused too")
+	_host.run_tick()
+	assert_true(p.instance.is_overworld(), "allowed again after the cooldown")
+	var out := _host.tick
+	assert_eq(out, crossed + LobbyHost.GATE_COOLDOWN_TICKS)
+	# The other direction has the same cooldown.
+	_stand_on(_host.sim, a, _host._wilds_gate_id)
+	_host.run_tick()
+	assert_true(p.instance.is_overworld(), "the Wilds gate refuses too")
+
+
+func test_cooldown_is_per_character() -> void:
+	_host = _new_host()
+	var a := _joined()
+	var b := _joined()
+	_stand_on(_host.sim, a, _host._wilds_gate_id)
+	_host.run_tick()
+	_stand_on(_host.sim, b, _host._wilds_gate_id)
+	_host.run_tick()
+	assert_same(_host._find_player(b).instance, _host.hearth, "another character is not held back")
+
+
+func test_no_damage_to_players_in_the_hearth() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var a := _joined()
+	var p := _host._find_player(a)
+	assert_true(_host.place_in_hearth_for_test(a))
+	_host.run_tick()
+	var hs := _host.hearth.sim
+	var sp := hs.get_player(p.sim_id)
+	var hp := sp.hp
+	# A hostile source placed on top of the player (none exist there normally).
+	var e := hs.spawn_enemy("burrmite", sp.x, sp.y)
+	assert_gt(e, 0)
+	for i in range(40):
+		_host.run_tick()
+		assert_eq(hs.get_player(p.sim_id).flash_ticks, 0, "a rolled-back hit leaves no hurt flash")
+	assert_eq(hs.get_player(p.sim_id).hp, hp, "no damage from any source in the Hearth")
+	assert_gt(_host.hearth.sim.player_ids().size(), 0)
+
+
+func test_a_lethal_hearth_hit_is_undone_without_a_placement() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var a := _joined()
+	var p := _host._find_player(a)
+	assert_true(_host.place_in_hearth_for_test(a))
+	_host.run_tick()
+	var hs := _host.hearth.sim
+	var sp := hs.get_player(p.sim_id)
+	sp.hp = 1
+	# Moving, so a placement would show up as prev == current.
+	_host.submit_local_input(a, InputIntent.from_raw(50, 1.0, 0.0, 0.0, false))
+	_host.run_tick()
+	var deaths := _host.death_events
+	hs.spawn_enemy("burrmite", sp.x, sp.y)
+	for i in range(20):
+		_host.submit_local_input(a, InputIntent.from_raw(51 + i, 1.0, 0.0, 0.0, false))
+		_host.run_tick()
+		sp = hs.get_player(p.sim_id)
+		assert_eq(sp.hp, 1, "even a lethal hit is put back")
+		assert_eq(sp.flash_ticks, 0)
+	assert_ne(Vector2(sp.prev_x, sp.prev_y), Vector2(sp.x, sp.y), "interpolation state kept (no snap)")
+	assert_eq(_host.death_events, deaths, "no death event in the Hearth")
+
+
+func test_fire_and_abilities_work_in_the_hearth_and_spend_focus() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var a := _joined()
+	var b := _joined()
+	var pa := _host._find_player(a)
+	var pb := _host._find_player(b)
+	assert_true(_host.place_in_hearth_for_test(a))
+	assert_true(_host.place_in_hearth_for_test(b))
+	_host.run_tick()
+	var hs := _host.hearth.sim
+	var hp_b := hs.get_player(pb.sim_id).hp
+	hs.set_focus(pa.sim_id, float(hs.focus_max(pa.sim_id)))
+	hs.set_ability_cooldown_ticks(pa.sim_id, 0)
+	var focus := hs.focus(pa.sim_id)
+	_host.submit_local_input(a, InputIntent.from_raw(1, 0.0, 0.0, 0.0, true, false, 0, 0, true))
+	_host.run_tick()
+	assert_lt(hs.focus(pa.sim_id), focus, "the ability spends Focus")
+	assert_gt(hs.ability_cooldown_ticks(pa.sim_id), 0, "and starts its cooldown")
+	for i in range(1, 30):
+		_host.submit_local_input(a, InputIntent.from_raw(1 + i, 0.0, 0.0, 0.0, true, false, 0, 0))
+		_host.run_tick()
+	assert_eq(hs.get_player(pb.sim_id).hp, hp_b, "no PvP")
