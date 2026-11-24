@@ -40,7 +40,12 @@
     "m100_max_placeholder": "Max M (m100)",
     "imports_allowed_check": "Imports allowed",
     "offline_imports_check": "Offline-flagged imports allowed",
-    "lobby_full": "This lobby is full."
+    "lobby_full": "This lobby is full.",
+    "portal_closed": "Closed",
+    "portal_full": "Full",
+    "instance_base_level": "E%d",
+    "instance_admitted": "%d/%d",
+    "instance_closed": "Closed"
   },
   "import_messages": {
     "IMPORT_RESULT_OK": "Character imported.",

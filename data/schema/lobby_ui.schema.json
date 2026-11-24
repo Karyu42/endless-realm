@@ -64,7 +64,12 @@
         "m100_max_placeholder",
         "imports_allowed_check",
         "offline_imports_check",
-        "lobby_full"
+        "lobby_full",
+        "portal_closed",
+        "portal_full",
+        "instance_base_level",
+        "instance_admitted",
+        "instance_closed"
       ],
       "properties": {
         "imports_ok": { "type": "string", "minLength": 1 },
@@ -97,7 +102,12 @@
         "m100_max_placeholder": { "type": "string", "minLength": 1 },
         "imports_allowed_check": { "type": "string", "minLength": 1 },
         "offline_imports_check": { "type": "string", "minLength": 1 },
-        "lobby_full": { "type": "string", "minLength": 1 }
+        "lobby_full": { "type": "string", "minLength": 1 },
+        "portal_closed": { "type": "string", "minLength": 1 },
+        "portal_full": { "type": "string", "minLength": 1 },
+        "instance_base_level": { "type": "string", "minLength": 1 },
+        "instance_admitted": { "type": "string", "minLength": 1 },
+        "instance_closed": { "type": "string", "minLength": 1 }
       }
     },
     "import_messages": {
