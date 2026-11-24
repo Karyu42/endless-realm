@@ -1662,6 +1662,26 @@ func apply_carried_player(carry: PlayerCarry, x: float, y: float) -> void:
 	_seed_activity(p)
 
 
+## Progression only (level, XP, pending currency, inventory) for a player
+## already in this sim, e.g. a host restoring saved state. Unlike
+## apply_carried_player it does not re-seed entry state, the activity stamp
+## or boss contribution, and never raises HP (it is only capped at max).
+func apply_carried_progression(carry: PlayerCarry) -> void:
+	if carry == null:
+		return
+	var p: SimPlayerState = _players.get(carry.player_id, null) as SimPlayerState
+	if p == null:
+		return
+	p.level = carry.level
+	p.xp_tenths = carry.xp_tenths
+	p.pending_glint = carry.pending_glint
+	p.pending_riftstone = carry.pending_riftstone
+	if carry.inventory != null:
+		p.inventory = carry.inventory
+	_recompute_player_stats(p, false)
+	p.hp = clampi(p.hp, 0, _current_max_hp(p))
+
+
 func player_max_hp() -> int:
 	var p := _default_player()
 	return _current_max_hp(p) if p != null else 0

@@ -1039,7 +1039,9 @@ func test_practice_vault_leave_and_rejoin_reverts() -> void:
 	var b := _host.add_local_player(null, token)
 	assert_eq(b, a)
 	_host.run_tick()
-	assert_eq(_progress(b), before, "a rejoin does not keep practice gains")
+	assert_false(_instance_of(b).is_overworld(), "a rejoin within the linger resumes inside")
+	_exit_here(b, 7)
+	assert_eq(_progress(b), before, "practice gains are still not kept")
 
 
 func test_practice_vault_offers_no_onward_portals() -> void:
@@ -2204,3 +2206,183 @@ func test_remote_admitted_ids_over_websocket() -> void:
 	assert_true(_wire_portal(s2, portal.id).get_closed())
 	rr.ws.close()
 	r2.ws.close()
+
+
+# --- vision §7.3 disconnect linger -------------------------------------------
+
+## a in a normal (expiring) vault, with some boss contribution and a stamp.
+func _lingering_setup() -> Array:
+	var portal := _open_portal()
+	var a := _join_near_portal(portal)
+	_enter(a, portal)
+	_host.run_tick()
+	var p := _host._find_player(a)
+	assert_false(p.instance.is_overworld())
+	var dsim: LocalSim = p.instance.sim
+	dsim._boss_damage_by[p.sim_id] = 42
+	_sp(a).last_activity_tick = dsim.tick() - 10
+	return [portal, a, p, dsim]
+
+
+func test_linger_keeps_body_still_in_the_instance() -> void:
+	_host = _new_host()
+	var r := _lingering_setup()
+	var a: int = r[1]
+	var p: LobbyHost.HostPlayer = r[2]
+	var dsim: LocalSim = r[3]
+	_host.submit_local_input(a, InputIntent.from_raw(9, 1.0, 0.0, 0.0, true, false, 0, 0))
+	_host.run_tick()
+	var token := _host.remove_local_player(a)
+	assert_ne(token, "")
+	assert_true(p.is_lingering())
+	_host.run_tick()
+	var body := dsim.get_player(p.sim_id)
+	assert_not_null(body, "the body stays in the world")
+	var x := body.x
+	_host.submit_local_input(a, InputIntent.from_raw(10, 1.0, 0.0, 0.0, true, true, 0, 0))
+	_ticks(5)
+	assert_almost_eq(dsim.get_player(p.sim_id).x, x, 0.0001, "no movement while lingering")
+	assert_eq(_host.remove_local_player(a), "", "already gone")
+	assert_eq(_host._find_player(a), p, "the seat is held during the linger")
+
+
+func test_linger_reconnect_keeps_credit_and_stamp() -> void:
+	_host = _new_host()
+	var r := _lingering_setup()
+	var a: int = r[1]
+	var p: LobbyHost.HostPlayer = r[2]
+	var dsim: LocalSim = r[3]
+	var stamp := _sp(a).last_activity_tick
+	var sid := p.sim_id
+	var inst := p.instance
+	var hp := dsim.get_player(sid).hp
+	var token := _host.remove_local_player(a)
+	_ticks(LobbyHost.LINGER_TICKS - 2)
+	var back := _host.add_local_player(null, token)
+	assert_eq(back, a)
+	var q := _host._find_player(a)
+	assert_same(q.instance, inst, "resumed in the same instance")
+	assert_eq(q.sim_id, sid, "same body")
+	assert_false(q.is_lingering())
+	_host.run_tick()
+	assert_eq(int(dsim._boss_damage_by.get(sid, 0)), 42, "boss contribution kept")
+	assert_eq(dsim.get_player(sid).last_activity_tick, stamp, "stamp kept")
+	assert_eq(dsim.get_player(sid).hp, hp)
+	_ticks(LobbyHost.LINGER_TICKS + 2)
+	assert_not_null(dsim.get_player(sid), "no late removal after the resume")
+	# Inputs from the returning client apply again from seq 1.
+	var x := dsim.get_player(sid).x
+	_host.submit_local_input(a, InputIntent.from_raw(1, 1.0, 0.0, 0.0, false, false, 0, 0))
+	_ticks(3)
+	assert_ne(dsim.get_player(sid).x, x, "the resumed player moves")
+
+
+func test_linger_end_then_rejoin_starts_fresh() -> void:
+	_host = _new_host()
+	var r := _lingering_setup()
+	var a: int = r[1]
+	var p: LobbyHost.HostPlayer = r[2]
+	var dsim: LocalSim = r[3]
+	var sid := p.sim_id
+	var token := _host.remove_local_player(a)
+	_ticks(LobbyHost.LINGER_TICKS + 1)
+	assert_null(_host._find_player(a), "out of the lobby after the linger")
+	assert_null(dsim.get_player(sid), "body removed after the linger")
+	var back := _host.add_local_player(null, token)
+	assert_eq(back, a)
+	_host.run_tick()
+	assert_true(_instance_of(a).is_overworld(), "a later rejoin lands in town")
+	assert_false(_host.sim._boss_damage_by.has(a), "no carried boss credit")
+
+
+func test_linger_death_ends_it() -> void:
+	_host = _new_host()
+	var r := _lingering_setup()
+	var a: int = r[1]
+	var p: LobbyHost.HostPlayer = r[2]
+	var dsim: LocalSim = r[3]
+	var sid := p.sim_id
+	var token := _host.remove_local_player(a)
+	_host.run_tick()
+	dsim.get_player(sid).hp = 0
+	_host.run_tick()
+	assert_null(_host._find_player(a), "a dead lingering body leaves at once")
+	_host.run_tick()
+	assert_null(dsim.get_player(sid))
+	var back := _host.add_local_player(null, token)
+	assert_eq(back, a)
+	_host.run_tick()
+	assert_true(_instance_of(a).is_overworld(), "no resume into a dead body")
+
+
+func test_lingering_body_holds_the_instance() -> void:
+	_host = _new_host()
+	var r := _lingering_setup()
+	var a: int = r[1]
+	var p: LobbyHost.HostPlayer = r[2]
+	var inst := p.instance
+	var rec: LobbyHost.PortalRecord = _host._portal_records[inst.portal_key]
+	_host.remove_local_player(a)
+	_ticks(LobbyHost.LINGER_TICKS - 1)
+	assert_eq(rec.empty_since_tick, -1, "not empty while a body lingers")
+	assert_false(_host._no_living_player_inside(inst))
+	_ticks(2)
+	assert_true(_host._no_living_player_inside(inst))
+	assert_gte(rec.empty_since_tick, 0)
+
+
+func test_linger_resume_uses_its_own_seat_in_a_full_lobby() -> void:
+	_host = _new_host(2)
+	var r := _lingering_setup()
+	var a: int = r[1]
+	var b := _host.add_local_player()
+	assert_gt(b, 0)
+	var token := _host.remove_local_player(a)
+	assert_eq(_host.add_local_player(), -1, "the lingering seat is still held")
+	assert_eq(_host.add_local_player(null, token), a)
+
+
+func test_practice_linger_death_and_expiry_keep_no_gains() -> void:
+	for dies in [false, true]:
+		_host = _new_host()
+		var portal := _open_portal(true)
+		var a := _join_near_portal(portal)
+		_owned_item(a, "a-ring")
+		var before := _progress(a)
+		_enter(a, portal)
+		_grant_inside(a)
+		var p := _host._find_player(a)
+		var token := _host.remove_local_player(a)
+		_host.run_tick()
+		if dies:
+			p.instance.sim.get_player(p.sim_id).hp = 0
+			_host.run_tick()
+		else:
+			_ticks(LobbyHost.LINGER_TICKS + 1)
+		assert_null(_host._find_player(a))
+		assert_eq(_host.add_local_player(null, token), a)
+		_host.run_tick()
+		assert_true(_instance_of(a).is_overworld())
+		assert_eq(_progress(a), before, "no practice gains kept (dies=%s)" % dies)
+		assert_true(_ids_of(a).has("a-ring"))
+		_assert_unique(_all_item_ids())
+		_host.stop()
+
+
+func test_progression_restore_does_not_reseed() -> void:
+	_host = _new_host()
+	var r := _lingering_setup()
+	var a: int = r[1]
+	var p: LobbyHost.HostPlayer = r[2]
+	var dsim: LocalSim = r[3]
+	var sp := dsim.get_player(p.sim_id)
+	var stamp := sp.last_activity_tick
+	var carry := PlayerCarry.from_sim(sp, dsim.ability_state(p.sim_id))
+	carry.xp_tenths = sp.xp_tenths + 5
+	carry.hp = sp.hp + 1000
+	var hp := sp.hp
+	dsim.apply_carried_progression(carry)
+	assert_eq(sp.xp_tenths, carry.xp_tenths)
+	assert_eq(sp.last_activity_tick, stamp, "stamp not refreshed")
+	assert_eq(int(dsim._boss_damage_by.get(p.sim_id, 0)), 42, "boss credit not cleared")
+	assert_eq(sp.hp, hp, "HP never raised")
