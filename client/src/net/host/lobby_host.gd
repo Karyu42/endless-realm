@@ -308,9 +308,9 @@ const HEARTH_GATE := Vector2(8.0, 2.0)
 const HEARTH_ARRIVAL := Vector2(8.0, 4.0)
 ## Asked-for HP on a Standard respawn; the sim caps it at the body's max.
 const FULL_HP := 1 << 30
-## Connected Standard deaths are observed for one host tick, then respawn.
-## No client respawn command exists yet; death processing precedes arrival.
-const RESPAWN_DELAY_TICKS: int = 1
+## vision §7.2 step 4: a connected Standard character respawns automatically
+## after a 3 s death screen (no button), counted from its death event.
+const RESPAWN_DELAY_TICKS: int = 3 * SimConstants.TICK_HZ
 ## vision §6.1 rule 8: an instance lasts at most 30 min, then collapses and
 ## everyone inside is moved to the Hearth.
 const INSTANCE_MAX_LIFETIME_TICKS: int = 30 * 60 * SimConstants.TICK_HZ
@@ -501,6 +501,10 @@ func _finish_arrival(p: HostPlayer, steps: Dictionary) -> void:
 		hs.apply_class_change_arrival(p.sim_id, cls)
 		if hp >= FULL_HP and body.hp > 0:
 			hs.place_player(p.sim_id, body.x, body.y, FULL_HP)  # respawn: the new class's max
+	if hp >= FULL_HP and body.hp > 0:
+		# A Standard respawn also arrives with full Focus and its ability ready.
+		hs.set_focus(p.sim_id, float(hs.focus_max(p.sim_id)))
+		hs.set_ability_cooldown_ticks(p.sim_id, 0)
 	p.class_id = body.class_id
 	_sync_position(p, hs, p.sim_id)
 	if steps.get("hearth_entry", false) and p.instance == hearth:
@@ -2238,9 +2242,9 @@ func expire_instance_for_test(index: int) -> bool:
 ## vision §6.1 rule 8: a dungeon instance collapses at the end of its
 ## lifetime. Everyone inside goes to the Hearth: a living character as a
 ## living arrival (banked there, §7.1), a dead one as its Standard respawn.
-## A disconnected body keeps the rest of its normal linger. Its closed
-## instance is retained only until that linger resolves; the later rejoin
-## arrives in the Hearth (no banking while disconnected).
+## A lingering body's linger ends at once: it leaves the instance with its
+## state saved (it can no longer be hit or die), and its rejoin arrives in
+## the Hearth as a living arrival, banked once then (§7.1).
 ## Persistent entrances (the practice door) keep their one instance.
 func _collapse_expired_instances() -> void:
 	for record: PortalRecord in _portal_records.values():
@@ -2255,12 +2259,13 @@ func _collapse_expired_instances() -> void:
 			if p.instance != inst:
 				continue
 			if p.is_lingering():
+				_end_linger(p)
 				continue
 			var body: SimPlayerState = inst.sim.get_player(p.sim_id)
 			if body != null:
 				_enter_hearth(p, body.hp <= 0 and inst.grants_persistent)
 		if _occupants(inst, -1) > 0:
-			continue  # preserve a remaining linger, or retry a failed move
+			continue  # retry a failed move next tick
 		record.instance = null
 		instances.erase(inst)
 		_instance_by_portal.erase(inst.portal_key)

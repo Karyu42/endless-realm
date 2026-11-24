@@ -668,7 +668,10 @@ func test_dead_local_rejoin_with_another_class_respawns_in_it() -> void:
 	var sp := _hearth_body(b)
 	assert_eq(sp.class_id, "gleamwright")
 	assert_eq(sp.hp, _host.hearth.sim._current_max_hp(sp), "full HP in the new class")
-	assert_eq(_host.hearth.sim.focus(_host._find_player(b).sim_id), 0.0, "conservative start in the new class")
+	var sid := _host._find_player(b).sim_id
+	assert_eq(_host.hearth.sim.focus(sid), float(_host.hearth.sim.focus_max(sid)),
+			"a respawn has full Focus, also in the new class")
+	assert_eq(_host.hearth.sim.ability_cooldown_ticks(sid), 0, "and its ability ready")
 	assert_eq(_host._find_player(b).class_id, "gleamwright", "host class record follows the sim")
 
 

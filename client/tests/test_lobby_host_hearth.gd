@@ -210,10 +210,13 @@ func test_gate_press_routes_like_walking() -> void:
 func test_fresh_join_lands_in_the_hearth() -> void:
 	_host = LobbyHost.new(SimConfig.new())
 	_host.port = 0
+	var entered: Array = []
+	_host.hearth_entered.connect(func(id: int) -> void: entered.append(id))
 	var a := _host.add_local_player()
 	_host.run_tick()
 	var p := _host._find_player(a)
 	assert_true(p.instance.is_hearth(), "a fresh local join arrives in the Hearth")
+	assert_eq(entered, [a], "a fresh join is a Hearth entry (its banking is a no-op)")
 	assert_eq(_host.hearth_entries, 1, "one Hearth entry for the join")
 	assert_null(_host.sim.get_player(a), "no body in the Wilds")
 	var r := _host._add_player()  # remote Hello path

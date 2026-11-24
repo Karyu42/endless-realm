@@ -2594,11 +2594,20 @@ func test_connected_death_respawns_in_the_hearth_at_full_hp_after_the_delay() ->
 	_host.sim.get_player(a).hp = 0
 	_host.run_tick()
 	assert_eq(_host.death_events, 1, "one death event, at the death")
-	assert_true(_instance_of(a).is_overworld(), "stays dead until the respawn")
-	assert_eq(_sp(a).hp, 0)
-	_ticks(LobbyHost.RESPAWN_DELAY_TICKS)
-	assert_true(_instance_of(a).is_hearth(), "Standard respawn in the Hearth")
+	assert_eq(LobbyHost.RESPAWN_DELAY_TICKS, 60, "a 3 s death screen")
+	_host.sim.set_focus(a, 0.0)
+	_host.sim.set_ability_cooldown_ticks(a, 500)
+	for i in LobbyHost.RESPAWN_DELAY_TICKS - 1:
+		_host.run_tick()
+		assert_true(_instance_of(a).is_overworld(), "stays dead through the death screen")
+		assert_eq(_sp(a).hp, 0)
+	_host.run_tick()  # 60 ticks after the death event
+	assert_true(_instance_of(a).is_hearth(), "automatic Standard respawn in the Hearth")
 	assert_eq(_sp(a).hp, _max_hp(a), "the respawn is at full HP")
+	var p := _host._find_player(a)
+	assert_almost_eq(p.instance.sim.focus(p.sim_id), float(p.instance.sim.focus_max(p.sim_id)), 1e-6,
+			"with full Focus")
+	assert_eq(p.instance.sim.ability_cooldown_ticks(p.sim_id), 0, "and the ability ready")
 	assert_eq(_host.respawns, 1)
 	assert_eq(_host.hearth_entries, entries + 1, "one Hearth entry for the respawn")
 	_ticks(LobbyHost.RESPAWN_DELAY_TICKS * 2)
@@ -2653,6 +2662,8 @@ func test_collapse_moves_everyone_inside_to_the_hearth() -> void:
 	var inst := _instance_of(a)
 	var rec: LobbyHost.PortalRecord = _host._portal_records.values()[0]
 	_sp(a).hp = 41
+	_sp(c).hp = 33
+	var c_hp := 33
 	var token := _host.remove_local_player(c)  # lingers inside
 	_host.run_tick()
 	_sp(b).hp = 0
@@ -2666,18 +2677,19 @@ func test_collapse_moves_everyone_inside_to_the_hearth() -> void:
 	assert_true(_instance_of(b).is_hearth(), "dead: Standard respawn")
 	assert_eq(_sp(b).hp, _max_hp(b))
 	assert_eq(_host.hearth_entries, entries + 2, "one entry each for the connected players")
-	assert_true(_host._find_player(c).is_lingering(), "collapse never shortens a linger")
-	assert_true(_host.instances.has(inst), "kept only for the remaining linger")
+	assert_null(_host._find_player(c), "collapse ends the linger at once")
+	assert_false(_host.instances.has(inst), "the instance is retired at once")
 	assert_true(rec.closed)
-	_ticks(LobbyHost.LINGER_TICKS)
-	assert_null(_host._find_player(c), "the linger resolves normally")
-	assert_false(_host.instances.has(inst), "then the closed instance is retired")
 	assert_null(rec.instance)
+	_ticks(LobbyHost.LINGER_TICKS + 2)
 	assert_eq(_host.collapses, 1, "only one collapse event")
-	assert_eq(_host.hearth_entries, entries + 2, "no banking for the disconnected linger")
+	assert_eq(_host.death_events, 1, "the removed body can no longer die (only b's death)")
+	assert_eq(_host.hearth_entries, entries + 2, "no banking while disconnected")
 	var again := _host.add_local_player(null, token)
 	_host.run_tick()
 	assert_true(_instance_of(again).is_hearth(), "the lingerer's rejoin arrives in the Hearth")
+	assert_eq(_sp(again).hp, c_hp, "as a living arrival with its own HP")
+	assert_eq(_host.hearth_entries, entries + 3, "banked once, on the reconnect")
 	_place_in_wilds(a, portal.x + 0.5, portal.y)
 	_rejections = []
 	_enter(a, portal, 9)
