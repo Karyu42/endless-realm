@@ -1162,7 +1162,10 @@ func _enter_refusal(p: HostPlayer, portal: PortalSnapshot) -> Array:
 		return [PB.ErrorCode.MULTIPLIER_NOT_ALLOWED, "portal multiplier is not allowed in this lobby"]
 	var sp := psim.get_player(p.sim_id)
 	var sc := psim.scaling()
-	if sp == null or sc == null or sc.below_join_floor(sp.level, portal.content_level):
+	if sp == null or sc == null:
+		# Fails closed: the host cannot check the join requirement.
+		return [PB.ErrorCode.INSTANCE_NOT_FOUND, "portal entrance is unavailable"]
+	if sc.below_join_floor(sp.level, portal.content_level):
 		return [PB.ErrorCode.JOIN_REFUSED, "level is below this portal's join floor"]
 	return _record_refusal(_record_for(p.instance, portal.id), p.id)
 

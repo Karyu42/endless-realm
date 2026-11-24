@@ -650,3 +650,31 @@ func test_fresh_join_spawns_with_full_hp() -> void:
 		var sp := _host.sim.get_player(id)
 		assert_gt(sp.hp, 0)
 		assert_eq(sp.hp, _host.sim._current_max_hp(sp), "full HP on a new spawn")
+
+
+
+func test_readd_same_tick_keeps_ability_cooldown_and_focus() -> void:
+	_host = _new_host()
+	var b := _player_mid_cooldown()
+	var cd := _host.sim.ability_cooldown_ticks(b)
+	var focus := _host.sim.focus(b)
+	var token := _host.remove_local_player(b)
+	assert_eq(_host.add_local_player(null, token), b)
+	assert_eq(_host.sim.ability_cooldown_ticks(b), cd, "cooldown kept")
+	assert_almost_eq(_host.sim.focus(b), focus, 1e-6, "Focus kept")
+	_host.run_tick()
+	assert_eq(_host.sim.ability_cooldown_ticks(b), maxi(cd - 1, 0))
+
+
+func test_class_change_readd_below_new_max_keeps_hp() -> void:
+	_host = _new_host()
+	_host.add_local_player()
+	var b := _host.add_local_player("thornguard")
+	_host.run_tick()
+	_host.sim.get_player(b).hp = 50
+	var token := _host.remove_local_player(b)
+	assert_eq(_host.add_local_player("gleamwright", token), b)
+	var sp := _host.sim.get_player(b)
+	assert_eq(sp.class_id, "gleamwright")
+	assert_gt(_host.sim._current_max_hp(sp), 50)
+	assert_eq(sp.hp, 50, "HP below the new max is unchanged")
