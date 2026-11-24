@@ -35,6 +35,10 @@ const NON_IDLE_WINDOW_TICKS: int = ACTIVITY_WINDOW_TICKS
 const ACTIVITY_AIM_DEG: float = 10.0
 ## vision §6.1 rule 6a: after an empty-arena reset the boss is untouched for 5 s.
 const BOSS_RESET_UNTOUCHED_TICKS: int = 100
+const CLASS_CHANGE_REFUSED_LOG := "LocalSim: class change refused outside town"
+## Host-set zone id. Only ZONE_HEARTH is town; the default (empty) is not.
+const ZONE_HEARTH := "hearth"
+const CLASS_REFUSAL_LOG_CAP: int = 64
 
 var _config: SimConfig
 var _catalog: DataCatalog
@@ -89,6 +93,11 @@ var _blocking_tiles: Dictionary = {}
 var _portals: Array[PortalSnapshot] = []
 var _pending_transfers: Array[PortalTransfer] = []
 var _dungeon: DungeonDef = null
+## Host-set zone id from configure_zone(). Empty until the host sets it.
+var _zone_id: String = ""
+## Logged class-change refusals: player_id -> {class_id: true}. Capped, and
+## cleared when that player is removed from the roster.
+var _logged_class_refusals: Dictionary = {}
 ## Test hook for vision §3.2 step 1. Real player Ward is not wired yet, so
 ## mitigation is a no-op (Ward = 0) unless a test sets this.
 var _test_armor_ward: float = 0.0
@@ -375,10 +384,12 @@ func _apply_character_state(p: SimPlayerState, character: Variant, fresh: bool) 
 	if fresh:
 		_set_player_class_on(p, class_id, fresh_fill)
 	elif class_set and class_id != p.class_id:
-		# Cancelled leave: apply a real class change only. Keep HP, Focus,
-		# cooldown, and the ally-heal support counter. Unknown or empty
-		# names leave the current class unchanged.
-		_adopt_player_class(p, class_id)
+		# Cancelled leave: a different class applies only in town, with
+		# HP = min(current, new max), 0 Focus and full cooldown. Elsewhere
+		# the current class is kept and a refusal is logged. Unknown or
+		# empty names leave the current class unchanged.
+		if not _refuse_class_change(p, class_id):
+			_apply_class_change_state(p, class_id)
 	if has_hp and not fresh_fill:
 		_apply_placed_hp(p, requested_hp, fresh)
 
@@ -1304,9 +1315,19 @@ func set_player_class_for(player_id: int, class_id: String) -> void:
 	# Ability state is created even if the player is not in _players yet
 	# (place_ally / mid-_make_player). SimPlayerState is updated when present.
 	# An unknown or empty name keeps the current class and ability state.
+	# A same-class call is a no-op. A different class applies only in town,
+	# with HP = min(current, new max), 0 Focus and full cooldown. A first
+	# assignment (no current class) is still allowed anywhere and fills.
 	var p: SimPlayerState = _players.get(player_id, null) as SimPlayerState
 	if p != null:
-		_set_player_class_on(p, class_id, true)
+		if class_id == p.class_id:
+			return
+		if _refuse_class_change(p, class_id):
+			return
+		if p.class_id == "":
+			_set_player_class_on(p, class_id, true)
+		else:
+			_apply_class_change_state(p, class_id)
 		return
 	if _reject_class_apply(class_id):
 		return
@@ -1315,6 +1336,116 @@ func set_player_class_for(player_id: int, class_id: String) -> void:
 	if cdef != null and cdef.ability_id != "":
 		adef = _catalog.ability(cdef.ability_id)
 	_ability_of(player_id).reset_for_class(cdef, adef)
+
+
+## Host-set zone for this sim. Pass ZONE_HEARTH for the Hearth; any other
+## id (or the default empty value) is not town. There is no packed zone
+## catalog yet, so the host sets this when it creates the Hearth sim.
+func configure_zone(zone_id: String) -> void:
+	_zone_id = zone_id
+
+
+func zone_id() -> String:
+	return _zone_id
+
+
+## True only for the Hearth (`configure_zone(ZONE_HEARTH)` and not a dungeon
+## instance). The Wilds / overworld default is not town.
+func is_town() -> bool:
+	return _dungeon == null and _zone_id == ZONE_HEARTH
+
+
+## Whether the host can apply `class_id` in place for this player. A same-class
+## rejoin is always allowed. A different class is allowed only in the Hearth.
+## The host should run linger and then apply_class_change_arrival when this is
+## false (Wilds or a dungeon instance).
+func class_change_allowed(id: int, class_id: String) -> bool:
+	if _reject_class_apply(class_id):
+		return false
+	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
+	if p != null and (class_id == p.class_id or p.class_id == ""):
+		return true
+	return is_town()
+
+
+## After-linger Hearth arrival of a class-changed character (content-v0.1
+## class lock). Applies the new class with HP = min(current, new max), 0
+## Focus, the ability on full cooldown, no snapshot carry, and no boss
+## credit, and seeds a fresh activity stamp. Returns false outside town.
+## Full max HP is only for a fresh spawn with no live or lingering body
+## (add_player). A same-class call is a no-op.
+## TODO(§7.1): pending loot banking is host / persistence side.
+func apply_class_change_arrival(id: int, class_id: String) -> bool:
+	if not is_town():
+		return false
+	var p: SimPlayerState = _players.get(id, null) as SimPlayerState
+	if p == null:
+		return false
+	if _reject_class_apply(class_id):
+		return false
+	if class_id == p.class_id:
+		return true
+	if not _apply_class_change_state(p, class_id):
+		return false
+	_seed_activity(p)
+	return true
+
+
+## Switch class on a live body: HP = min(current, new max), 0 Focus, full
+## cooldown. Does not revive a dead player and does not refill.
+func _apply_class_change_state(p: SimPlayerState, class_id: String) -> bool:
+	if p == null or class_id == p.class_id:
+		return true
+	if _reject_class_apply(class_id):
+		return false
+	var current_hp: int = p.hp
+	p.class_id = class_id
+	p.class_def = _catalog.class_def(class_id) if _catalog != null else null
+	var adef: AbilityDef = null
+	if p.class_def != null and p.class_def.ability_id != "":
+		adef = _catalog.ability(p.class_def.ability_id)
+	var st := _ability_of(p.id)
+	st.class_def = p.class_def
+	st.ability_def = adef
+	if current_hp > 0:
+		p.hp = mini(current_hp, _current_max_hp(p))
+	else:
+		p.hp = current_hp
+	st.focus = 0.0
+	st.cooldown_ticks = adef.cooldown_ticks if adef != null else 0
+	return true
+
+
+## True when a different, known class must be kept off this player because
+## the sim is not town. Logs once per (player id, class_id). Same class, a
+## first assignment, unknown ids, and town are not refusals here.
+func _refuse_class_change(p: SimPlayerState, class_id: String) -> bool:
+	if p == null or class_id == p.class_id or p.class_id == "":
+		return false
+	if is_town():
+		return false
+	if _reject_class_apply(class_id):
+		return false
+	_log_class_refusal(p.id, class_id)
+	return true
+
+
+func _log_class_refusal(player_id: int, class_id: String) -> void:
+	var by_class: Dictionary = _logged_class_refusals.get(player_id, {})
+	if by_class.has(class_id):
+		return
+	var n: int = 0
+	for pid in _logged_class_refusals:
+		n += (_logged_class_refusals[pid] as Dictionary).size()
+	if n >= CLASS_REFUSAL_LOG_CAP:
+		return
+	by_class[class_id] = true
+	_logged_class_refusals[player_id] = by_class
+	push_error(CLASS_CHANGE_REFUSED_LOG)
+
+
+func _clear_class_refusals(player_id: int) -> void:
+	_logged_class_refusals.erase(player_id)
 
 
 func _set_player_class_on(p: SimPlayerState, class_id: String, fill: bool) -> void:
@@ -2409,6 +2540,7 @@ func _apply_pending_roster() -> void:
 				# Ability state goes with the player; a host that wants it
 				# back on rejoin saves it first (focus / cooldown getters).
 				_ability_by_player.erase(pid)
+				_clear_class_refusals(pid)
 				for e in _enemies:
 					e.damaged_by.erase(pid)
 				changed = true
