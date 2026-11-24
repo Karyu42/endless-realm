@@ -1024,13 +1024,13 @@ func _sim_has_builtin_player() -> bool:
 
 
 ## Removes a host player from the lobby. With a host-verified identity,
-## saves their ability state under it for a later rejoin. A living body in a
-## dungeon instance first lingers there (vision §7.3); it leaves the sim
+## saves their ability state under it for a later rejoin. A living body
+## first lingers where it is, in the Wilds or a dungeon (vision §7.3); it leaves the sim
 ## when the linger ends (_end_linger) unless the same identity rejoins first.
 func _leave(p: HostPlayer, identity: String = "") -> void:
 	interact_validator.forget_player(p.id)
 	var leaving := p.instance.sim.get_player(p.sim_id)
-	var lingers: bool = not p.instance.is_overworld() and leaving != null and leaving.hp > 0
+	var lingers: bool = leaving != null and leaving.hp > 0
 	if identity != "":
 		var isim: LocalSim = p.instance.sim
 		var sid: int = p.sim_id

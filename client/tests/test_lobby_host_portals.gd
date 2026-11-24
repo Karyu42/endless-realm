@@ -2248,6 +2248,7 @@ func test_class_change_rejoin_while_lingering_never_refills_or_switches() -> voi
 	assert_eq(dsim.ability_cooldown_ticks(p.sim_id), cd)
 	assert_almost_eq(dsim.focus(p.sim_id), focus, 1e-6)
 	assert_eq(_host.players.size(), 1, "no second body or seat")
+	assert_eq(p.class_id, cls, "host class record follows the sim")
 	assert_eq(_host.add_local_player(null, token), a, "same class resumes")
 	body = dsim.get_player(p.sim_id)
 	assert_eq(body.class_id, cls)

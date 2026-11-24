@@ -211,6 +211,8 @@ func test_local_player_counts_toward_cap() -> void:
 	assert_gt(b, 0)
 	assert_eq(_host.add_local_player(), -1, "full")
 	_host.remove_local_player(a)
+	assert_eq(_host.players.size(), 2, "the seat is held while the body lingers")
+	_end_lingers()
 	assert_eq(_host.players.size(), 1)
 	assert_gt(_host.add_local_player(), 0, "room again")
 
@@ -554,3 +556,9 @@ func test_host_ability_is_consumed_by_shared_sim_once() -> void:
 	assert_eq(_host.sim.ward_ticks(id), 58, "ward not refreshed")
 	assert_almost_eq(_host.sim.focus(id), 60.5, 1e-6)
 	assert_false(_host.sim.get_player(id).intent.ability_pressed)
+
+
+## Runs the host past the disconnect linger so leaving bodies are gone.
+func _end_lingers() -> void:
+	for i in range(LobbyHost.LINGER_TICKS + 1):
+		_host.run_tick()
