@@ -72,6 +72,7 @@ Stats, Focus (100, 5/s regen), costs, cooldowns and the ability rules are in vis
 - **Phase 1 (implemented, #52):** the listen-host player and local players are verified by the host itself. `remove_local_player()` returns a single-use, host-issued token, and passing it to `add_local_player(character, rejoin_token)` restores the snapshot.
   - **Remote joins start conservative** every time: 0 Focus and the ability on full cooldown.
 - **Phase 2 (after the handshake identity PR, #50):** remote joins switch to the same rules, keyed by the character id that the handshake has verified.
+- **Remote wallet and inventory before #50:** in a hosted lobby, a remote player gets a session-only wallet and inventory. Nothing is persisted. There is no trade and no deposit to anything shared, nothing moves into a persistent account, and it is discarded when the session ends.
 
 **Class lock:** a character's class is bound to the character. Class changes happen only in town (the Hearth).
 - While a character is inside an instance (a dungeon or the practice vault, §2.5), a rejoin must use the same class.
@@ -197,7 +198,7 @@ With vision §3.5 scaling, an 8-player boss has ×6.25 HP against about ×8 DPS,
 
 ### 2.1 Layout of the Wilds
 - The Wilds are a circle of radius 120 tiles; that is the ship size. Smaller arenas are for dev and test builds only. The Hearth gate sits on the south edge; it is a two-way walk-through gate between the Wilds and the Hearth.
-- **Gate cooldown:** after any crossing, the gate refuses that character for 5 s (**100 ticks** at `TICK_HZ` 20), in both directions. A refused touch does nothing. There is no in-combat lock; leaving combat through the gate is allowed.
+- **Gate cooldown:** after any crossing, the gate refuses that character for 5 s (**100 ticks** at `TICK_HZ` 20), in both directions. A refused touch does nothing. The cooldown is per character and kept for the host session as a deadline tick (crossing tick + 100). It survives logout and rejoin, and time keeps passing while the player is offline. There is no in-combat lock; leaving combat through the gate is allowed.
 - Enemy level depends on distance `r` from the center: `E = clamp(20 − floor(r / 6), 1, 20)`.
 - Rings are half-open intervals, so every point belongs to exactly one ring. The boundary `r = 90` is in ring 1 (E 5), and `r = 89.9` is in ring 2 (E 6).
 
@@ -289,7 +290,7 @@ The practice slice of the Hollowmere Vault (from #49) is entered through the pra
 - **Persistent door:** the door is persistent. The host keeps **one long-lived practice-vault instance** for its lifetime (#55).
 - **Exceptions to vision §6.1:**
   - **Rule 5 (player cap):** capacity is still the lobby's max players, stored when the door's record is created, and the lobby-wide live admission cap still applies. But it counts **current occupants**, not distinct admitted players. A player leaving frees a slot, and the door never closes because a set number of players has been admitted.
-  - **Rule 8 (lifetimes):** the door has no 120 s admission window and never closes. The instance doesn't close 60 s after it empties; it resets instead (next bullet). With no deposit, deposit forfeiture doesn't apply.
+  - **Rule 8 (lifetimes):** the door has no 120 s admission window and never closes. The instance doesn't close 60 s after it empties; it resets instead (next bullet). It is exempt from the 30 min collapse. With no deposit, deposit forfeiture doesn't apply.
 - **Reset when empty:** once no connected living player (`hp > 0`) remains in the instance and the linger window (vision §7.3, 5 s) has expired, the whole slice is rebuilt on the next entry: trash, the Tallow Warden and the exit. A dead character still assigned to the instance doesn't hold it. No clears are tracked per player.
 - **Nothing gained inside persists:** on entry the host snapshots the player's carried progression, meaning the `PlayerCarry` fields: `level`, `xp_tenths`, `pending_glint`, `pending_riftstone` (#54) and the inventory with equipment. Every way out restores those fields to the entry snapshot:
   - the exit portal;
@@ -297,7 +298,7 @@ The practice slice of the Hollowmere Vault (from #49) is entered through the pra
   - leaving the lobby;
   - the return to the Hearth after the linger window expires (vision §7.3).
 
-  #55 implements the exit portal and leaving the lobby. Restore on death and the Hearth return after linger are planned (#55 still has full §7.3 linger and Hearth routing as TODOs).
+  A practice-vault death is not a Standard respawn (vision §7.2): the character arrives in the Hearth with its practice entry state, and no respawn fee is taken.
 - **No transfers out of an inventory:** inside the practice vault, items and currency can't leave their owner's inventory. Dropping, trading, giving and depositing to any shared container are disabled, and no loot bags spawn there.
 - **What comes back out:**
   - What the player **brought in is kept unchanged**, carry and pending Riftstone included; it is never stripped or reduced.
