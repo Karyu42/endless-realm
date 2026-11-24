@@ -61,6 +61,7 @@ Why: linear growth keeps numbers readable at level 1000 (about ×51, not ×10⁸
 - **Does not scale:** Stride, Tempo, Focus, range, projectile speed and bullet-pattern density. Dodging stays the skill test at every level.
 - **Enemy at level E:** `HP = baseHP × m(E)`, `Damage = baseDmg × m(E)`, `Ward = baseWard × m(E)`.
 - **Mitigation:** `damage = rawDmg × 100 / (100 + defenderWard / m(attackerLevel))`, then × `D` (§3.3). The final result, after any damage-taken multipliers, is rounded half-up to a whole HP, with a minimum of 1.
+- **No PvP (v0.1):** player shots and abilities never damage players, anywhere.
 - **Damage order:** (1) Ward (armor) mitigation, × `D`; (2) damage-taken multipliers, such as Thorn Ward's × 0.5 (§2); (3) rounding half-up and `max(1, result)`, applied **once**, at the end. There's no rounding or minimum between steps. Ward stays meaningful at every level because it is normalized.
   - When an **enemy hits a player**, `attackerLevel = E`, the enemy's level.
   - When a **player hits an enemy**, `attackerLevel = W = max(1, 5 × T_eff)`, the weapon's *gear level* from its effective tier (§4.1). Enemy mitigation therefore depends on the player's gear, not their level.
@@ -279,7 +280,7 @@ Whoever opens a portal (a dungeon instance; a whole server instance or shard is 
    Holding fire alone doesn't count. Holding fire with a fixed aim and no movement is idle; holding one direction while actually moving is active. (#65 implements an earlier per-input-frame check; a GE follow-up is needed to match this rule.)
 8. **Lifetimes:**
    - The entrance stays open 120 s after creation, or until its creation-time capacity has been admitted (rule 5).
-   - An instance lasts at most 30 min. At that point it collapses and players are moved to the Hearth, which banks their loot (§7).
+   - An instance lasts at most 30 min. At that point it collapses and players are moved to the Hearth, which banks their loot (§7). Collapse ends any linger in that instance at once (§7.3). The practice vault (content-v0.1 §2.5) is exempt from the 30 min collapse.
    - An instance closes 60 s after it empties.
    - A deposit (above) is forfeited if the instance closes without a boss kill, except when it is lost to a server fault (§7.3).
 9. **Re-entry after death (Standard):** a Standard player who died keeps their party slot and can rejoin the same live instance from the Hearth portal board, up to 2 times per instance. The 120 s entrance limit doesn't apply to rejoining. They can enter the instance during a fight but not the sealed arena (rule 6a). Hardcore deaths are final.
@@ -287,6 +288,7 @@ Whoever opens a portal (a dungeon instance; a whole server instance or shard is 
 11. **Entering and leaving (Godot host):**
    - **Leaving:** a player leaves an instance only by its exit portal, by death, by the return to the Hearth after linger (§7.3), by instance collapse (rule 8), which moves them to the Hearth, or by a different-class join after linger (content-v0.1 §1, class lock), which also moves them to the Hearth. The proto `LeaveInstance` command is refused.
    - **Entering:** a player enters an instance only at its entrance portal (including the Hearth portal board for rule 9 re-entry). Joining an instance by id (proto `JoinInstance`) is disabled.
+   - **Dungeon list (`ListInstances`, informational only, #91):** each dungeon's capacity and admitted count are public. Only the live player count is per-viewer: it is shown only to players who were admitted to that dungeon.
    - The entrance rules above (rules 2, 5, 6a, 8 and 9), the #55 host routing, and the practice-vault rules (content-v0.1 §2.5) apply to every entry and exit.
 
 ## 7. Death modes [v0.1]
@@ -297,11 +299,12 @@ Each character is created as **Standard** or **Hardcore**. The mode is fixed for
 - **Pending:** everything picked up or earned outside the Hearth is *pending*. Items carry `pending = true` wherever they are (inventory or equipped). Currency goes into the character's pending wallet. Equipping a pending item is allowed, and it stays pending.
 - **Banking event:** the moment the character's position enters the Hearth zone (portal exit, instance collapse, walking in, or reconnecting into the Hearth), the server clears every pending flag and moves pending currency into the account's banked wallet for that mode. This is one ledger transaction. Trading, salvage, the vendor and the stash exist only in the Hearth, so they only ever touch banked assets.
 - **XP is never pending.** XP is kept the moment it's credited, even if you die later.
-- **Safe zone:** the Hearth has no enemies, and nothing damages players there, from any source. There is no PvP in v0.1. Players may fire and use abilities in the Hearth; these deal no damage and still spend Focus and cooldown. The rule 7 activity stamp (§6.1) is per instance and re-seeded at each sim entry, so Hearth activity never counts toward boss credit.
+- **Scope:** the Hearth rules apply in hosted lobbies. Solo play has no Hearth yet.
+- **Safe zone:** the Hearth has no enemies, and nothing damages players there, from any source. There is no PvP in v0.1 (§3.2). Players may fire and use abilities in the Hearth; these deal no damage and still spend Focus and cooldown. The rule 7 activity stamp (§6.1) is per instance and re-seeded at each sim entry, so Hearth activity never counts toward boss credit.
 - **Hearth arrivals:** these all land in the Hearth:
-  - **Fresh join:** full max HP. Focus and cooldown follow the content-v0.1 §1 join-state rules, so a first join this host session starts ready.
-  - **Standard respawn (§7.2):** the only arrival at full HP.
-  - **Living arrivals:** a dungeon exit portal, instance collapse (§6.1 rule 8), or the reconnect of a character that survived linger (§7.3). These keep the character's current HP, Focus and cooldown, adjusted only for elapsed time per the content-v0.1 §1 join-state rules. A character that survives linger while disconnected is placed in the Hearth when it reconnects, not at linger expiry.
+  - **Fresh join:** full max HP. Focus and cooldown follow the content-v0.1 §1 join-state rules, so a first join this host session starts ready. A fresh join is a Hearth entry, so its banking event is a no-op.
+  - **Standard respawn (§7.2):** full HP, full Focus and all cooldowns ready. Fresh joins and Standard respawns are the only arrivals at full HP.
+  - **Living arrivals:** a dungeon exit portal, instance collapse (§6.1 rule 8; a body lingering at collapse moves to the Hearth as a living arrival and banks once, on reconnect), or the reconnect of a character that survived linger (§7.3). These keep the character's current HP, Focus and cooldown, adjusted only for elapsed time per the content-v0.1 §1 join-state rules. A character that survives linger while disconnected is placed in the Hearth when it reconnects, not at linger expiry.
   - **Different-class join:** arrives with `HP = min(current HP, new class max HP)`, per content-v0.1 §1.
 
   The Hearth connects to the Wilds by a two-way walk-through gate on the Wilds' south edge (content-v0.1 §2.1). Each Hearth arrival is exactly one banking event, and banking is idempotent.
@@ -310,8 +313,8 @@ Each character is created as **Standard** or **Hardcore**. The mode is fixed for
 At the death event, before any respawn, the server applies steps 1–3 in order, in one transaction. Step 4 follows.
 1. Pending items, equipped or not, are tombstoned with reason `DEATH_PENDING`. Banked items (equipped or in inventory) are kept.
 2. Pending currency moves to the sink.
-3. A respawn fee of `20 × m(Lp)` Glint (real level, not synced) is taken from the banked wallet. If the balance is lower, the fee is the balance, so it never goes below 0. The fee is taken once, at the death event, not at respawn. It applies to a death during linger or while disconnected too.
-4. The character stays dead until it respawns. It respawns in the Hearth with full HP. Level and XP are kept. The respawn's banking event (§7.1) is then a no-op.
+3. A respawn fee is taken from the banked wallet: `min(floor(20 × m(Lp)), banked Glint)`, in whole Glint (real level, not synced). The wallet never goes below 0. The fee is taken once, at the death event, not at respawn. It applies to a death during linger or while disconnected too.
+4. The character stays dead until it respawns. Respawn is automatic, with no button, **60 ticks** (3 s at `TICK_HZ` 20) after the death event. It respawns in the Hearth with full HP, full Focus and all cooldowns ready. Level and XP are kept. The respawn's banking event (§7.1) is then a no-op.
 
 - **Join or reconnect while dead:** any join or reconnect of a dead character, whatever the path (token rejoin included), respawns it in the Hearth per step 4 with full HP. It never appears in the Wilds or an instance at full HP. No second fee is taken.
 - **Re-entry:** rule 9 re-entry (§6.1) still works from the Hearth portal board after that respawn.
@@ -324,7 +327,8 @@ At the death event, before any respawn, the server applies steps 1–3 in order,
 - **Disconnect rule (both modes; it matters most for hardcore):**
   - **Link lost:** the client sends a heartbeat every 1 s. The link counts as lost on a socket close, or after **5 s** with no packet.
   - **Linger:** for the next **5 s** the character stays in the world. It stops moving, can't fire or use abilities, takes damage normally and can die.
-  - **After linger:** if it survives, the character is removed from the instance. On reconnect it appears in the Hearth, and its pending loot banks then, once (§7.1), not at linger expiry.
+  - **After linger:** if it survives, the character is removed from the instance. On reconnect it appears in the Hearth, and its pending loot banks then, once (§7.1), not at linger expiry. A character whose linger has ended is in the Hearth or dead. A body removed from the world can't die.
+  - **Collapse:** an instance collapse (§6.1 rule 8) ends any linger in that instance at once. The body moves to the Hearth as a living arrival and banks once, on reconnect (§7.1).
   - **Lobby slot:** a lingering body stays in the world, still takes damage and can die. It holds its lobby slot until its 5 s linger ends, or until it dies during linger, not until a later reconnect. The linger then resolves normally: death if it died, otherwise the after-linger outcome above. No linger can be evicted. A join into a full lobby is refused with the existing packed lobby-full copy (`lobby_full` in `data/lobby_ui.json`, #72), and no lingering body is evicted to make room.
   - **Logout:** a voluntary logout or quit outside the Hearth uses the same 5 s linger. A logout inside the Hearth is instant.
   - **Incident windows:** these protect players from server faults.
